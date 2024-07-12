@@ -4,7 +4,7 @@ version = "0.0.1"  # Overwritten during the build process
 description = "NetBox Labs, Diode NetBox plugin"
 readme = "README.md"
 requires-python = ">=3.7"
-license = {file = "LICENSE.txt"}
+license = {file = "LICENSE.md"}
 authors = [
     {name = "NetBox Labs", email = "support@netboxlabs.com" }
 ]
@@ -16,7 +16,7 @@ classifiers = [
     "Development Status :: 3 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Build Tools",
-    "License :: OSI Approved :: [TBC]", # TODO: define license
+    "License :: PolyForm Shield License 1.0.0",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     'Programming Language :: Python :: 3.8',
