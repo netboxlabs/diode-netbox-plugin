@@ -37,20 +37,15 @@ test = ["coverage", "pytest", "pytest-cov"]
 [project.scripts]
 
 [tool.setuptools]
-py-modules = []
 packages = [
     "netbox_diode_plugin",
 ]
-
-[tool.coverage.run]
-omit = [
-    "netbox_diode_plugin/tests/*",
-]
+package-data = {"netbox_diode_plugin" = ["**/*", "templates/**"]}
+exclude-package-data = {netbox_diode_plugin = ["tests/*"]}
 
 [build-system]
 requires = ["setuptools>=43.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
-
 
 [tool.ruff]
 line-length = 140
