@@ -4,7 +4,13 @@
 
 from typing import Any, Dict, Optional
 
-from django.contrib.contenttypes.models import ContentType
+from django.conf import settings
+from packaging import version
+
+if version.parse(settings.VERSION).major >= 4:
+    from core.models import ObjectType as NetBoxType
+else:
+    from django.contrib.contenttypes.models import ContentType as NetBoxType
 from django.core.exceptions import FieldError
 from django.db import transaction
 from django.db.models import Q
@@ -42,11 +48,11 @@ class ObjectStateView(views.APIView):
             of the specified models.
 
         """
-        if object_type_model == "ipaddress":
+        if "'ipam.models.ip.ipaddress'" in object_type_model:
             return "interface", "interface__device", "interface__device__site"
-        if object_type_model == "interface":
+        if "'dcim.models.device_components.interface'" in object_type_model:
             return "device", "device__site"
-        if object_type_model == "device":
+        if "'dcim.models.devices.device'" in object_type_model:
             return ("site",)
         return ()
 
@@ -66,7 +72,7 @@ class ObjectStateView(views.APIView):
             raise ValidationError("object_type parameter is required")
 
         app_label, model_name = object_type.split(".")
-        object_content_type = ContentType.objects.get_by_natural_key(
+        object_content_type = NetBoxType.objects.get_by_natural_key(
             app_label, model_name
         )
         object_type_model = object_content_type.model_class()
@@ -92,7 +98,7 @@ class ObjectStateView(views.APIView):
                 id__in=object_id_in_cached_value
             )
 
-            lookups = self._get_lookups(object_type_model)
+            lookups = self._get_lookups(str(object_type_model).lower())
 
             if lookups:
                 queryset = queryset.prefetch_related(*lookups)
@@ -144,7 +150,7 @@ class ApplyChangeSetView(views.APIView):
     def _get_object_type_model(object_type: str):
         """Get the object type model from object_type."""
         app_label, model_name = object_type.split(".")
-        object_content_type = ContentType.objects.get_by_natural_key(
+        object_content_type = NetBoxType.objects.get_by_natural_key(
             app_label, model_name
         )
         return object_content_type.model_class()
@@ -347,14 +353,18 @@ class ApplyChangeSetView(views.APIView):
                 if model_name == "interface":
                     if assigned_object_properties_dict.get("id"):
                         args["id"] = assigned_object_properties_dict.get("id")
-                    else:
+                    elif assigned_object_properties_dict.get("name"):
                         try:
                             device = assigned_object_properties_dict.get("device", {})
                             args = self._retrieve_assigned_object_interface_device_lookup_args(
                                 device
                             )
+                            args["name"] = assigned_object_properties_dict.get("name")
                         except ValidationError as e:
                             return {"assigned_object": str(e)}
+                    else:
+                        error = f"provided properties '{assigned_object_properties_dict}' not sufficient to retrieve {model_name}"
+                        return {"assigned_object": error}
 
                 assigned_object_instance = (
                     assigned_object_model.objects.prefetch_related(*lookups).get(**args)
@@ -413,7 +423,7 @@ class ApplyChangeSetView(views.APIView):
 
                     if errors is not None:
                         serializer_errors.append({"change_id": change_id, **errors})
-                        raise ApplyChangeSetException
+                        continue
 
                     serializer = self._get_serializer(
                         change_type, object_id, object_type, object_data, change_set_id
@@ -430,7 +440,8 @@ class ApplyChangeSetView(views.APIView):
                         serializer_errors.append(
                             {"change_id": change_id, **errors_dict}
                         )
-                        raise ApplyChangeSetException
+                if len(serializer_errors) > 0:
+                    raise ApplyChangeSetException
         except ApplyChangeSetException:
             return self._get_error_response(change_set_id, serializer_errors)
 

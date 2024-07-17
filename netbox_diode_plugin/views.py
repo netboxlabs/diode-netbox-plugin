@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
-"""Diode Netbox Plugin - Views."""
+"""Diode NetBox Plugin - Views."""
 
 from django.shortcuts import render
 from django.views.generic import View
 
 
-class AuditLogView(View):
-    """Audit log view."""
+class DisplayStateView(View):
+    """Display state view."""
 
     def get(self, request):
-        """Render an audit log template."""
-        return render(request, "diode/audit_log.html")
+        """Render a display state template."""
+        return render(request, "diode/display_state.html")

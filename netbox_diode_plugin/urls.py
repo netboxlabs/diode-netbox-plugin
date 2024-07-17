@@ -6,4 +6,7 @@ from django.urls import path
 
 from . import views
 
-urlpatterns = (path("audit-log/", views.AuditLogView.as_view(), name="audit_log"),)
+urlpatterns = (
+    path("display-state/", views.DisplayStateView.as_view(), name="display_state"),
+
+)

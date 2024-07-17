@@ -2,7 +2,9 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Serializers."""
 
+import copy
 import logging
+from collections import OrderedDict
 
 from dcim.api.serializers import (
     DeviceRoleSerializer,
@@ -13,9 +15,11 @@ from dcim.api.serializers import (
     PlatformSerializer,
     SiteSerializer,
 )
+from django.core.exceptions import FieldDoesNotExist
 from extras.models import ObjectChange
 from ipam.api.serializers import IPAddressSerializer, PrefixSerializer
 from rest_framework import serializers
+from rest_framework.utils.serializer_helpers import ReturnDict
 from utilities.api import get_serializer_for_model
 
 logger = logging.getLogger("netbox.netbox_diode_plugin.api.serializers")
@@ -204,9 +208,6 @@ class DiodeDeviceSerializer(DeviceSerializer):
     site = DiodeSiteSerializer()
     device_type = DiodeDeviceTypeSerializer()
     role = DiodeDeviceRoleSerializer()
-    device_role = DiodeDeviceRoleSerializer(
-        read_only=True, help_text="Deprecated in v3.6 in favor of `role`."
-    )
     platform = DiodePlatformSerializer(required=False, allow_null=True)
     status = serializers.CharField()
 

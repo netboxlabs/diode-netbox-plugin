@@ -1,13 +1,14 @@
-# !/usr/bin/env python
+#!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Navigation."""
 
-from extras.plugins import PluginMenu, PluginMenuItem
+from netbox.plugins import PluginMenu, PluginMenuItem
 
-audit_log = {
-    "link": "plugins:netbox_diode_plugin:audit_log",
-    "link_text": "Audit Log",
-    "staff_only": True,
+# default arguments for the PluginMenuItem class
+display_state = {
+    "link": "plugins:netbox_diode_plugin:display_state",
+    "link_text": "Display state",
+    "staff_only": True,  # 3.6+ feature
 }
 
 
@@ -16,7 +17,7 @@ menu = PluginMenu(
     groups=(
         (
             "Diode",
-            (PluginMenuItem(**audit_log),),
+            (PluginMenuItem(**display_state),),
         ),
     ),
     icon_class="mdi mdi-arrow-collapse-right",
