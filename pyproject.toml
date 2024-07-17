@@ -38,6 +38,14 @@ test = ["coverage", "pytest", "pytest-cov"]
 
 [tool.setuptools]
 py-modules = []
+packages = [
+    "netbox_diode_plugin",
+]
+
+[tool.coverage.run]
+omit = [
+    "netbox_diode_plugin/tests/*",
+]
 
 [build-system]
 requires = ["setuptools>=43.0.0", "wheel"]
