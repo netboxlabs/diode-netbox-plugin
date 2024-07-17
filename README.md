@@ -1,9 +1,8 @@
 # Diode NetBox Plugin
 
-Diode NetBox plugin is a [NetBox](https://netboxlabs.com/oss/netbox/) plugin for the Diode ingestion service.
+The Diode NetBox plugin is a [NetBox](https://netboxlabs.com/oss/netbox/) plugin and a required component of the [Diode](https://github.com/netboxlabs/diode) ingestion service.
 
-Diode is a new NetBox ingestion service that greatly simplifies and enhances the
-process to add and update network data
+Diode is a NetBox ingestion service that greatly simplifies and enhances the process to add and update network data
 in NetBox, ensuring your network source of truth is always accurate and can be trusted to power your network automation
 pipelines.
 
@@ -34,17 +33,35 @@ See [NetBox Documentation](https://netboxlabs.com/docs/netbox/en/stable/plugins/
 
 ## Configuration
 
-Set following environment variables for your NetBox:
-
-* `DIODE_TO_NETBOX_API_KEY=<API_KEY_1>` - API key for the Diode service to interact with NetBox
-* `NETBOX_TO_DIODE_API_KEY=<API_KEY_2>` - API key for the NetBox service to interact with Diode
-* `INGESTION_API_KEY=<API_KEY_3>` - API key for Diode SDKs to ingest data into Diode
-
-Note: values of these environment variables should be 40 character long alphanumeric strings.
-
-Configure the plugin by running the following command in your NetBox instance:
+Source the NetBox Python virtual environment:
 
 ```shell
+cd /opt/netbox
+source venv/bin/activate
+```
+
+Generate 3 API keys as random 40 character long alphanumeric strings:
+
+```shell
+echo "export DIODE_TO_NETBOX_API_KEY=$(head -c20 </dev/urandom|xxd -p)"
+echo "export NETBOX_TO_DIODE_API_KEY=$(head -c20 </dev/urandom|xxd -p)"
+echo "export INGESTION_API_KEY=$(head -c20 </dev/urandom|xxd -p)"
+```
+
+**Note:** store these API key strings in a safe place as they will be needed later to configure the Diode server
+
+Set the environment variables based on the random generated strings:
+
+```shell
+export DIODE_TO_NETBOX_API_KEY={random_string_1} # API key for the Diode service to interact with NetBox
+export NETBOX_TO_DIODE_API_KEY={random_string_2} # API key for the NetBox service to interact with Diode
+export INGESTION_API_KEY={random_string_3} # API key for Diode SDKs to ingest data into Diode
+```
+
+Configure the plugin:
+
+```shell
+cd /opt/netbox/netbox
 ./manage.py configurediodeplugin
 ```
 
