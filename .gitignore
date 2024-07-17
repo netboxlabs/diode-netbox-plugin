@@ -1,0 +1,31 @@
+# IntelliJ
+.idea/
+
+# VS Code
+.vscode
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+dist/
+.eggs/
+*.egg-info
+
+# Docker
+docker/coverage
+!docker/netbox/env
