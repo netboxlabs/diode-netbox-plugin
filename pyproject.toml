@@ -3,7 +3,7 @@ name = "netboxlabs-diode-netbox-plugin"
 version = "0.0.1"  # Overwritten during the build process
 description = "NetBox Labs, Diode NetBox plugin"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.8
 license = {file = "LICENSE.md"}
 authors = [
     {name = "NetBox Labs", email = "support@netboxlabs.com" }
