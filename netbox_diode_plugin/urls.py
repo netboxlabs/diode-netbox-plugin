@@ -8,5 +8,4 @@ from . import views
 
 urlpatterns = (
     path("display-state/", views.DisplayStateView.as_view(), name="display_state"),
-
 )

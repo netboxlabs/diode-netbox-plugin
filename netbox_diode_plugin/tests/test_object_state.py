@@ -324,5 +324,3 @@ class ObjectStateTestCase(APITestCase):
 
         response = self.client.get(self.url, query_parameters, **self.user_header)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-
