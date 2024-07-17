@@ -40,13 +40,17 @@ cd /opt/netbox
 source venv/bin/activate
 ```
 
-Generate three random 40 character long alphanumeric strings. You can use the following command to generate random strings:
+Generate 3 API keys as random 40 character long alphanumeric strings:
 
 ```shell
-head -c20 </dev/urandom|xxd -p
+echo "export DIODE_TO_NETBOX_API_KEY=$(head -c20 </dev/urandom|xxd -p)"
+echo "export NETBOX_TO_DIODE_API_KEY=$(head -c20 </dev/urandom|xxd -p)"
+echo "export INGESTION_API_KEY=$(head -c20 </dev/urandom|xxd -p)"
 ```
 
-Set the following environment variables based on the random generated strings:
+**Note:** store these API key strings in a safe place as they will be needed later to configure the Diode server
+
+Set the environment variables based on the random generated strings:
 
 ```shell
 export DIODE_TO_NETBOX_API_KEY={random_string_1} # API key for the Diode service to interact with NetBox
