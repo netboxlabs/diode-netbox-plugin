@@ -1,9 +1,8 @@
 # Diode NetBox Plugin
 
-Diode NetBox plugin is a [NetBox](https://netboxlabs.com/oss/netbox/) plugin for the Diode ingestion service.
+The Diode NetBox plugin is a [NetBox](https://netboxlabs.com/oss/netbox/) plugin and a required component of the [Diode](https://github.com/netboxlabs/diode) ingestion service.
 
-Diode is a new NetBox ingestion service that greatly simplifies and enhances the
-process to add and update network data
+Diode is a NetBox ingestion service that greatly simplifies and enhances the process to add and update network data
 in NetBox, ensuring your network source of truth is always accurate and can be trusted to power your network automation
 pipelines.
 
@@ -34,17 +33,27 @@ See [NetBox Documentation](https://netboxlabs.com/docs/netbox/en/stable/plugins/
 
 ## Configuration
 
-Set following environment variables for your NetBox:
-
-* `DIODE_TO_NETBOX_API_KEY=<API_KEY_1>` - API key for the Diode service to interact with NetBox
-* `NETBOX_TO_DIODE_API_KEY=<API_KEY_2>` - API key for the NetBox service to interact with Diode
-* `INGESTION_API_KEY=<API_KEY_3>` - API key for Diode SDKs to ingest data into Diode
-
-Note: values of these environment variables should be 40 character long alphanumeric strings.
-
-Configure the plugin by running the following command in your NetBox instance:
+Source the NetBox Python virtual environment:
 
 ```shell
+cd /opt/netbox
+source venv/bin/activate
+```
+
+Set the following environment variables based on API keys created in your NetBox installation:
+
+```shell
+export DIODE_TO_NETBOX_API_KEY={API_KEY_1} # API key for the Diode service to interact with NetBox
+export NETBOX_TO_DIODE_API_KEY={API_KEY_2} # API key for the NetBox service to interact with Diode
+export INGESTION_API_KEY={API_KEY_3} # API key for Diode SDKs to ingest data into Diode
+```
+
+Note: API key values should be 40 character long alphanumeric strings
+
+Configure the plugin:
+
+```shell
+cd /opt/netbox/netbox
 ./manage.py configurediodeplugin
 ```
 
