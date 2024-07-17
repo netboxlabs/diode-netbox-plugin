@@ -10,6 +10,12 @@ pipelines.
 More information about Diode can be found
 at [https://netboxlabs.com/blog/introducing-diode-streamlining-data-ingestion-in-netbox/](https://netboxlabs.com/blog/introducing-diode-streamlining-data-ingestion-in-netbox/).
 
+## Compatibility
+
+| NetBox Version | Plugin Version |
+|----------------|----------------|
+|   >= 3.7.2     |      0.1.0     |
+
 ## Installation
 
 ```bash
@@ -23,6 +29,10 @@ PLUGINS = [
     "netbox_diode_plugin",
 ]
 ```
+
+See [NetBox Documentation](https://netboxlabs.com/docs/netbox/en/stable/plugins/#installing-plugins) for details.
+
+## Configuration
 
 Set following environment variables for your NetBox:
 
