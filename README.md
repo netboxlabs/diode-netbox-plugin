@@ -40,15 +40,19 @@ cd /opt/netbox
 source venv/bin/activate
 ```
 
-Set the following environment variables based on API keys created in your NetBox installation:
+Generate three random 40 character long alphanumeric strings. You can use the following command to generate random strings:
 
 ```shell
-export DIODE_TO_NETBOX_API_KEY={API_KEY_1} # API key for the Diode service to interact with NetBox
-export NETBOX_TO_DIODE_API_KEY={API_KEY_2} # API key for the NetBox service to interact with Diode
-export INGESTION_API_KEY={API_KEY_3} # API key for Diode SDKs to ingest data into Diode
+head -c20 </dev/urandom|xxd -p
 ```
 
-Note: API key values should be 40 character long alphanumeric strings
+Set the following environment variables based on the random generated strings:
+
+```shell
+export DIODE_TO_NETBOX_API_KEY={random_string_1} # API key for the Diode service to interact with NetBox
+export NETBOX_TO_DIODE_API_KEY={random_string_2} # API key for the NetBox service to interact with Diode
+export INGESTION_API_KEY={random_string_3} # API key for Diode SDKs to ingest data into Diode
+```
 
 Configure the plugin:
 
