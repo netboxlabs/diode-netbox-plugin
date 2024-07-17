@@ -38,7 +38,7 @@ jobs:
       - name: Lint with Ruff
         run: |
           ruff check --output-format=github netbox_diode_plugin/
-          continue-on-error: true
+        continue-on-error: true
       - name: Test
         run: |
           make docker-compose-netbox-plugin-test-cover
