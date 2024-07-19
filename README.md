@@ -84,3 +84,8 @@ make docker-compose-netbox-plugin-test
 ## License
 
 Distributed under the PolyForm Shield License 1.0.0 License. See [LICENSE.md](./LICENSE.md) for more information.
+
+## Required Notice
+
+Copyright NetBox Labs, Inc.
+
