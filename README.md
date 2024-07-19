@@ -68,7 +68,7 @@ export INGESTION_API_KEY=$(head -c20 </dev/urandom|xxd -p); env | grep INGESTION
 
 **Note:** store these API key strings in a safe place as they will be needed later to configure the Diode server
 
-Configure the plugin with to use the previously generated API keys:
+Configure the plugin to use the previously generated API keys:
 
 ```shell
 cd /opt/netbox/netbox
