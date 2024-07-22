@@ -45,7 +45,7 @@ class Command(BaseCommand):
 
     diode_to_netbox_username = "DIODE_TO_NETBOX"
     netbox_to_diode_username = "NETBOX_TO_DIODE"
-    ingestion_username = "INGESTION"
+    ingestion_username = "DIODE"
 
     def handle(self, *args, **options):
         """Handle command execution."""

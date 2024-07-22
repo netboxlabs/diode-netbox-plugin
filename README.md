@@ -63,7 +63,7 @@ export DIODE_TO_NETBOX_API_KEY=$(head -c20 </dev/urandom|xxd -p); env | grep DIO
 # API key for the NetBox service to interact with Diode
 export NETBOX_TO_DIODE_API_KEY=$(head -c20 </dev/urandom|xxd -p); env | grep NETBOX_TO_DIODE_API_KEY
 # API key for Diode SDKs to ingest data into Diode
-export INGESTION_API_KEY=$(head -c20 </dev/urandom|xxd -p); env | grep INGESTION_API_KEY
+export DIODE_API_KEY=$(head -c20 </dev/urandom|xxd -p); env | grep DIODE_API_KEY
 ```
 
 **Note:** store these API key strings in a safe place as they will be needed later to configure the Diode server
