@@ -45,7 +45,7 @@ class Command(BaseCommand):
 
     diode_to_netbox_username = "DIODE_TO_NETBOX"
     netbox_to_diode_username = "NETBOX_TO_DIODE"
-    ingestion_username = "DIODE"
+    diode_username = "DIODE"
 
     def handle(self, *args, **options):
         """Handle command execution."""
@@ -57,7 +57,7 @@ class Command(BaseCommand):
             self.diode_to_netbox_username, group
         )
         _ = _create_user_with_token(self.netbox_to_diode_username, group, True)
-        _ = _create_user_with_token(self.ingestion_username, group)
+        _ = _create_user_with_token(self.diode_username, group)
 
         diode_plugin_object_type = NetBoxType.objects.get(
             app_label="netbox_diode_plugin", model="diode"
