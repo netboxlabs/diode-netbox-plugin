@@ -127,9 +127,15 @@ class ObjectStateView(views.APIView):
             },
         )
 
-        if len(serializer.data) > 0:
-            return Response(serializer.data[0])
-        return Response({})
+        try:
+            if len(serializer.data) > 0:
+                return Response(serializer.data[0])
+            return Response({})
+        except AttributeError as e:
+            return Response(
+                {"errors": [f"Serializer error: {e.args[0]}"]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     def _additional_attributes_query_filter(self):
         """Get the additional attributes query filter."""
