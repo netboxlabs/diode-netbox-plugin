@@ -49,7 +49,11 @@ class ObjectStateView(views.APIView):
 
         """
         if "'ipam.models.ip.ipaddress'" in object_type_model:
-            return "interface", "interface__device", "interface__device__site"
+            return (
+                "assigned_object",
+                "assigned_object__device",
+                "assigned_object__device__site",
+            )
         if "'dcim.models.device_components.interface'" in object_type_model:
             return "device", "device__site"
         if "'dcim.models.devices.device'" in object_type_model:

@@ -289,7 +289,31 @@ class ObjectStateTestCase(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_common_user_with_permissions_get_device_state(self):
+    def test_common_user_with_permissions_get_ip_state_using_id(self):
+        """Test searching for ip using id."""
+        query_parameters = {
+            "id": self.ip_addresses[0].id,
+            "object_type": "ipam.ipaddress",
+        }
+
+        response = self.client.get(self.url, query_parameters, **self.user_header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(response.json().get("object_type"), "ipam.ipaddress")
+        self.assertEqual(
+            response.json().get("object").get("address"),
+            self.ip_addresses[0].address.__str__(),
+        )
+        self.assertEqual(
+            response.json()
+            .get("object")
+            .get("assigned_object")
+            .get("interface")
+            .get("name"),
+            self.interfaces[0].name,
+        )
+
+    def test_common_user_with_permissions_get_device_state_using_q_objects(self):
         """Test searching for device using q parameter."""
         query_parameters = {
             "q": self.devices[0].name,
@@ -308,7 +332,7 @@ class ObjectStateTestCase(APITestCase):
             response.json().get("object").get("site").get("name"), self.sites[0].name
         )
 
-    def test_common_user_with_permissions_get_interface_state(self):
+    def test_common_user_with_permissions_get_interface_state_using_q_objects(self):
         """Test searching for interface using q parameter."""
         query_parameters = {
             "q": self.interfaces[0].name,
@@ -329,7 +353,7 @@ class ObjectStateTestCase(APITestCase):
             self.devices[0].name,
         )
 
-    def test_common_user_with_permissions_get_ip_state(self):
+    def test_common_user_with_permissions_get_ip_state_using_q_objects(self):
         """Test searching for ip using q parameter."""
         query_parameters = {
             "q": self.ip_addresses[0].address.__str__(),
@@ -340,5 +364,18 @@ class ObjectStateTestCase(APITestCase):
         }
 
         response = self.client.get(self.url, query_parameters, **self.user_header)
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Site 223", response.json())
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(response.json().get("object_type"), "ipam.ipaddress")
+        self.assertEqual(
+            response.json().get("object").get("address"),
+            self.ip_addresses[0].address.__str__(),
+        )
+        self.assertEqual(
+            response.json()
+            .get("object")
+            .get("assigned_object")
+            .get("interface")
+            .get("name"),
+            self.interfaces[0].name,
+        )
