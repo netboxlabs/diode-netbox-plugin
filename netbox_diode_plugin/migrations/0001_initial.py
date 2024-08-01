@@ -41,7 +41,7 @@ def configure_plugin(apps, schema_editor):
     netbox_to_diode_username = "NETBOX_TO_DIODE"
     diode_username = "DIODE"
 
-    Group = apps.get_model("auth", "Group")
+    Group = apps.get_model("users", "Group")
     group, _ = Group.objects.get_or_create(name="diode")
 
     diode_to_netbox_user = _create_user_with_token(
@@ -78,6 +78,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("contenttypes", "0001_initial"),
+        ("users", "0006_custom_group_model"),
     ]
 
     operations = [
