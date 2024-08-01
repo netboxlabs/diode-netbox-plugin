@@ -7,7 +7,8 @@ import os
 from django.apps import apps as django_apps
 from django.conf import settings
 from django.contrib.contenttypes.management import create_contenttypes
-from django.db import migrations
+from django.db import migrations, models
+from users.models import Token as NetBoxToken
 
 
 def _create_user_with_token(apps, username, group, is_superuser: bool = False):
@@ -26,7 +27,10 @@ def _create_user_with_token(apps, username, group, is_superuser: bool = False):
     Token = apps.get_model("users", "Token")
 
     if not Token.objects.filter(user=user).exists():
-        Token.objects.create(user=user, key=os.getenv(f"{username}_API_KEY"))
+        api_key = os.getenv(f"{username}_API_KEY")
+        if api_key is None:
+            api_key = NetBoxToken.generate_key()
+        Token.objects.create(user=user, key=api_key)
 
     return user
 
@@ -77,6 +81,28 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.CreateModel(
+            # Does not create any table / fields in the database
+            # Registers the Diode model as migrated
+            # This model is used to generate permissions for the Diode NetBox Plugin
+            name="Diode",
+            fields=[
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True, primary_key=True, serialize=False
+                    ),
+                ),
+            ],
+            options={
+                "permissions": (
+                    ("view_diode", "Can view Diode"),
+                    ("add_diode", "Can apply change sets from Diode"),
+                ),
+                "managed": False,
+                "default_permissions": (),
+            },
+        ),
         migrations.RunPython(
             code=configure_plugin, reverse_code=migrations.RunPython.noop
         ),
