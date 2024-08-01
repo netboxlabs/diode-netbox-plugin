@@ -66,9 +66,9 @@ def configure_plugin(apps, schema_editor):
         actions=["add", "view"],
     )
 
-    permission.groups.set([group])
-    permission.users.set([diode_to_netbox_user])
-    permission.object_types.set([diode_plugin_object_type])
+    permission.groups.set([group.id])
+    permission.users.set([diode_to_netbox_user.id])
+    permission.object_types.set([diode_plugin_object_type.id])
 
 
 class Migration(migrations.Migration):
