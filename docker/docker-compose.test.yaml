@@ -1,5 +1,0 @@
-name: diode-netbox-plugin
-services:
-  netbox:
-    volumes:
-      - ${PWD}/docker/netbox/configuration-test/plugins.py:/etc/netbox/config/plugins.py
