@@ -62,8 +62,6 @@ reload_netbox() {
 
 load_configuration &
 
-sh /opt/netbox/enable-diode-plugin.sh &
-
 reload_netbox &
 
 exec unitd \
