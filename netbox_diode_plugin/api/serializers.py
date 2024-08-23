@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - Serializers."""
 
 import logging
+
 from dcim.api.serializers import (
     DeviceRoleSerializer,
     DeviceSerializer,
@@ -19,11 +20,11 @@ from rest_framework import serializers
 from rest_framework.utils.serializer_helpers import ReturnDict
 from utilities.api import get_serializer_for_model
 from virtualization.api.serializers import (
-    ClusterSerializer,
     ClusterGroupSerializer,
+    ClusterSerializer,
     ClusterTypeSerializer,
-    VirtualMachineSerializer,
     VirtualDiskSerializer,
+    VirtualMachineSerializer,
 )
 
 logger = logging.getLogger("netbox.netbox_diode_plugin.api.serializers")
