@@ -23,6 +23,7 @@ from virtualization.api.serializers import (
     ClusterGroupSerializer,
     ClusterSerializer,
     ClusterTypeSerializer,
+    VMInterfaceSerializer,
     VirtualDiskSerializer,
     VirtualMachineSerializer,
 )
@@ -327,3 +328,14 @@ class DiodeVirtualDiskSerializer(VirtualDiskSerializer):
 
         model = VirtualDiskSerializer.Meta.model
         fields = VirtualDiskSerializer.Meta.fields
+
+class DiodeVMInterfaceSerializer(VMInterfaceSerializer):
+    """Diode VM Interface Serializer."""
+
+    virtual_machine = DiodeVirtualMachineSerializer()
+
+    class Meta:
+        """Meta class."""
+
+        model = VMInterfaceSerializer.Meta.model
+        fields = VMInterfaceSerializer.Meta.fields
