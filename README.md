@@ -1,6 +1,7 @@
 # Diode NetBox Plugin
 
-The Diode NetBox plugin is a [NetBox](https://netboxlabs.com/oss/netbox/) plugin. It is a required component of the [Diode](https://github.com/netboxlabs/diode) ingestion service.
+The Diode NetBox plugin is a [NetBox](https://netboxlabs.com/oss/netbox/) plugin. It is a required component of
+the [Diode](https://github.com/netboxlabs/diode) ingestion service.
 
 Diode is a NetBox ingestion service that greatly simplifies and enhances the process to add and update network data
 in NetBox, ensuring your network source of truth is always accurate and can be trusted to power your network automation
@@ -12,8 +13,9 @@ at [https://netboxlabs.com/blog/introducing-diode-streamlining-data-ingestion-in
 ## Compatibility
 
 | NetBox Version | Plugin Version |
-|----------------|----------------|
-|   >= 3.7.2     |      0.1.0     |
+|:--------------:|:--------------:|
+|    >= 3.7.2    |     0.1.0      |
+|    >= 4.1.0    |     0.3.0      |
 
 ## Installation
 
@@ -55,7 +57,8 @@ cd /opt/netbox
 source venv/bin/activate
 ```
 
-Three API keys will be needed (these are random 40 character long alphanumeric strings). They can be generated and set to the appropriate environment variables with the following commands:
+Three API keys will be needed (these are random 40 character long alphanumeric strings). They can be generated and set
+to the appropriate environment variables with the following commands:
 
 ```shell
 # API key for the Diode service to interact with NetBox

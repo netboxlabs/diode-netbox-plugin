@@ -2,9 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Serializers."""
 
-import copy
 import logging
-from collections import OrderedDict
 
 from dcim.api.serializers import (
     DeviceRoleSerializer,
@@ -15,12 +13,25 @@ from dcim.api.serializers import (
     PlatformSerializer,
     SiteSerializer,
 )
-from django.core.exceptions import FieldDoesNotExist
-from extras.models import ObjectChange
+from django.conf import settings
+from packaging import version
+
+if version.parse(version.parse(settings.VERSION).base_version) >= version.parse("4.1"):
+    from core.models import ObjectChange
+else:
+    from extras.models import ObjectChange
 from ipam.api.serializers import IPAddressSerializer, PrefixSerializer
 from rest_framework import serializers
 from rest_framework.utils.serializer_helpers import ReturnDict
 from utilities.api import get_serializer_for_model
+from virtualization.api.serializers import (
+    ClusterGroupSerializer,
+    ClusterSerializer,
+    ClusterTypeSerializer,
+    VirtualDiskSerializer,
+    VirtualMachineSerializer,
+    VMInterfaceSerializer,
+)
 
 logger = logging.getLogger("netbox.netbox_diode_plugin.api.serializers")
 
@@ -254,3 +265,83 @@ class DiodePrefixSerializer(PrefixSerializer):
 
         model = PrefixSerializer.Meta.model
         fields = PrefixSerializer.Meta.fields
+
+
+class DiodeClusterGroupSerializer(ClusterGroupSerializer):
+    """Diode Cluster Group Serializer."""
+
+    class Meta:
+        """Meta class."""
+
+        model = ClusterGroupSerializer.Meta.model
+        fields = ClusterGroupSerializer.Meta.fields
+
+
+class DiodeClusterTypeSerializer(ClusterTypeSerializer):
+    """Diode Cluster Type Serializer."""
+
+    class Meta:
+        """Meta class."""
+
+        model = ClusterTypeSerializer.Meta.model
+        fields = ClusterTypeSerializer.Meta.fields
+
+
+class DiodeClusterSerializer(ClusterSerializer):
+    """Diode Cluster Serializer."""
+
+    type = DiodeClusterTypeSerializer()
+    group = DiodeClusterGroupSerializer()
+    status = serializers.CharField()
+    site = DiodeSiteSerializer()
+
+    class Meta:
+        """Meta class."""
+
+        model = ClusterSerializer.Meta.model
+        fields = ClusterSerializer.Meta.fields
+
+
+class DiodeVirtualMachineSerializer(VirtualMachineSerializer):
+    """Diode Virtual Machine Serializer."""
+
+    status = serializers.CharField()
+    site = DiodeSiteSerializer()
+    cluster = DiodeClusterSerializer()
+    device = DiodeDeviceSerializer()
+    role = DiodeDeviceRoleSerializer()
+    tenant = serializers.CharField()
+    platform = DiodePlatformSerializer()
+    primary_ip = DiodeIPAddressSerializer()
+    primary_ip4 = DiodeIPAddressSerializer()
+    primary_ip6 = DiodeIPAddressSerializer()
+
+    class Meta:
+        """Meta class."""
+
+        model = VirtualMachineSerializer.Meta.model
+        fields = VirtualMachineSerializer.Meta.fields
+
+
+class DiodeVirtualDiskSerializer(VirtualDiskSerializer):
+    """Diode Virtual Disk Serializer."""
+
+    virtual_machine = DiodeVirtualMachineSerializer()
+
+    class Meta:
+        """Meta class."""
+
+        model = VirtualDiskSerializer.Meta.model
+        fields = VirtualDiskSerializer.Meta.fields
+
+
+class DiodeVMInterfaceSerializer(VMInterfaceSerializer):
+    """Diode VM Interface Serializer."""
+
+    virtual_machine = DiodeVirtualMachineSerializer()
+
+    class Meta:
+        """Meta class."""
+
+        model = VMInterfaceSerializer.Meta.model
+        fields = VMInterfaceSerializer.Meta.fields
