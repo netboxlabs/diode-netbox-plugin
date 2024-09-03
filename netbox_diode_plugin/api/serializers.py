@@ -13,8 +13,13 @@ from dcim.api.serializers import (
     PlatformSerializer,
     SiteSerializer,
 )
-from django.core.exceptions import FieldDoesNotExist
-from extras.models import ObjectChange
+from django.conf import settings
+from packaging import version
+
+if version.parse(version.parse(settings.VERSION).base_version) >= version.parse("4.1"):
+    from core.models import ObjectChange
+else:
+    from extras.models import ObjectChange
 from ipam.api.serializers import IPAddressSerializer, PrefixSerializer
 from rest_framework import serializers
 from rest_framework.utils.serializer_helpers import ReturnDict
@@ -23,9 +28,9 @@ from virtualization.api.serializers import (
     ClusterGroupSerializer,
     ClusterSerializer,
     ClusterTypeSerializer,
-    VMInterfaceSerializer,
     VirtualDiskSerializer,
     VirtualMachineSerializer,
+    VMInterfaceSerializer,
 )
 
 logger = logging.getLogger("netbox.netbox_diode_plugin.api.serializers")
@@ -328,6 +333,7 @@ class DiodeVirtualDiskSerializer(VirtualDiskSerializer):
 
         model = VirtualDiskSerializer.Meta.model
         fields = VirtualDiskSerializer.Meta.fields
+
 
 class DiodeVMInterfaceSerializer(VMInterfaceSerializer):
     """Diode VM Interface Serializer."""
