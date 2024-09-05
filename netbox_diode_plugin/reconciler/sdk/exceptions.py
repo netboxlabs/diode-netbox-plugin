@@ -2,7 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Reconciler - SDK - Exceptions."""
 
-from grpc import RpcError
+from grpc import RpcError, StatusCode
 
 
 class ReconcilerClientError(RpcError):
@@ -10,7 +10,6 @@ class ReconcilerClientError(RpcError):
 
     _status_code = None
     _details = None
-    _grpc_status = None
 
     def __init__(self, err: RpcError):
         """Initialize ReconcilerClientError."""
@@ -20,6 +19,8 @@ class ReconcilerClientError(RpcError):
     @property
     def status_code(self):
         """Return status code."""
+        if isinstance(self._status_code, StatusCode):
+            return self._status_code.name
         return self._status_code
 
     @property
