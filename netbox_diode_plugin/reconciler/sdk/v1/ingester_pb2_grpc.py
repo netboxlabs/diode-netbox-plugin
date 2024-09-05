@@ -5,19 +5,15 @@ import grpc
 from netbox_diode_plugin.reconciler.sdk.v1 import ingester_pb2 as diode_dot_v1_dot_ingester__pb2
 
 
-class IngesterServiceStub:
-    """
-    Ingestion API
+class IngesterServiceStub(object):
+    """Ingestion API
     """
 
     def __init__(self, channel):
-        """
-        Constructor.
+        """Constructor.
 
         Args:
-        ----
             channel: A grpc.Channel.
-
         """
         self.Ingest = channel.unary_unary(
                 '/diode.v1.IngesterService/Ingest',
@@ -26,14 +22,12 @@ class IngesterServiceStub:
                 )
 
 
-class IngesterServiceServicer:
-    """
-    Ingestion API
+class IngesterServiceServicer(object):
+    """Ingestion API
     """
 
     def Ingest(self, request, context):
-        """
-        Ingests data into the system
+        """Ingests data into the system
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -54,9 +48,8 @@ def add_IngesterServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class IngesterService:
-    """
-    Ingestion API
+class IngesterService(object):
+    """Ingestion API
     """
 
     @staticmethod

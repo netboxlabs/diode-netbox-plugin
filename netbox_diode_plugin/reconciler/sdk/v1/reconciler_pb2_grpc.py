@@ -5,19 +5,15 @@ import grpc
 from netbox_diode_plugin.reconciler.sdk.v1 import reconciler_pb2 as diode_dot_v1_dot_reconciler__pb2
 
 
-class ReconcilerServiceStub:
-    """
-    Reconciler service API
+class ReconcilerServiceStub(object):
+    """Reconciler service API
     """
 
     def __init__(self, channel):
-        """
-        Constructor.
+        """Constructor.
 
         Args:
-        ----
             channel: A grpc.Channel.
-
         """
         self.RetrieveIngestionDataSources = channel.unary_unary(
                 '/diode.v1.ReconcilerService/RetrieveIngestionDataSources',
@@ -31,22 +27,19 @@ class ReconcilerServiceStub:
                 )
 
 
-class ReconcilerServiceServicer:
-    """
-    Reconciler service API
+class ReconcilerServiceServicer(object):
+    """Reconciler service API
     """
 
     def RetrieveIngestionDataSources(self, request, context):
-        """
-        Retrieves ingestion data sources
+        """Retrieves ingestion data sources
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def RetrieveIngestionLogs(self, request, context):
-        """
-        Retrieves ingestion logs
+        """Retrieves ingestion logs
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -72,9 +65,8 @@ def add_ReconcilerServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class ReconcilerService:
-    """
-    Reconciler service API
+class ReconcilerService(object):
+    """Reconciler service API
     """
 
     @staticmethod
