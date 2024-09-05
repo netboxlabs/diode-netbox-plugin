@@ -24,7 +24,11 @@ classifiers = [
     'Programming Language :: Python :: 3.11',
 ]
 
-dependencies = []
+dependencies = [
+    "certifi==2024.7.4",
+    "grpcio==1.62.1",
+    "grpcio-status==1.62.1",
+]
 
 [project.optional-dependencies]
 dev = ["black", "check-manifest", "ruff"]
