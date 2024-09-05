@@ -14,7 +14,10 @@ from dcim.api.serializers import (
     SiteSerializer,
 )
 from django.conf import settings
+from netbox.api.serializers import NetBoxModelSerializer
 from packaging import version
+
+from netbox_diode_plugin.models import Setting
 
 if version.parse(version.parse(settings.VERSION).base_version) >= version.parse("4.1"):
     from core.models import ObjectChange
@@ -22,7 +25,6 @@ else:
     from extras.models import ObjectChange
 from ipam.api.serializers import IPAddressSerializer, PrefixSerializer
 from rest_framework import serializers
-from rest_framework.utils.serializer_helpers import ReturnDict
 from utilities.api import get_serializer_for_model
 from virtualization.api.serializers import (
     ClusterGroupSerializer,
@@ -124,6 +126,22 @@ class ApplyChangeSetRequestSerializer(serializers.Serializer):
     change_set = serializers.ListField(
         child=ChangeSerialiazer(), required=True, allow_empty=False
     )
+
+
+class SettingSerializer(NetBoxModelSerializer):
+    """Setting Serializer."""
+
+    class Meta:
+        """Meta class."""
+
+        model = Setting
+        fields = (
+            "id",
+            "reconciler_target",
+            "custom_fields",
+            "created",
+            "last_updated",
+        )
 
 
 class DiodeIPAddressSerializer(IPAddressSerializer):
