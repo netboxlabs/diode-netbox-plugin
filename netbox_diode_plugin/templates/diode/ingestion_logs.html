@@ -1,0 +1,18 @@
+{% extends 'generic/_base.html' %}
+{% load buttons %}
+{% load helpers %}
+{% load i18n %}
+
+{% block title %}{% trans "Ingestion Logs" %}{% endblock %}
+
+{% block content %}
+Diode ingestion logs will be displayed here.
+
+{% if error %}
+<div class="alert alert-danger mt-3" role="alert">
+    <h4 class="alert-heading">{% trans "Error" %}</h4>
+    <p>{{ error.status_code }}: {{ error.details }}</p>
+</div>
+{% endif %}
+
+{% endblock content %}
