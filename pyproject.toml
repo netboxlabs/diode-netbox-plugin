@@ -27,7 +27,6 @@ classifiers = [
 dependencies = [
     "certifi==2024.7.4",
     "grpcio==1.62.1",
-    "grpcio-status==1.62.1",
 ]
 
 [project.optional-dependencies]

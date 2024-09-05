@@ -1,5 +1,4 @@
 certifi==2024.7.4
 coverage==7.6.0
 grpcio==1.62.1
-grpcio-status==1.62.1
 pytest==8.0.2
