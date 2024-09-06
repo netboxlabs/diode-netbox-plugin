@@ -78,7 +78,7 @@ class ReconcilerClient:
                 ),
             )
         else:
-            _LOGGER.debug("Setting up gRPC insecure chansnel")
+            _LOGGER.debug("Setting up gRPC insecure channel")
             self._channel = grpc.insecure_channel(
                 target=self._target,
             )
