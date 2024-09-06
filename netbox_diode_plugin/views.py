@@ -2,7 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Views."""
 
-from django.conf import settings as django_settings
+from django.conf import settings as netbox_settings
 from django.contrib.auth import get_user_model
 from django.shortcuts import redirect, render
 from django.views.generic import View
@@ -22,7 +22,7 @@ class IngestionLogsView(View):
     def get(self, request):
         """Render ingestion logs template."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect(f"{django_settings.LOGIN_URL}?next={request.path}")
+            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
 
         diode_settings = Setting.objects.get()
 
@@ -33,6 +33,13 @@ class IngestionLogsView(View):
             target=diode_settings.reconciler_target,
             api_key=token.key,
         )
+
+        plugin_settings = netbox_settings.PLUGINS_CONFIG["netbox_diode_plugin"]
+        if not plugin_settings.get("enable_ingestion_logs", False):
+            context = {
+                "ingestion_logs_disabled": True,
+            }
+            return render(request, "diode/ingestion_logs.html", context)
 
         try:
             resp = reconciler_client.retrieve_ingestion_logs()
@@ -55,7 +62,7 @@ class SettingsView(View):
     def get(self, request):
         """Render settings template."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect(f"{django_settings.LOGIN_URL}?next={request.path}")
+            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
 
         try:
             settings = Setting.objects.get()
@@ -102,7 +109,7 @@ class SettingsEditView(generic.ObjectEditView):
     def get(self, request, *args, **kwargs):
         """GET request handler."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect(f"{django_settings.LOGIN_URL}?next={request.path}")
+            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
 
         settings = Setting.objects.get()
         kwargs["pk"] = settings.pk
@@ -112,7 +119,7 @@ class SettingsEditView(generic.ObjectEditView):
     def post(self, request, *args, **kwargs):
         """POST request handler."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect(f"{django_settings.LOGIN_URL}?next={request.path}")
+            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
 
         settings = Setting.objects.get()
         kwargs["pk"] = settings.pk

@@ -1,6 +1,6 @@
 name: diode-netbox-plugin
 services:
-  netbox: &netbox
+  netbox:
     image: netboxcommunity/netbox:v4.1-beta1-2.9.1-diode-netbox-plugin
     build:
       context: .

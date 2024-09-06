@@ -8,6 +8,12 @@
 {% block content %}
 Diode ingestion logs will be displayed here.
 
+{% if ingestion_logs_disabled %}
+<div class="alert alert-warning mt-3" role="alert">
+    <p>⚠️: Ingestion logs are disabled.</p>
+</div>
+{% endif %}
+
 {% if error %}
 <div class="alert alert-danger mt-3" role="alert">
     <h4 class="alert-heading">{% trans "Error" %}</h4>
