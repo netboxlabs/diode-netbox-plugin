@@ -52,6 +52,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 line-length = 140
+exclude = [
+    "*_pb2*",
+]
 
 [tool.ruff.format]
 quote-style = "double"
