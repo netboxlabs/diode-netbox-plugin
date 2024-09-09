@@ -69,6 +69,10 @@ class ReconcilerClient:
             ("python-version", self._python_version),
         )
 
+        channel_opts = (
+            ("grpc.primary_user_agent", f"{self._name}/{self._version} {self._app_name}/{self._app_version}"),
+        )
+
         if self._tls_verify:
             _LOGGER.debug("Setting up gRPC secure channel")
             self._channel = grpc.secure_channel(
@@ -76,11 +80,13 @@ class ReconcilerClient:
                 grpc.ssl_channel_credentials(
                     root_certificates=_load_certs(),
                 ),
+                options=channel_opts,
             )
         else:
             _LOGGER.debug("Setting up gRPC insecure channel")
             self._channel = grpc.insecure_channel(
                 target=self._target,
+                options=channel_opts,
             )
 
         channel = self._channel
