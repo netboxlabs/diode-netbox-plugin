@@ -1,0 +1,24 @@
+{% extends 'generic/_base.html' %}
+{% load buttons %}
+{% load helpers %}
+{% load i18n %}
+
+{% block title %}{% trans "Ingestion Logs" %}{% endblock %}
+
+{% block content %}
+Diode ingestion logs will be displayed here.
+
+{% if ingestion_logs_disabled %}
+<div class="alert alert-warning mt-3" role="alert">
+    <p>⚠️: Ingestion logs are disabled.</p>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="alert alert-danger mt-3" role="alert">
+    <h4 class="alert-heading">{% trans "Error" %}</h4>
+    <p>{{ error.status_code }}: {{ error.details }}</p>
+</div>
+{% endif %}
+
+{% endblock content %}

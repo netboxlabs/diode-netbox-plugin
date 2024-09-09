@@ -4,21 +4,29 @@
 
 from netbox.plugins import PluginMenu, PluginMenuItem
 
-# default arguments for the PluginMenuItem class
-display_state = {
-    "link": "plugins:netbox_diode_plugin:display_state",
-    "link_text": "Display state",
-    "staff_only": True,  # 3.6+ feature
+ingestion_logs = {
+    "link": "plugins:netbox_diode_plugin:ingestion_logs",
+    "link_text": "Ingestion logs",
+    "staff_only": True,
+}
+
+settings = {
+    "link": "plugins:netbox_diode_plugin:settings",
+    "link_text": "Settings",
+    "staff_only": True,
 }
 
 
 menu = PluginMenu(
-    label="NetBox Labs",
+    label="Diode",
     groups=(
         (
             "Diode",
-            (PluginMenuItem(**display_state),),
+            (
+                PluginMenuItem(**ingestion_logs),
+                PluginMenuItem(**settings),
+            ),
         ),
     ),
-    icon_class="mdi mdi-arrow-collapse-right",
+    icon_class="mdi mdi-transfer-right",
 )

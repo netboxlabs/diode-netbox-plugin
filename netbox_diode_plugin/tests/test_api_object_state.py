@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
-"""Diode NetBox Plugin - Tests for ObjectStateView."""
+"""Diode NetBox Plugin - Tests."""
 
 from dcim.models import (
     Device,

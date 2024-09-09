@@ -1,0 +1,81 @@
+{% extends 'generic/_base.html' %}
+{% load buttons %}
+{% load helpers %}
+{% load i18n %}
+{% load render_table from django_tables2 %}
+{% block title %}{% trans "Settings" %}{% endblock %}
+
+{% block controls %}
+<div class="btn-list">
+    {% block control-buttons %}
+    {% url 'plugins:netbox_diode_plugin:settings_edit' as edit_url %}
+    {% include "buttons/edit.html" with url=edit_url %}
+    {% endblock control-buttons %}
+</div>
+{% endblock controls %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col">
+        <div class="card">
+            <table class="table table-hover attr-table">
+                <tr>
+                    <th scope="row">{% trans "Diode reconciler target" %}</th>
+                    <td>{{ reconciler_target }}</td>
+                </tr>
+                <tr>
+                    <th scope="row">{% trans "Last updated" %}</th>
+                    <td>{{ last_updated|isodatetime }}</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col col-md-12">
+        <div class="card">
+            <h2 class="card-header">{% trans "API keys" %}</h2>
+            <table class="table table-hover attr-table">
+                {% for username, api_key in api_keys.items %}
+                <tr>
+                    <th scope="row">{{ username }}</th>
+                    <td>
+                        <span class="diode-api-key font-monospace" data-diode-api-key="{{ api_key }}">{{ api_key|placeholder }}</span>
+                        <div class="float-end">
+                            <button type="button" class="btn btn-sm btn-info copy-content me-2" data-clipboard-text="{{ api_key }}" title="Copy to clipboard">
+                                <i class="mdi mdi-content-copy"></i>
+                            </button>
+                            <button type="button" class="btn btn-sm btn-primary toggle-diode-api-key float-end" data-bs-toggle="button">
+                                <i class="mdi mdi-eye"></i>
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+    </div>
+</div>
+<script type="text/javascript">
+    diodeAPIKeySelector = '.diode-api-key';
+    diodeAPIKeyAttr = 'data-diode-api-key';
+
+    document.querySelectorAll(diodeAPIKeySelector).forEach(function (apiKey) {
+        apiKey.textContent = apiKey.getAttribute(diodeAPIKeyAttr).replace(/./g, '*');
+    });
+
+    document.querySelectorAll('.toggle-diode-api-key').forEach(function (button) {
+        button.addEventListener('click', function () {
+            var apiKey = this.parentElement.parentElement.querySelector(diodeAPIKeySelector);
+            if (apiKey.getAttribute(diodeAPIKeyAttr) === apiKey.textContent) {
+                apiKey.textContent = apiKey.getAttribute(diodeAPIKeyAttr).replace(/./g, '*');
+                button.getElementsByTagName('i')[0].classList.replace('mdi-eye-off', 'mdi-eye');
+            } else {
+                apiKey.textContent = apiKey.getAttribute(diodeAPIKeyAttr);
+                button.getElementsByTagName('i')[0].classList.replace('mdi-eye', 'mdi-eye-off');
+            }
+        });
+    });
+</script>
+{% endblock content %}

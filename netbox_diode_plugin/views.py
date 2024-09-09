@@ -2,13 +2,126 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Views."""
 
-from django.shortcuts import render
+from django.conf import settings as netbox_settings
+from django.contrib.auth import get_user_model
+from django.shortcuts import redirect, render
 from django.views.generic import View
+from netbox.views import generic
+from users.models import Token
+from utilities.views import register_model_view
+
+from netbox_diode_plugin.forms import SettingsForm
+from netbox_diode_plugin.models import Setting
+from netbox_diode_plugin.reconciler.sdk.client import ReconcilerClient
+from netbox_diode_plugin.reconciler.sdk.exceptions import ReconcilerClientError
 
 
-class DisplayStateView(View):
-    """Display state view."""
+class IngestionLogsView(View):
+    """Ingestion logs view."""
 
     def get(self, request):
-        """Render a display state template."""
-        return render(request, "diode/display_state.html")
+        """Render ingestion logs template."""
+        if not request.user.is_authenticated or not request.user.is_staff:
+            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+
+        diode_settings = Setting.objects.get()
+
+        user = get_user_model().objects.get(username="NETBOX_TO_DIODE")
+        token = Token.objects.get(user=user)
+
+        reconciler_client = ReconcilerClient(
+            target=diode_settings.reconciler_target,
+            api_key=token.key,
+        )
+
+        plugin_settings = netbox_settings.PLUGINS_CONFIG["netbox_diode_plugin"]
+        if not plugin_settings.get("enable_ingestion_logs", False):
+            context = {
+                "ingestion_logs_disabled": True,
+            }
+            return render(request, "diode/ingestion_logs.html", context)
+
+        try:
+            resp = reconciler_client.retrieve_ingestion_logs()
+
+            context = {
+                "ingestion_logs": resp.logs,
+                "next_page_token": resp.next_page_token,
+            }
+        except ReconcilerClientError as error:
+            context = {
+                "error": error,
+            }
+
+        return render(request, "diode/ingestion_logs.html", context)
+
+
+class SettingsView(View):
+    """Settings view."""
+
+    def get(self, request):
+        """Render settings template."""
+        if not request.user.is_authenticated or not request.user.is_staff:
+            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+
+        try:
+            settings = Setting.objects.get()
+        except Setting.DoesNotExist:
+            settings = None
+
+        if settings is None:
+            """Create a default setting with placeholder data."""
+            settings = Setting.objects.create(
+                reconciler_target="grpc://localhost:8080/diode/reconciler"
+            )
+
+        diode_users = [
+            "DIODE",
+            "DIODE_TO_NETBOX",
+            "NETBOX_TO_DIODE",
+        ]
+
+        diode_api_keys = {}
+
+        for username in diode_users:
+            user = get_user_model().objects.get(username=username)
+            token = Token.objects.get(user=user)
+            diode_api_keys[f"{username}_API_KEY"] = token.key
+
+        context = {
+            "reconciler_target": settings.reconciler_target,
+            "last_updated": settings.last_updated,
+            "api_keys": diode_api_keys,
+        }
+
+        return render(request, "diode/settings.html", context)
+
+
+@register_model_view(Setting, "edit")
+class SettingsEditView(generic.ObjectEditView):
+    """Settings edit view."""
+
+    queryset = Setting.objects
+    form = SettingsForm
+    template_name = "diode/settings_edit.html"
+    default_return_url = "plugins:netbox_diode_plugin:settings"
+
+    def get(self, request, *args, **kwargs):
+        """GET request handler."""
+        if not request.user.is_authenticated or not request.user.is_staff:
+            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+
+        settings = Setting.objects.get()
+        kwargs["pk"] = settings.pk
+
+        return super().get(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        """POST request handler."""
+        if not request.user.is_authenticated or not request.user.is_staff:
+            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+
+        settings = Setting.objects.get()
+        kwargs["pk"] = settings.pk
+
+        return super().post(request, *args, **kwargs)
