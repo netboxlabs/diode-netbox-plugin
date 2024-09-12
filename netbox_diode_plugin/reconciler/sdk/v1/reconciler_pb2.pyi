@@ -43,7 +43,7 @@ class RetrieveIngestionDataSourcesResponse(_message.Message):
     ingestion_data_sources: _containers.RepeatedCompositeFieldContainer[IngestionDataSource]
     def __init__(self, ingestion_data_sources: _Optional[_Iterable[_Union[IngestionDataSource, _Mapping]]] = ...) -> None: ...
 
-class ChangeSetError(_message.Message):
+class IngestionError(_message.Message):
     __slots__ = ("message", "code", "details")
     class Details(_message.Message):
         __slots__ = ("change_set_id", "result", "errors")
@@ -59,15 +59,15 @@ class ChangeSetError(_message.Message):
         ERRORS_FIELD_NUMBER: _ClassVar[int]
         change_set_id: str
         result: str
-        errors: _containers.RepeatedCompositeFieldContainer[ChangeSetError.Details.Error]
-        def __init__(self, change_set_id: _Optional[str] = ..., result: _Optional[str] = ..., errors: _Optional[_Iterable[_Union[ChangeSetError.Details.Error, _Mapping]]] = ...) -> None: ...
+        errors: _containers.RepeatedCompositeFieldContainer[IngestionError.Details.Error]
+        def __init__(self, change_set_id: _Optional[str] = ..., result: _Optional[str] = ..., errors: _Optional[_Iterable[_Union[IngestionError.Details.Error, _Mapping]]] = ...) -> None: ...
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
     CODE_FIELD_NUMBER: _ClassVar[int]
     DETAILS_FIELD_NUMBER: _ClassVar[int]
     message: str
     code: int
-    details: ChangeSetError.Details
-    def __init__(self, message: _Optional[str] = ..., code: _Optional[int] = ..., details: _Optional[_Union[ChangeSetError.Details, _Mapping]] = ...) -> None: ...
+    details: IngestionError.Details
+    def __init__(self, message: _Optional[str] = ..., code: _Optional[int] = ..., details: _Optional[_Union[IngestionError.Details, _Mapping]] = ...) -> None: ...
 
 class IngestionLog(_message.Message):
     __slots__ = ("data_type", "state", "request_id", "ingestion_ts", "producer_app_name", "producer_app_version", "sdk_name", "sdk_version", "entity", "error")
@@ -90,8 +90,8 @@ class IngestionLog(_message.Message):
     sdk_name: str
     sdk_version: str
     entity: _ingester_pb2.Entity
-    error: ChangeSetError
-    def __init__(self, data_type: _Optional[str] = ..., state: _Optional[_Union[State, str]] = ..., request_id: _Optional[str] = ..., ingestion_ts: _Optional[int] = ..., producer_app_name: _Optional[str] = ..., producer_app_version: _Optional[str] = ..., sdk_name: _Optional[str] = ..., sdk_version: _Optional[str] = ..., entity: _Optional[_Union[_ingester_pb2.Entity, _Mapping]] = ..., error: _Optional[_Union[ChangeSetError, _Mapping]] = ...) -> None: ...
+    error: IngestionError
+    def __init__(self, data_type: _Optional[str] = ..., state: _Optional[_Union[State, str]] = ..., request_id: _Optional[str] = ..., ingestion_ts: _Optional[int] = ..., producer_app_name: _Optional[str] = ..., producer_app_version: _Optional[str] = ..., sdk_name: _Optional[str] = ..., sdk_version: _Optional[str] = ..., entity: _Optional[_Union[_ingester_pb2.Entity, _Mapping]] = ..., error: _Optional[_Union[IngestionError, _Mapping]] = ...) -> None: ...
 
 class RetrieveIngestionLogsRequest(_message.Message):
     __slots__ = ("page_size", "state", "data_type", "request_id", "ingestion_ts_start", "ingestion_ts_end", "page_token")
