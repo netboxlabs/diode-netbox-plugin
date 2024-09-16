@@ -28,5 +28,5 @@ menu = PluginMenu(
             ),
         ),
     ),
-    icon_class="mdi mdi-transfer-right",
+    icon_class="mdi mdi-upload",
 )
