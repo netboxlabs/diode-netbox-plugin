@@ -164,6 +164,7 @@ class ReconcilerClient:
         ingestion_ts_end: int | None = None,
         page_token: str | None = None,
         page_size: int = 100,
+        only_metrics: bool = False,
     ) -> reconciler_pb2.RetrieveIngestionLogsResponse:
         """Retrieve ingestion logs."""
         try:
@@ -175,6 +176,7 @@ class ReconcilerClient:
                 ingestion_ts_start=ingestion_ts_start,
                 ingestion_ts_end=ingestion_ts_end,
                 page_token=page_token,
+                only_metrics=only_metrics,
             )
 
             return self._stub.RetrieveIngestionLogs(request, metadata=self._metadata)
