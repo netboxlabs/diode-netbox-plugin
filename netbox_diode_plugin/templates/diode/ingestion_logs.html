@@ -1,12 +1,12 @@
 {% extends 'generic/_base.html' %}
 {% load buttons %}
 {% load helpers %}
+{% load render_table from django_tables2 %}
 {% load i18n %}
 
 {% block title %}{% trans "Ingestion Logs" %}{% endblock %}
 
 {% block content %}
-Diode ingestion logs will be displayed here.
 
 {% if ingestion_logs_disabled %}
 <div class="alert alert-warning mt-3" role="alert">
@@ -18,6 +18,19 @@ Diode ingestion logs will be displayed here.
 <div class="alert alert-danger mt-3" role="alert">
     <h4 class="alert-heading">{% trans "Error" %}</h4>
     <p>{{ error.status_code }}: {{ error.details }}</p>
+</div>
+{% else %}
+<div class="row mb-3">
+    <div class="col col-md-12">
+        <div class="card">
+            <div class="table-responsive">
+                {% render_table ingestion_logs_table 'diode/ingestion_logs_table.html' %}
+                {% if ingestion_logs_table.data %}
+                    {% include 'diode/ingestion_logs_paginator.html' with next_page_token=next_page_token total_count=total_count %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
 </div>
 {% endif %}
 
