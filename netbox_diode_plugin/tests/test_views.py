@@ -83,14 +83,17 @@ class IngestionLogsViewTestCase(TestCase):
                             ),
                         )
                     ],
-                    next_page_token="dd04c312-4557-4f51-b64b-9e78a88b2dae",
+                    next_page_token="AAAAMg==",
+                    metrics=reconciler_pb2.IngestionMetrics(
+                        total=1,
+                    ),
                 ),
             )
 
             response = self.view.get(self.request)
             mock_retrieve_ingestion_logs.assert_called()
             self.assertEqual(response.status_code, 200)
-            self.assertNotIn("Error", str(response.content))
+            self.assertNotIn("Server Error", str(response.content))
 
 
 class SettingsViewTestCase(TestCase):
