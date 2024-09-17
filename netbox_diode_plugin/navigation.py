@@ -6,7 +6,7 @@ from netbox.plugins import PluginMenu, PluginMenuItem
 
 ingestion_logs = {
     "link": "plugins:netbox_diode_plugin:ingestion_logs",
-    "link_text": "Ingestion logs",
+    "link_text": "Ingestion Logs",
     "staff_only": True,
 }
 
