@@ -18,7 +18,6 @@ from utilities.object_types import object_type_identifier, object_type_name
 
 from netbox_diode_plugin.reconciler.sdk.v1 import reconciler_pb2
 
-
 INGESTION_LOGS_TABLE_ACTIONS_TEMPLATE = """
 <button class="btn btn-xs btn-default" data-bs-toggle="collapse" data-bs-target="#ingestion-log-{{ record.id }}">
     <i class="mdi mdi-eye"></i>
