@@ -88,10 +88,16 @@ class IngestionLogsViewTestCase(TestCase):
                         total=1,
                     ),
                 ),
+                reconciler_pb2.RetrieveIngestionLogsResponse(
+                    metrics=reconciler_pb2.IngestionMetrics(
+                        total=1,
+                    ),
+                )
             )
 
             response = self.view.get(self.request)
             mock_retrieve_ingestion_logs.assert_called()
+            self.assertEqual(mock_retrieve_ingestion_logs.call_count, 2)
             self.assertEqual(response.status_code, 200)
             self.assertNotIn("Server Error", str(response.content))
 
