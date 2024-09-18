@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Views."""
-
 from django.conf import settings as netbox_settings
 from django.contrib.auth import get_user_model
 from django.shortcuts import redirect, render
@@ -14,6 +13,7 @@ from netbox_diode_plugin.forms import SettingsForm
 from netbox_diode_plugin.models import Setting
 from netbox_diode_plugin.reconciler.sdk.client import ReconcilerClient
 from netbox_diode_plugin.reconciler.sdk.exceptions import ReconcilerClientError
+from netbox_diode_plugin.tables import IngestionLogsTable
 
 
 class IngestionLogsView(View):
@@ -41,13 +41,38 @@ class IngestionLogsView(View):
             }
             return render(request, "diode/ingestion_logs.html", context)
 
+        page_size = 50
+
         try:
-            resp = reconciler_client.retrieve_ingestion_logs()
+            ingestion_logs_filters = {
+                "page_size": page_size,
+            }
+            request_page_token = request.GET.get("page_token")
+            if request_page_token is not None:
+                ingestion_logs_filters["page_token"] = request_page_token
+
+            resp = reconciler_client.retrieve_ingestion_logs(**ingestion_logs_filters)
+            table = IngestionLogsTable(resp.logs)
+
+            ingestion_metrics = reconciler_client.retrieve_ingestion_logs(
+                only_metrics=True
+            )
+
+            metrics = {
+                "new": ingestion_metrics.metrics.new or 0,
+                "reconciled": ingestion_metrics.metrics.reconciled or 0,
+                "failed": ingestion_metrics.metrics.failed or 0,
+                "no_changes": ingestion_metrics.metrics.no_changes or 0,
+                "total": ingestion_metrics.metrics.total or 0,
+            }
 
             context = {
-                "ingestion_logs": resp.logs,
                 "next_page_token": resp.next_page_token,
+                "ingestion_logs_table": table,
+                "total_count": resp.metrics.total,
+                "ingestion_metrics": metrics,
             }
+
         except ReconcilerClientError as error:
             context = {
                 "error": error,
