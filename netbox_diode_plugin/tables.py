@@ -56,9 +56,6 @@ class DataTypeColumn(columns.ContentTypeColumn):
 
     def render(self, value):
         """Renders a data type based on app_label and model."""
-        if value is None:
-            return None
-
         app_label, model_name = value.split(".")
         object_content_type = NetBoxType.objects.get_by_natural_key(
             app_label, model_name
