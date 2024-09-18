@@ -58,11 +58,19 @@ class IngestionLogsView(View):
                 only_metrics=True
             )
 
+            metrics = {
+                "new": ingestion_metrics.metrics.new or 0,
+                "reconciled": ingestion_metrics.metrics.reconciled or 0,
+                "failed": ingestion_metrics.metrics.failed or 0,
+                "no_changes": ingestion_metrics.metrics.no_changes or 0,
+                "total": ingestion_metrics.metrics.total or 0,
+            }
+
             context = {
                 "next_page_token": resp.next_page_token,
                 "ingestion_logs_table": table,
                 "total_count": resp.metrics.total,
-                "ingestion_metrics": ingestion_metrics,
+                "ingestion_metrics": metrics,
             }
 
         except ReconcilerClientError as error:
