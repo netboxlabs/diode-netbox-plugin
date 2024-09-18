@@ -37,13 +37,6 @@ class IngestionLogsView(View):
             api_key=token.key,
         )
 
-        plugin_settings = netbox_settings.PLUGINS_CONFIG["netbox_diode_plugin"]
-        if not plugin_settings.get("enable_ingestion_logs", False):
-            context = {
-                "ingestion_logs_disabled": True,
-            }
-            return render(request, "diode/ingestion_logs.html", context)
-
         page_size = 50
 
         try:
