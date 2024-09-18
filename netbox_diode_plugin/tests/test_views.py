@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.messages.middleware import MessageMiddleware
 from django.contrib.sessions.middleware import SessionMiddleware
+from django.core.cache import cache
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
@@ -26,6 +27,7 @@ class IngestionLogsViewTestCase(TestCase):
         self.request = RequestFactory().get(self.path)
         self.view = IngestionLogsView()
         self.view.setup(self.request)
+        cache.delete("ingestion_metrics")
 
     def test_returns_200_for_authenticated(self):
         """Test that the view returns 200 for an authenticated user."""
@@ -92,12 +94,65 @@ class IngestionLogsViewTestCase(TestCase):
                     metrics=reconciler_pb2.IngestionMetrics(
                         total=1,
                     ),
-                )
+                ),
             )
 
             response = self.view.get(self.request)
             mock_retrieve_ingestion_logs.assert_called()
             self.assertEqual(mock_retrieve_ingestion_logs.call_count, 2)
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("Server Error", str(response.content))
+
+    def test_cached_metrics(self):
+        """Test that the cached metrics are used."""
+        self.request.user = User.objects.create_user("foo", password="pass")
+        self.request.user.is_staff = True
+
+        with mock.patch(
+            "netbox_diode_plugin.reconciler.sdk.client.ReconcilerClient.retrieve_ingestion_logs"
+        ) as mock_retrieve_ingestion_logs:
+            mock_retrieve_ingestion_logs.side_effect = (
+                reconciler_pb2.RetrieveIngestionLogsResponse(
+                    logs=[
+                        reconciler_pb2.IngestionLog(
+                            data_type="dcim.site",
+                            state=reconciler_pb2.State.RECONCILED,
+                            request_id="c6ecd1ea-b23b-4f98-8593-d01d5a0da012",
+                            ingestion_ts=1725617988,
+                            producer_app_name="diode-test-app",
+                            producer_app_version="0.1.0",
+                            sdk_name="diode-sdk-python",
+                            sdk_version="0.1.0",
+                            entity=ingester_pb2.Entity(
+                                site=ingester_pb2.Site(
+                                    name="Test Site",
+                                ),
+                            ),
+                        )
+                    ],
+                    next_page_token="AAAAMg==",
+                    metrics=reconciler_pb2.IngestionMetrics(
+                        total=1,
+                    ),
+                ),
+            )
+
+            # Set up the cache
+            cache.set(
+                "ingestion_metrics",
+                {
+                    "new": 10,
+                    "reconciled": 20,
+                    "failed": 5,
+                    "no_changes": 65,
+                    "total": 1,
+                },
+                timeout=300,
+            )
+
+            response = self.view.get(self.request)
+            mock_retrieve_ingestion_logs.assert_called()
+            self.assertEqual(mock_retrieve_ingestion_logs.call_count, 1)
             self.assertEqual(response.status_code, 200)
             self.assertNotIn("Server Error", str(response.content))
 
@@ -215,7 +270,9 @@ class SettingsEditViewTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("grpc://localhost:8090/diode/reconciler", str(response.content))
 
-    def test_settings_update_post_redirects_to_login_page_for_unauthenticated_user(self):
+    def test_settings_update_post_redirects_to_login_page_for_unauthenticated_user(
+        self,
+    ):
         """Test that the view redirects an authenticated user to login page."""
         request = self.request_factory.post(self.path)
         request.user = AnonymousUser()

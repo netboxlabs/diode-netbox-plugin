@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - Views."""
 from django.conf import settings as netbox_settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.shortcuts import redirect, render
 from django.views.generic import View
 from netbox.views import generic
@@ -18,6 +19,8 @@ from netbox_diode_plugin.tables import IngestionLogsTable
 
 class IngestionLogsView(View):
     """Ingestion logs view."""
+
+    INGESTION_METRICS_CACHE_KEY = "ingestion_metrics"
 
     def get(self, request):
         """Render ingestion logs template."""
@@ -54,17 +57,25 @@ class IngestionLogsView(View):
             resp = reconciler_client.retrieve_ingestion_logs(**ingestion_logs_filters)
             table = IngestionLogsTable(resp.logs)
 
-            ingestion_metrics = reconciler_client.retrieve_ingestion_logs(
-                only_metrics=True
-            )
-
-            metrics = {
-                "new": ingestion_metrics.metrics.new or 0,
-                "reconciled": ingestion_metrics.metrics.reconciled or 0,
-                "failed": ingestion_metrics.metrics.failed or 0,
-                "no_changes": ingestion_metrics.metrics.no_changes or 0,
-                "total": ingestion_metrics.metrics.total or 0,
-            }
+            cached_ingestion_metrics = cache.get(self.INGESTION_METRICS_CACHE_KEY)
+            if cached_ingestion_metrics is not None and cached_ingestion_metrics["total"] == resp.metrics.total:
+                metrics = cached_ingestion_metrics
+            else:
+                ingestion_metrics = reconciler_client.retrieve_ingestion_logs(
+                    only_metrics=True
+                )
+                metrics = {
+                    "new": ingestion_metrics.metrics.new or 0,
+                    "reconciled": ingestion_metrics.metrics.reconciled or 0,
+                    "failed": ingestion_metrics.metrics.failed or 0,
+                    "no_changes": ingestion_metrics.metrics.no_changes or 0,
+                    "total": ingestion_metrics.metrics.total or 0,
+                }
+                cache.set(
+                    self.INGESTION_METRICS_CACHE_KEY,
+                    metrics,
+                    timeout=300,
+                )
 
             context = {
                 "next_page_token": resp.next_page_token,
