@@ -76,8 +76,7 @@
 <script type="text/javascript">
     function drawGauge(ctx, value, color) {
         const pixelRatio = window.devicePixelRatio || 1;
-        const parentWidth = ctx.canvas.parentElement.querySelector('div.metric-label').clientWidth;
-        const width = parentWidth;
+        const width = ctx.canvas.parentElement.querySelector('div.metric-label').clientWidth;
         const height = width/2;
 
         // Scale the canvas
