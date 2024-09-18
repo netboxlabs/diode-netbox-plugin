@@ -6,44 +6,14 @@
 
 {% block title %}{% trans "Ingestion Logs" %}{% endblock %}
 
-{% block tabs %}
-<ul class="nav nav-tabs px-3">
-    <li class="nav-item" role="presentation">
-        <a class="nav-link active" id="ingestion-logs-tab" data-bs-toggle="tab" data-bs-target="#ingestion-logs" type="button" role="tab">{% trans "Logs" %}</a>
-    </li>
-    <li class="nav-item" role="presentation">
-        <a class="nav-link" id="ingestion-metrics-tab" data-bs-toggle="tab" data-bs-target="#ingestion-metrics" type="button" role="tab">{% trans "Metrics" %}</a>
-    </li>
-</ul>
-{% endblock tabs %}
-
 {% block content %}
-{% if ingestion_logs_disabled %}
-<div class="alert alert-warning mt-3" role="alert">
-    <p>⚠️: Ingestion logs are disabled.</p>
-</div>
-{% endif %}
 {% if error %}
 <div class="alert alert-danger mt-3" role="alert">
     <h4 class="alert-heading">{% trans "Error" %}</h4>
     <p>{{ error.status_code }}: {{ error.details }}</p>
 </div>
 {% else %}
-<div class="tab-pane show active" id="ingestion-logs" role="tabpanel" aria-labelledby="ingestion-logs-tab">
-    <div class="row mb-3">
-        <div class="col col-md-12">
-            <div class="card">
-                <div class="table-responsive">
-                    {% render_table ingestion_logs_table 'diode/ingestion_logs_table.html' %}
-                    {% if ingestion_logs_table.data %}
-                        {% include 'diode/ingestion_logs_paginator.html' with next_page_token=next_page_token total_count=total_count %}
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-<div class="tab-pane show" id="ingestion-metrics" role="tabpanel" aria-labelledby="ingestion-metrics-tab">
+<div>
     <div class="row mb-3">
         <div class="col col-md-12">
             <div class="card p-3">
@@ -68,6 +38,18 @@
                         <canvas id="ingestions-total"></canvas>
                         <div class="text-center metric-label">Total</div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="row mb-3">
+        <div class="col col-md-12">
+            <div class="card">
+                <div class="table-responsive">
+                    {% render_table ingestion_logs_table 'diode/ingestion_logs_table.html' %}
+                    {% if ingestion_logs_table.data %}
+                        {% include 'diode/ingestion_logs_paginator.html' with next_page_token=next_page_token total_count=total_count %}
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -121,7 +103,6 @@
         ctx.fillText(value, centerX, centerY - 10);
     }
 
-
     document.addEventListener('DOMContentLoaded', function() {
         function redrawMetrics() {
             drawGauge(document.getElementById('ingestions-new').getContext('2d'), {{ ingestion_metrics.new }}, '#FFFF00');
@@ -130,6 +111,8 @@
             drawGauge(document.getElementById('ingestions-no-changes').getContext('2d'), {{ ingestion_metrics.no_changes }}, '#40E0D0');
             drawGauge(document.getElementById('ingestions-total').getContext('2d'), {{ ingestion_metrics.total }}, '#0D6EFD');
         }
+
+        redrawMetrics()
 
         // Observe changes to the data-bs-theme attribute on the body tag
         const body = document.querySelector('body');
@@ -141,11 +124,7 @@
             });
         });
 
-        metricsTab = document.getElementById('ingestion-metrics-tab');
-        metricsTab.addEventListener('click', function() {
-            redrawMetrics()
-            observer.observe(body, { attributes: true });
-        });
+        observer.observe(body, { attributes: true });
         window.addEventListener('resize', function() {
             redrawMetrics()
         });
