@@ -85,8 +85,16 @@ class IngestionMetrics(_message.Message):
     no_changes: int
     def __init__(self, total: _Optional[int] = ..., new: _Optional[int] = ..., reconciled: _Optional[int] = ..., failed: _Optional[int] = ..., no_changes: _Optional[int] = ...) -> None: ...
 
+class ChangeSet(_message.Message):
+    __slots__ = ("id", "data")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    data: str
+    def __init__(self, id: _Optional[str] = ..., data: _Optional[str] = ...) -> None: ...
+
 class IngestionLog(_message.Message):
-    __slots__ = ("id", "data_type", "state", "request_id", "ingestion_ts", "producer_app_name", "producer_app_version", "sdk_name", "sdk_version", "entity", "error")
+    __slots__ = ("id", "data_type", "state", "request_id", "ingestion_ts", "producer_app_name", "producer_app_version", "sdk_name", "sdk_version", "entity", "error", "change_set")
     ID_FIELD_NUMBER: _ClassVar[int]
     DATA_TYPE_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
@@ -98,6 +106,7 @@ class IngestionLog(_message.Message):
     SDK_VERSION_FIELD_NUMBER: _ClassVar[int]
     ENTITY_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
+    CHANGE_SET_FIELD_NUMBER: _ClassVar[int]
     id: str
     data_type: str
     state: State
@@ -109,7 +118,8 @@ class IngestionLog(_message.Message):
     sdk_version: str
     entity: _ingester_pb2.Entity
     error: IngestionError
-    def __init__(self, id: _Optional[str] = ..., data_type: _Optional[str] = ..., state: _Optional[_Union[State, str]] = ..., request_id: _Optional[str] = ..., ingestion_ts: _Optional[int] = ..., producer_app_name: _Optional[str] = ..., producer_app_version: _Optional[str] = ..., sdk_name: _Optional[str] = ..., sdk_version: _Optional[str] = ..., entity: _Optional[_Union[_ingester_pb2.Entity, _Mapping]] = ..., error: _Optional[_Union[IngestionError, _Mapping]] = ...) -> None: ...
+    change_set: ChangeSet
+    def __init__(self, id: _Optional[str] = ..., data_type: _Optional[str] = ..., state: _Optional[_Union[State, str]] = ..., request_id: _Optional[str] = ..., ingestion_ts: _Optional[int] = ..., producer_app_name: _Optional[str] = ..., producer_app_version: _Optional[str] = ..., sdk_name: _Optional[str] = ..., sdk_version: _Optional[str] = ..., entity: _Optional[_Union[_ingester_pb2.Entity, _Mapping]] = ..., error: _Optional[_Union[IngestionError, _Mapping]] = ..., change_set: _Optional[_Union[ChangeSet, _Mapping]] = ...) -> None: ...
 
 class RetrieveIngestionLogsRequest(_message.Message):
     __slots__ = ("page_size", "state", "data_type", "request_id", "ingestion_ts_start", "ingestion_ts_end", "page_token", "only_metrics")
