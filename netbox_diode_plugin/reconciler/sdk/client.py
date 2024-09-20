@@ -218,7 +218,7 @@ class ReconcilerMethodClientInterceptor(
     grpc.UnaryUnaryClientInterceptor and grpc.StreamUnaryClientInterceptor.
 
     Reconciler's default method generated from Protocol Buffers definition is /diode.v1.ReconcilerService/RetrieveIngestionLogs and in order
-    to use Reconciler targets with path (i.e. localhost:8081/this/is/custom/path), this interceptor is used to modify the
+    to use Diode targets with path (i.e. localhost:8081/this/is/custom/path), this interceptor is used to modify the
     method details, by prepending the generated method name with the path extracted from initial target.
 
     """

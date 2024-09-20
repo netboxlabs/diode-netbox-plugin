@@ -196,7 +196,7 @@ class SettingsViewTestCase(TestCase):
             response = self.view.get(self.request)
             self.assertEqual(response.status_code, 200)
             self.assertIn(
-                "grpc://localhost:8080/diode/reconciler", str(response.content)
+                "grpc://localhost:8080/diode", str(response.content)
             )
 
 
@@ -242,12 +242,12 @@ class SettingsEditViewTestCase(TestCase):
 
         response = self.view.get(request)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("grpc://localhost:8080/diode/reconciler", str(response.content))
+        self.assertIn("grpc://localhost:8080/diode", str(response.content))
 
         request = self.request_factory.post(self.path)
         request.user = user
         request.htmx = None
-        request.POST = {"reconciler_target": "grpc://localhost:8090/diode/reconciler"}
+        request.POST = {"diode_target": "grpc://localhost:8090/diode"}
 
         middleware = SessionMiddleware(get_response=lambda request: None)
         middleware.process_request(request)
@@ -268,7 +268,7 @@ class SettingsEditViewTestCase(TestCase):
 
         response = self.view.get(request)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("grpc://localhost:8090/diode/reconciler", str(response.content))
+        self.assertIn("grpc://localhost:8090/diode", str(response.content))
 
     def test_settings_update_post_redirects_to_login_page_for_unauthenticated_user(
         self,
@@ -277,7 +277,7 @@ class SettingsEditViewTestCase(TestCase):
         request = self.request_factory.post(self.path)
         request.user = AnonymousUser()
         request.htmx = None
-        request.POST = {"reconciler_target": "grpc://localhost:8090/diode/reconciler"}
+        request.POST = {"diode_target": "grpc://localhost:8090/diode"}
 
         response = self.view.post(request)
         self.assertEqual(response.status_code, 302)
