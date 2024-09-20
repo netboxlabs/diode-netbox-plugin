@@ -10,8 +10,8 @@ from netbox.models import NetBoxModel
 from netbox_diode_plugin.reconciler.sdk.client import parse_target
 
 
-def reconciler_target_validator(target):
-    """Reconciler target validator."""
+def diode_target_validator(target):
+    """Diode target validator."""
     try:
         _, _, _ = parse_target(target)
     except ValueError as exc:
@@ -37,7 +37,7 @@ class Diode(models.Model):
 class Setting(NetBoxModel):
     """Setting model."""
 
-    reconciler_target = models.CharField(max_length=255, validators=[reconciler_target_validator])
+    diode_target = models.CharField(max_length=255, validators=[diode_target_validator])
 
     class Meta:
         """Meta class."""

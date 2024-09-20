@@ -15,7 +15,7 @@ class SettingsForm(NetBoxModelForm):
 
     fieldsets = (
         FieldSet(
-            "reconciler_target",
+            "diode_target",
         ),
     )
 
@@ -23,4 +23,4 @@ class SettingsForm(NetBoxModelForm):
         """Meta class."""
 
         model = Setting
-        fields = ("reconciler_target",)
+        fields = ("diode_target",)

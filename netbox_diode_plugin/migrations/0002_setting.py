@@ -9,7 +9,7 @@ from django.db import migrations, models
 def create_settings_entity(apps, schema_editor):
     """Create a Setting entity."""
     Setting = apps.get_model("netbox_diode_plugin", "Setting")
-    Setting.objects.create(reconciler_target="grpc://localhost:8080/diode/reconciler")
+    Setting.objects.create(diode_target="grpc://localhost:8080/diode")
 
 
 class Migration(migrations.Migration):
@@ -39,7 +39,7 @@ class Migration(migrations.Migration):
                         encoder=utilities.json.CustomFieldJSONEncoder,
                     ),
                 ),
-                ("reconciler_target", models.CharField(max_length=255)),
+                ("diode_target", models.CharField(max_length=255)),
             ],
             options={
                 "verbose_name": "Setting",

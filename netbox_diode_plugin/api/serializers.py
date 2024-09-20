@@ -137,7 +137,7 @@ class SettingSerializer(NetBoxModelSerializer):
         model = Setting
         fields = (
             "id",
-            "reconciler_target",
+            "diode_target",
             "custom_fields",
             "created",
             "last_updated",
