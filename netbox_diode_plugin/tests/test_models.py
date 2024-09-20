@@ -12,7 +12,7 @@ class SettingModelTestCase(TestCase):
 
     def test_validators(self):
         """Check Setting model field validators are functional."""
-        setting = Setting(reconciler_target="http://localhost:8080")
+        setting = Setting(diode_target="http://localhost:8080")
 
         with self.assertRaises(ValidationError):
             setting.clean_fields()
@@ -20,7 +20,7 @@ class SettingModelTestCase(TestCase):
 
     def test_str(self):
         """Check Setting model string representation."""
-        setting = Setting(reconciler_target="http://localhost:8080")
+        setting = Setting(diode_target="http://localhost:8080")
         self.assertEqual(str(setting), "")
 
 

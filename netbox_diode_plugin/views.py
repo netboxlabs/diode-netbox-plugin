@@ -33,7 +33,7 @@ class IngestionLogsView(View):
         token = Token.objects.get(user=user)
 
         reconciler_client = ReconcilerClient(
-            target=diode_settings.reconciler_target,
+            target=diode_settings.diode_target,
             api_key=token.key,
         )
 
@@ -101,7 +101,7 @@ class SettingsView(View):
         if settings is None:
             """Create a default setting with placeholder data."""
             settings = Setting.objects.create(
-                reconciler_target="grpc://localhost:8080/diode/reconciler"
+                diode_target="grpc://localhost:8080/diode"
             )
 
         diode_users = [
@@ -118,7 +118,7 @@ class SettingsView(View):
             diode_api_keys[f"{username}_API_KEY"] = token.key
 
         context = {
-            "reconciler_target": settings.reconciler_target,
+            "diode_target": settings.diode_target,
             "last_updated": settings.last_updated,
             "api_keys": diode_api_keys,
         }
