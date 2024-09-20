@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Template Tags."""
 import base64
+
 import brotli
 from django import template
 from google.protobuf.json_format import MessageToJson
@@ -26,13 +27,7 @@ def proto_to_json(value):
             decompressed_data = brotli.decompress(compressed_data)
             decompressed_string = decompressed_data.decode("utf-8")
             return decompressed_string
-        except:
+        except Exception:
             return None
+
     return None
-
-
-@register.filter("decompress_changeset")
-def decompress_changeset(value):
-    """Decompresses a changeset."""
-    if isinstance(value, reconciler_pb2.ChangeSet):
-        return brotli.decompress(value).decode("utf-8")
