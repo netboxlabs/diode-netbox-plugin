@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Template Tags."""
-import base64
 
 import brotli
 from django import template
 from google.protobuf.json_format import MessageToJson
+import json
 
 from netbox_diode_plugin.reconciler.sdk.v1 import ingester_pb2, reconciler_pb2
 
@@ -23,10 +23,10 @@ def proto_to_json(value):
 
     if isinstance(value, reconciler_pb2.ChangeSet):
         try:
-            compressed_data = base64.b64decode(value.data)
-            decompressed_data = brotli.decompress(compressed_data)
+            decompressed_data = brotli.decompress(value.data)
             decompressed_string = decompressed_data.decode("utf-8")
-            return decompressed_string
+            json_data = json.loads(decompressed_string)
+            return json.dumps(json_data, indent=4)
         except Exception:
             return None
 
