@@ -41,7 +41,7 @@ class TestProtoToJsonTestCase(TestCase):
         )
         decompress = proto_to_json(changeset)
         self.assertIsNotNone(decompress)
-        self.assertContains(decompress, "2a4e85a7-abad-4e1b-9ae0-db22f0900251")
+        self.assertIn("2a4e85a7-abad-4e1b-9ae0-db22f0900251", decompress)
 
     def test_invalid_type(self):
         """Test an invalid type."""
