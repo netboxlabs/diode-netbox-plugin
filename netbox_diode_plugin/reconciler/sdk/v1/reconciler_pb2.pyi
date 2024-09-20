@@ -90,8 +90,8 @@ class ChangeSet(_message.Message):
     ID_FIELD_NUMBER: _ClassVar[int]
     DATA_FIELD_NUMBER: _ClassVar[int]
     id: str
-    data: str
-    def __init__(self, id: _Optional[str] = ..., data: _Optional[str] = ...) -> None: ...
+    data: bytes
+    def __init__(self, id: _Optional[str] = ..., data: _Optional[bytes] = ...) -> None: ...
 
 class IngestionLog(_message.Message):
     __slots__ = ("id", "data_type", "state", "request_id", "ingestion_ts", "producer_app_name", "producer_app_version", "sdk_name", "sdk_version", "entity", "error", "change_set")

@@ -33,6 +33,16 @@ class TestProtoToJsonTestCase(TestCase):
         expected_json = MessageToJson(entity)
         self.assertEqual(proto_to_json(entity), expected_json)
 
+    def test_changeset(self):
+        """Create a mock ChangeSet."""
+        changeset = reconciler_pb2.ChangeSet(
+            id="2a4e85a7-abad-4e1b-9ae0-db22f0900251",
+            data=b"G5UEAGRxLZWPbr7lNKe3CTPJKTwA/P83XzTBAPgtaiybHgY0psYBL+qEl7HFY/In/JBulkUclor+WdLfisYDwj//d+jHv1mDAZyEnqMQSpGGoduCLN1gK86NDRvjogW11YXh6yR8Ctwtp8JRMMUwFl/IYS55lPc+RpeKL4mFe21sGOBtAhsUPFXAlrxWZ6sRsgkKmm78MDxgLatl3DKj1SnPwGF5msAAJXiBoxxPBxhA6nF27vB6KUw4255saISFStK3y1aQSwsoMeVquRhORiHPxeDiHg5UOYU2A+FoQNgVZ7pPHSlRFJjcGCWPLVYj6mEgbs7mkPgLRwN4tVab1pejrOBy2dwqcsA9tfHYV0bh5vWtoyTkcTXYWWhsLZVYjVAtxmS84/MyO9YpnHSI4XqpgAHSDpMJUltgdNVYcZXsZqfokYiku3FwnUkxfORvKPxhin821v+McZHTc7C4riAb2aXBUMBJ0f/ZFH4Fh76fyTfW8Pb+wZlSDN7Vq/bzAg==",
+        )
+        decompress = proto_to_json(changeset)
+        self.assertIsNotNone(decompress)
+        self.assertContains(decompress, "2a4e85a7-abad-4e1b-9ae0-db22f0900251")
+
     def test_invalid_type(self):
         """Test an invalid type."""
         self.assertIsNone(proto_to_json("invalid"))
