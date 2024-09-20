@@ -2,10 +2,11 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Template Tags."""
 
+import json
+
 import brotli
 from django import template
 from google.protobuf.json_format import MessageToJson
-import json
 
 from netbox_diode_plugin.reconciler.sdk.v1 import ingester_pb2, reconciler_pb2
 
