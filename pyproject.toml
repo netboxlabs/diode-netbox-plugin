@@ -25,6 +25,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "Brotli==1.1.0",
     "certifi==2024.7.4",
     "grpcio==1.62.1",
 ]

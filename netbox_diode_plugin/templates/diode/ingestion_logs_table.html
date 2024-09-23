@@ -26,21 +26,63 @@
 <tr>
     <td colspan="{{ table.columns|length }}" style="padding: 0 !important;border: 0 !important;">
         <div class="tab-pane accordion-collapse collapse border-bottom" id="ingestion-log-{{ row.record.id }}">
-            <div class="row p-3 pb-0">
-                <div class="col col-6">
-                    <div class="card">
-                        <h2 class="card-header">{% trans "Ingested Entity" %}</h2>
-                        <pre>{{ row.record.entity|proto_to_json }}</pre>
-                    </div>
+            <div class="row p-0 m-0">
+                {% block tabs %}
+                <div class="page-tabs">
+                    <ul class="nav nav-tabs px-3">
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link border-bottom-0 active" id="ingested-entity-{{ row.record.id }}-tab" data-bs-toggle="tab" data-bs-target="#ingested-entity-{{ row.record.id }}" type="button" role="tab" aria-selected="true">
+                            {% trans "Ingested Entity" %}
+                            </a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link border-bottom-0" id="change-set-{{ row.record.id }}-tab" data-bs-toggle="tab" data-bs-target="#change-set-{{ row.record.id }}" type="button" role="tab">
+                            {% trans "Change Set" %}
+                            </a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link border-bottom-0" id="error-{{ row.record.id }}-tab" data-bs-toggle="tab" data-bs-target="#error-{{ row.record.id }}" type="button" role="tab">
+                            {% trans "Error" %}
+                            </a>
+                        </li>
+                    </ul>
                 </div>
-                <div class="col col-6">
-                    <div class="card">
-                        <h2 class="card-header">{% trans "Error" %}</h2>
-                        {% if row.record.error.message != "" %}
-                        <pre>{{ row.record.error|proto_to_json }}</pre>
-                        {% else %}
-                        <pre class="text-muted">None</pre>
-                        {% endif %}
+                {% endblock tabs %}
+                <div class="tab-content">
+                    <div class="tab-pane show active" id="ingested-entity-{{ row.record.id }}" role="tabpanel" aria-labelledby="ingested-entity-{{ row.record.id }}-tab">
+                        <div class="row">
+                            <div class="col">
+                                <div class="card border-0 mb-0">
+                                    <pre>{{ row.record.entity|proto_to_json }}</pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tab-pane p-0" id="change-set-{{ row.record.id }}" role="tabpanel" aria-labelledby="change-set-{{ row.record.id }}-tab">
+                        <div class="row">
+                            <div class="col">
+                                <div class="card border-0 mb-0">
+                                    {% if row.record.change_set.data != "" and row.record.change_set.data|length > 0 %}
+                                    <pre>{{ row.record.change_set|proto_to_json }}</pre>
+                                    {% else %}
+                                    <pre class="text-muted">None</pre>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tab-pane p-0" id="error-{{ row.record.id }}" role="tabpanel" aria-labelledby="error-{{ row.record.id }}-tab">
+                        <div class="row">
+                            <div class="col">
+                                <div class="card border-0 mb-0">
+                                    {% if row.record.error.message != "" %}
+                                    <pre>{{ row.record.error|proto_to_json }}</pre>
+                                    {% else %}
+                                    <pre class="text-muted">None</pre>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
