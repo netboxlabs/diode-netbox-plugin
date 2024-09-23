@@ -6,10 +6,12 @@ from unittest import mock
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.messages.middleware import MessageMiddleware
+from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.core.cache import cache
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
+from rest_framework import status
 
 from netbox_diode_plugin.models import Setting
 from netbox_diode_plugin.reconciler.sdk.v1 import ingester_pb2, reconciler_pb2
@@ -35,7 +37,7 @@ class IngestionLogsViewTestCase(TestCase):
         self.request.user.is_staff = True
 
         response = self.view.get(self.request)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_redirects_to_login_page_for_unauthenticated_user(self):
         """Test that the view returns 200 for an authenticated user."""
@@ -44,7 +46,7 @@ class IngestionLogsViewTestCase(TestCase):
 
         response = IngestionLogsView.as_view()(self.request)
 
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         self.assertEqual(response.url, f"/netbox/login/?next={self.path}")
 
     def test_ingestion_logs_failed_to_retrieve(self):
@@ -53,7 +55,7 @@ class IngestionLogsViewTestCase(TestCase):
         self.request.user.is_staff = True
 
         response = self.view.get(self.request)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn(
             "UNAVAILABLE: failed to connect to all addresses;", str(response.content)
         )
@@ -100,7 +102,7 @@ class IngestionLogsViewTestCase(TestCase):
             response = self.view.get(self.request)
             mock_retrieve_ingestion_logs.assert_called()
             self.assertEqual(mock_retrieve_ingestion_logs.call_count, 2)
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertNotIn("Server Error", str(response.content))
 
     def test_cached_metrics(self):
@@ -153,7 +155,7 @@ class IngestionLogsViewTestCase(TestCase):
             response = self.view.get(self.request)
             mock_retrieve_ingestion_logs.assert_called()
             self.assertEqual(mock_retrieve_ingestion_logs.call_count, 1)
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertNotIn("Server Error", str(response.content))
 
 
@@ -173,7 +175,7 @@ class SettingsViewTestCase(TestCase):
         self.request.user.is_staff = True
 
         response = self.view.get(self.request)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_redirects_to_login_page_for_unauthenticated_user(self):
         """Test that the view returns 200 for an authenticated user."""
@@ -182,7 +184,7 @@ class SettingsViewTestCase(TestCase):
 
         response = SettingsView.as_view()(self.request)
 
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         self.assertEqual(response.url, f"/netbox/login/?next={self.path}")
 
     def test_settings_created_if_not_found(self):
@@ -194,7 +196,7 @@ class SettingsViewTestCase(TestCase):
             mock_get.side_effect = Setting.DoesNotExist
 
             response = self.view.get(self.request)
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertIn(
                 "grpc://localhost:8080/diode", str(response.content)
             )
@@ -218,7 +220,7 @@ class SettingsEditViewTestCase(TestCase):
         self.view.setup(request)
 
         response = self.view.get(request)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_redirects_to_login_page_for_unauthenticated_user(self):
         """Test that the view redirects an authenticated user to login page."""
@@ -227,7 +229,7 @@ class SettingsEditViewTestCase(TestCase):
         self.view.setup(request)
 
         response = self.view.get(request)
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         self.assertEqual(response.url, f"/netbox/login/?next={self.path}")
 
     def test_settings_updated(self):
@@ -241,7 +243,7 @@ class SettingsEditViewTestCase(TestCase):
         self.view.setup(request)
 
         response = self.view.get(request)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("grpc://localhost:8080/diode", str(response.content))
 
         request = self.request_factory.post(self.path)
@@ -258,7 +260,7 @@ class SettingsEditViewTestCase(TestCase):
         request.session.save()
 
         response = self.view.post(request)
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         self.assertEqual(response.url, reverse("plugins:netbox_diode_plugin:settings"))
 
         request = self.request_factory.get(self.path)
@@ -267,7 +269,7 @@ class SettingsEditViewTestCase(TestCase):
         self.view.setup(request)
 
         response = self.view.get(request)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("grpc://localhost:8090/diode", str(response.content))
 
     def test_settings_update_post_redirects_to_login_page_for_unauthenticated_user(
@@ -280,5 +282,45 @@ class SettingsEditViewTestCase(TestCase):
         request.POST = {"diode_target": "grpc://localhost:8090/diode"}
 
         response = self.view.post(request)
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         self.assertEqual(response.url, f"/netbox/login/?next={self.path}")
+
+    def test_settings_update_disallowed(self):
+        """Test that the Diode target cannot be overridden."""
+        with mock.patch("netbox_diode_plugin.views.netbox_settings") as mock_settings:
+            mock_settings.PLUGINS_CONFIG = {
+                "netbox_diode_plugin": {
+                    "disallow_diode_target_override": True
+                }
+            }
+
+            user = User.objects.create_user("foo", password="pass")
+            user.is_staff = True
+
+            request = self.request_factory.post(self.path)
+            request.user = user
+            request.htmx = None
+            request.POST = {"diode_target": "grpc://localhost:8090/diode"}
+
+            middleware = SessionMiddleware(get_response=lambda request: None)
+            middleware.process_request(request)
+            request.session.save()
+
+            middleware = MessageMiddleware(get_response=lambda request: None)
+            middleware.process_request(request)
+            request.session.save()
+
+            setattr(request, 'session', 'session')
+            messages = FallbackStorage(request)
+            request._messages = messages
+
+            self.view.setup(request)
+            response = self.view.post(request)
+
+            self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+            self.assertEqual(response.url, reverse("plugins:netbox_diode_plugin:settings"))
+            self.assertEqual(len(request._messages._queued_messages), 1)
+            self.assertEqual(
+                str(request._messages._queued_messages[0]),
+                "The Diode target is not allowed to be overridden.",
+            )

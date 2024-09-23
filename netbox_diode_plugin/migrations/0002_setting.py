@@ -3,13 +3,19 @@
 """Diode Netbox Plugin - Database migrations."""
 
 import utilities.json
+from django.conf import settings as netbox_settings
 from django.db import migrations, models
 
 
 def create_settings_entity(apps, schema_editor):
     """Create a Setting entity."""
     Setting = apps.get_model("netbox_diode_plugin", "Setting")
-    Setting.objects.create(diode_target="grpc://localhost:8080/diode")
+
+    diode_target = netbox_settings.PLUGINS_CONFIG.get(
+        "netbox_diode_plugin", {}
+    ).get("diode_target", "grpc://localhost:8080/diode")
+
+    Setting.objects.create(diode_target=diode_target)
 
 
 class Migration(migrations.Migration):

@@ -11,6 +11,17 @@ from django.db import migrations, models
 from users.models import Token as NetBoxToken
 
 
+# Read secret from file
+def _read_secret(secret_name, default=None):
+    try:
+        f = open("/run/secrets/" + secret_name, encoding="utf-8")
+    except OSError:
+        return default
+    else:
+        with f:
+            return f.readline().strip()
+
+
 def _create_user_with_token(apps, username, group, is_superuser: bool = False):
     User = apps.get_model(settings.AUTH_USER_MODEL)
     """Create a user with the given username and API key if it does not exist."""
@@ -27,7 +38,8 @@ def _create_user_with_token(apps, username, group, is_superuser: bool = False):
     Token = apps.get_model("users", "Token")
 
     if not Token.objects.filter(user=user).exists():
-        api_key = os.getenv(f"{username}_API_KEY")
+        key = f"{username}_API_KEY"
+        api_key = _read_secret(key.lower(), os.getenv(key))
         if api_key is None:
             api_key = NetBoxToken.generate_key()
         Token.objects.create(user=user, key=api_key)

@@ -40,6 +40,17 @@ PLUGINS = [
 ]
 ```
 
+Also in your `configuration.py` file, add `netbox_diode_plugin`to the `PLUGINS_CONFIG` dictionary, e.g.:
+
+```python
+PLUGINS_CONFIG = {
+    "netbox_diode_plugin": {
+        "diode_target": "grpc://localhost:8080/diode", # The Diode gRPC target for communication with Diode server, default: "grpc://localhost:8080/diode"
+        "disallow_diode_target_override": True, # Disallow the Diode target to be overridden by the user, default: False
+    }
+}
+```
+
 Restart NetBox services to load the plugin:
 
 ```
