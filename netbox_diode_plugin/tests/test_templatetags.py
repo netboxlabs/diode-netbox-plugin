@@ -30,7 +30,7 @@ class TestProtoToJsonTestCase(TestCase):
                 name="Test Site",
             )
         )
-        expected_json = MessageToJson(entity)
+        expected_json = MessageToJson(entity, indent=4)
         self.assertEqual(proto_to_json(entity), expected_json)
 
     def test_changeset(self):
