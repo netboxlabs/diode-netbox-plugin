@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Views."""
 from django.conf import settings as netbox_settings
+from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.shortcuts import redirect, render
@@ -51,7 +52,10 @@ class IngestionLogsView(View):
             table = IngestionLogsTable(resp.logs)
 
             cached_ingestion_metrics = cache.get(self.INGESTION_METRICS_CACHE_KEY)
-            if cached_ingestion_metrics is not None and cached_ingestion_metrics["total"] == resp.metrics.total:
+            if (
+                cached_ingestion_metrics is not None
+                and cached_ingestion_metrics["total"] == resp.metrics.total
+            ):
                 metrics = cached_ingestion_metrics
             else:
                 ingestion_metrics = reconciler_client.retrieve_ingestion_logs(
@@ -149,6 +153,15 @@ class SettingsEditView(generic.ObjectEditView):
         """POST request handler."""
         if not request.user.is_authenticated or not request.user.is_staff:
             return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+
+        if netbox_settings.PLUGINS_CONFIG.get("netbox_diode_plugin", {}).get(
+            "disallow_diode_target_override", False
+        ):
+            messages.error(
+                request,
+                "The Diode target is not allowed to be overridden.",
+            )
+            return redirect("plugins:netbox_diode_plugin:settings")
 
         settings = Setting.objects.get()
         kwargs["pk"] = settings.pk
