@@ -59,8 +59,10 @@ PLUGINS_CONFIG = {
         "diode_username": "diode-ingestion",
     },
 }
-
 ```
+
+Note: Once you customise usernames with PLUGINS_CONFIG during first installation, you should not change or remove them
+later on. Doing so will cause the plugin to stop working properly.
 
 Restart NetBox services to load the plugin:
 
