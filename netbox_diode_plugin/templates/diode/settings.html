@@ -6,12 +6,14 @@
 {% block title %}{% trans "Settings" %}{% endblock %}
 
 {% block controls %}
+{% if not is_diode_target_overridden %}
 <div class="btn-list">
     {% block control-buttons %}
     {% url 'plugins:netbox_diode_plugin:settings_edit' as edit_url %}
     {% include "buttons/edit.html" with url=edit_url %}
     {% endblock control-buttons %}
 </div>
+{% endif %}
 {% endblock controls %}
 
 {% block content %}
@@ -22,10 +24,6 @@
                 <tr>
                     <th scope="row">{% trans "Diode target" %}</th>
                     <td>{{ diode_target }}</td>
-                </tr>
-                <tr>
-                    <th scope="row">{% trans "Last updated" %}</th>
-                    <td>{{ last_updated|isodatetime }}</td>
                 </tr>
             </table>
         </div>

@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - Forms."""
 from django.conf import settings as netbox_settings
 from netbox.forms import NetBoxModelForm
+from netbox.plugins import get_plugin_config
 from utilities.forms.rendering import FieldSet
 
 from netbox_diode_plugin.models import Setting
@@ -29,12 +30,12 @@ class SettingsForm(NetBoxModelForm):
         """Initialize the form."""
         super().__init__(*args, **kwargs)
 
-        disallow_diode_target_override = netbox_settings.PLUGINS_CONFIG.get(
-            "netbox_diode_plugin", {}
-        ).get("disallow_diode_target_override", False)
+        diode_target_override = get_plugin_config(
+            "netbox_diode_plugin", "diode_target_override"
+        )
 
-        if disallow_diode_target_override:
+        if diode_target_override:
             self.fields["diode_target"].disabled = True
             self.fields["diode_target"].help_text = (
-                "This field is not allowed to be overridden."
+                "This field is not allowed to be modified."
             )

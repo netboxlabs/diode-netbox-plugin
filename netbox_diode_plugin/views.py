@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.shortcuts import redirect, render
 from django.views.generic import View
+from netbox.plugins import get_plugin_config
 from netbox.views import generic
 from users.models import Token
 from utilities.views import register_model_view
@@ -32,16 +33,21 @@ class IngestionLogsView(View):
         if not request.user.is_authenticated or not request.user.is_staff:
             return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
 
-        diode_settings = Setting.objects.get()
-
         netbox_to_diode_username = get_diode_username_for_user_category(
             "netbox_to_diode"
         )
         user = get_user_model().objects.get(username=netbox_to_diode_username)
         token = Token.objects.get(user=user)
 
+        settings = Setting.objects.get()
+
+        diode_target_override = get_plugin_config(
+            "netbox_diode_plugin", "diode_target_override"
+        )
+        diode_target = diode_target_override or settings.diode_target
+
         reconciler_client = ReconcilerClient(
-            target=diode_settings.diode_target,
+            target=diode_target,
             api_key=token.key,
         )
 
@@ -104,15 +110,18 @@ class SettingsView(View):
         if not request.user.is_authenticated or not request.user.is_staff:
             return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
 
+        diode_target_override = get_plugin_config(
+            "netbox_diode_plugin", "diode_target_override"
+        )
+
         try:
             settings = Setting.objects.get()
         except Setting.DoesNotExist:
-            settings = None
-
-        if settings is None:
-            """Create a default setting with placeholder data."""
+            default_diode_target = get_plugin_config(
+                "netbox_diode_plugin", "diode_target"
+            )
             settings = Setting.objects.create(
-                diode_target="grpc://localhost:8080/diode"
+                diode_target=diode_target_override or default_diode_target
             )
 
         diode_users_info = {}
@@ -125,9 +134,11 @@ class SettingsView(View):
                 "env_var_name": f"{user_category.upper()}_API_KEY",
             }
 
+        diode_target = diode_target_override or settings.diode_target
+
         context = {
-            "diode_target": settings.diode_target,
-            "last_updated": settings.last_updated,
+            "diode_target": diode_target,
+            "is_diode_target_overridden": diode_target_override is not None,
             "diode_users_info": diode_users_info,
         }
 
@@ -148,6 +159,16 @@ class SettingsEditView(generic.ObjectEditView):
         if not request.user.is_authenticated or not request.user.is_staff:
             return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
 
+        diode_target_override = get_plugin_config(
+            "netbox_diode_plugin", "diode_target_override"
+        )
+        if diode_target_override:
+            messages.error(
+                request,
+                "The Diode target is not allowed to be modified.",
+            )
+            return redirect("plugins:netbox_diode_plugin:settings")
+
         settings = Setting.objects.get()
         kwargs["pk"] = settings.pk
 
@@ -158,12 +179,13 @@ class SettingsEditView(generic.ObjectEditView):
         if not request.user.is_authenticated or not request.user.is_staff:
             return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
 
-        if netbox_settings.PLUGINS_CONFIG.get("netbox_diode_plugin", {}).get(
-            "disallow_diode_target_override", False
-        ):
+        diode_target_override = get_plugin_config(
+            "netbox_diode_plugin", "diode_target_override"
+        )
+        if diode_target_override:
             messages.error(
                 request,
-                "The Diode target is not allowed to be overridden.",
+                "The Diode target is not allowed to be modified.",
             )
             return redirect("plugins:netbox_diode_plugin:settings")
 
