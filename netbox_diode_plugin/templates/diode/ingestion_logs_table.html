@@ -18,7 +18,7 @@
 {% endif %}
 <tbody>
 {% for row in table.page.object_list|default:table.rows %}
-<tr {{ row.attrs.as_html }}>
+<tr {{ row.attrs.as_html }} role="button" data-bs-toggle="collapse" data-bs-target="#ingestion-log-{{ row.record.id }}">
     {% for column, cell in row.items %}
     <td {{ column.attrs.td.as_html }}>{{ cell }}</td>
     {% endfor %}
@@ -29,7 +29,7 @@
             <div class="row p-0 m-0">
                 {% block tabs %}
                 <div class="page-tabs">
-                    <ul class="nav nav-tabs px-3">
+                    <ul class="nav nav-tabs mx-3">
                         <li class="nav-item" role="presentation">
                             <a class="nav-link border-bottom-0 active" id="ingested-entity-{{ row.record.id }}-tab" data-bs-toggle="tab" data-bs-target="#ingested-entity-{{ row.record.id }}" type="button" role="tab" aria-selected="true">
                             {% trans "Ingested Entity" %}
@@ -51,8 +51,8 @@
                 <div class="tab-content">
                     <div class="tab-pane show active" id="ingested-entity-{{ row.record.id }}" role="tabpanel" aria-labelledby="ingested-entity-{{ row.record.id }}-tab">
                         <div class="row">
-                            <div class="col">
-                                <div class="card border-0 mb-0">
+                            <div class="col px-0">
+                                <div class="card border-0 rounded-0 mb-0 px-3">
                                     <pre>{{ row.record.entity|proto_to_json }}</pre>
                                 </div>
                             </div>
@@ -60,8 +60,8 @@
                     </div>
                     <div class="tab-pane p-0" id="change-set-{{ row.record.id }}" role="tabpanel" aria-labelledby="change-set-{{ row.record.id }}-tab">
                         <div class="row">
-                            <div class="col">
-                                <div class="card border-0 mb-0">
+                            <div class="col px-0">
+                                <div class="card border-0 rounded-0 mb-0 px-3">
                                     {% if row.record.change_set.data != "" and row.record.change_set.data|length > 0 %}
                                     <pre>{{ row.record.change_set|proto_to_json }}</pre>
                                     {% else %}
@@ -73,8 +73,8 @@
                     </div>
                     <div class="tab-pane p-0" id="error-{{ row.record.id }}" role="tabpanel" aria-labelledby="error-{{ row.record.id }}-tab">
                         <div class="row">
-                            <div class="col">
-                                <div class="card border-0 mb-0">
+                            <div class="col px-0">
+                                <div class="card border-0 rounded-0 mb-0 px-3">
                                     {% if row.record.error.message != "" %}
                                     <pre>{{ row.record.error|proto_to_json }}</pre>
                                     {% else %}
