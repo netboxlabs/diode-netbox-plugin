@@ -1,7 +1,6 @@
 # !/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Forms."""
-from django.conf import settings as netbox_settings
 from netbox.forms import NetBoxModelForm
 from netbox.plugins import get_plugin_config
 from utilities.forms.rendering import FieldSet
