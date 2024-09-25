@@ -143,7 +143,7 @@ class IngestionLogsViewTestCase(TestCase):
             cache.set(
                 "ingestion_metrics",
                 {
-                    "new": 10,
+                    "queued": 10,
                     "reconciled": 20,
                     "failed": 5,
                     "no_changes": 65,

@@ -11,12 +11,12 @@ DESCRIPTOR: _descriptor.FileDescriptor
 class State(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     UNSPECIFIED: _ClassVar[State]
-    NEW: _ClassVar[State]
+    QUEUED: _ClassVar[State]
     RECONCILED: _ClassVar[State]
     FAILED: _ClassVar[State]
     NO_CHANGES: _ClassVar[State]
 UNSPECIFIED: State
-NEW: State
+QUEUED: State
 RECONCILED: State
 FAILED: State
 NO_CHANGES: State
@@ -72,18 +72,18 @@ class IngestionError(_message.Message):
     def __init__(self, message: _Optional[str] = ..., code: _Optional[int] = ..., details: _Optional[_Union[IngestionError.Details, _Mapping]] = ...) -> None: ...
 
 class IngestionMetrics(_message.Message):
-    __slots__ = ("total", "new", "reconciled", "failed", "no_changes")
+    __slots__ = ("total", "queued", "reconciled", "failed", "no_changes")
     TOTAL_FIELD_NUMBER: _ClassVar[int]
-    NEW_FIELD_NUMBER: _ClassVar[int]
+    QUEUED_FIELD_NUMBER: _ClassVar[int]
     RECONCILED_FIELD_NUMBER: _ClassVar[int]
     FAILED_FIELD_NUMBER: _ClassVar[int]
     NO_CHANGES_FIELD_NUMBER: _ClassVar[int]
     total: int
-    new: int
+    queued: int
     reconciled: int
     failed: int
     no_changes: int
-    def __init__(self, total: _Optional[int] = ..., new: _Optional[int] = ..., reconciled: _Optional[int] = ..., failed: _Optional[int] = ..., no_changes: _Optional[int] = ...) -> None: ...
+    def __init__(self, total: _Optional[int] = ..., queued: _Optional[int] = ..., reconciled: _Optional[int] = ..., failed: _Optional[int] = ..., no_changes: _Optional[int] = ...) -> None: ...
 
 class ChangeSet(_message.Message):
     __slots__ = ("id", "data")
