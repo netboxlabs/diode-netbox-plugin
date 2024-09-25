@@ -18,24 +18,18 @@ class SettingsFormTestCase(TestCase):
 
     def test_form_initialization_with_override_allowed(self):
         """Test form initialization when override is allowed."""
-        with mock.patch("netbox_diode_plugin.forms.netbox_settings") as mock_settings:
-            mock_settings.PLUGINS_CONFIG = {
-                "netbox_diode_plugin": {
-                    "disallow_diode_target_override": False
-                }
-            }
+        with mock.patch("netbox_diode_plugin.forms.get_plugin_config") as mock_get_plugin_config:
+            mock_get_plugin_config.return_value = None
             form = SettingsForm(instance=self.setting)
+            mock_get_plugin_config.assert_called_with("netbox_diode_plugin", "diode_target_override")
             self.assertFalse(form.fields["diode_target"].disabled)
-            self.assertNotIn("This field is not allowed to be overridden.", form.fields["diode_target"].help_text)
+            self.assertNotIn("This field is not allowed to be modified.", form.fields["diode_target"].help_text)
 
-    def test_form_initialization_with_override_disallowed(self):
+    def test_form_initialization_with_diode_targer_override(self):
         """Test form initialization when override is disallowed."""
-        with mock.patch("netbox_diode_plugin.forms.netbox_settings") as mock_settings:
-            mock_settings.PLUGINS_CONFIG = {
-                "netbox_diode_plugin": {
-                    "disallow_diode_target_override": True
-                }
-            }
+        with mock.patch("netbox_diode_plugin.forms.get_plugin_config") as mock_get_plugin_config:
+            mock_get_plugin_config.return_value = "grpc://localhost:8080/diode"
             form = SettingsForm(instance=self.setting)
+            mock_get_plugin_config.assert_called_with("netbox_diode_plugin", "diode_target_override")
             self.assertTrue(form.fields["diode_target"].disabled)
-            self.assertEqual("This field is not allowed to be overridden.", form.fields["diode_target"].help_text)
+            self.assertEqual("This field is not allowed to be modified.", form.fields["diode_target"].help_text)

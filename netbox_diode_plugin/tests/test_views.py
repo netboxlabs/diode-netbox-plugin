@@ -285,14 +285,45 @@ class SettingsEditViewTestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         self.assertEqual(response.url, f"/netbox/login/?next={self.path}")
 
-    def test_settings_update_disallowed(self):
-        """Test that the Diode target cannot be overridden."""
-        with mock.patch("netbox_diode_plugin.views.netbox_settings") as mock_settings:
-            mock_settings.PLUGINS_CONFIG = {
-                "netbox_diode_plugin": {
-                    "disallow_diode_target_override": True
-                }
-            }
+    def test_settings_update_disallowed_on_get_method(self):
+        """Test that the accessing settings edit is not allowed with diode target override."""
+        with mock.patch("netbox_diode_plugin.views.get_plugin_config") as mock_get_plugin_config:
+            mock_get_plugin_config.return_value = "grpc://localhost:8080/diode"
+
+            user = User.objects.create_user("foo", password="pass")
+            user.is_staff = True
+
+            request = self.request_factory.post(self.path)
+            request.user = user
+            request.htmx = None
+
+            middleware = SessionMiddleware(get_response=lambda request: None)
+            middleware.process_request(request)
+            request.session.save()
+
+            middleware = MessageMiddleware(get_response=lambda request: None)
+            middleware.process_request(request)
+            request.session.save()
+
+            setattr(request, 'session', 'session')
+            messages = FallbackStorage(request)
+            request._messages = messages
+
+            self.view.setup(request)
+            response = self.view.get(request)
+
+            self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+            self.assertEqual(response.url, reverse("plugins:netbox_diode_plugin:settings"))
+            self.assertEqual(len(request._messages._queued_messages), 1)
+            self.assertEqual(
+                str(request._messages._queued_messages[0]),
+                "The Diode target is not allowed to be modified.",
+            )
+
+    def test_settings_update_disallowed_on_post_method(self):
+        """Test that the updating settings is not allowed with diode target override."""
+        with mock.patch("netbox_diode_plugin.views.get_plugin_config") as mock_get_plugin_config:
+            mock_get_plugin_config.return_value = "grpc://localhost:8080/diode"
 
             user = User.objects.create_user("foo", password="pass")
             user.is_staff = True
@@ -322,5 +353,5 @@ class SettingsEditViewTestCase(TestCase):
             self.assertEqual(len(request._messages._queued_messages), 1)
             self.assertEqual(
                 str(request._messages._queued_messages[0]),
-                "The Diode target is not allowed to be overridden.",
+                "The Diode target is not allowed to be modified.",
             )
