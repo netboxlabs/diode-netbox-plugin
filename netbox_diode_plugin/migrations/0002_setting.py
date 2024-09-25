@@ -3,7 +3,6 @@
 """Diode Netbox Plugin - Database migrations."""
 
 import utilities.json
-from django.conf import settings as netbox_settings
 from django.db import migrations, models
 from netbox.plugins import get_plugin_config
 
