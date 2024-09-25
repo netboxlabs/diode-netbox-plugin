@@ -62,7 +62,7 @@ class IngestionLogsView(View):
                     only_metrics=True
                 )
                 metrics = {
-                    "new": ingestion_metrics.metrics.new or 0,
+                    "queued": ingestion_metrics.metrics.queued or 0,
                     "reconciled": ingestion_metrics.metrics.reconciled or 0,
                     "failed": ingestion_metrics.metrics.failed or 0,
                     "no_changes": ingestion_metrics.metrics.no_changes or 0,

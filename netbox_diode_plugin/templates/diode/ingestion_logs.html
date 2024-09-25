@@ -19,8 +19,8 @@
             <div class="card p-3">
                 <div class="row d-flex flex-wrap justify-content-evenly">
                     <div class="w-auto p-0">
-                        <canvas id="ingestions-new"></canvas>
-                        <div class="text-center metric-label">New</div>
+                        <canvas id="ingestions-queued"></canvas>
+                        <div class="text-center metric-label">Queued</div>
                     </div>
                     <div class="w-auto p-0">
                         <canvas id="ingestions-reconciled"></canvas>
@@ -105,7 +105,7 @@
 
     document.addEventListener('DOMContentLoaded', function() {
         function redrawMetrics() {
-            drawGauge(document.getElementById('ingestions-new').getContext('2d'), {{ ingestion_metrics.new }}, '#FFFF00');
+            drawGauge(document.getElementById('ingestions-queued').getContext('2d'), {{ ingestion_metrics.queued }}, '#FFFF00');
             drawGauge(document.getElementById('ingestions-reconciled').getContext('2d'), {{ ingestion_metrics.reconciled }}, '#4CAF50');
             drawGauge(document.getElementById('ingestions-failed').getContext('2d'), {{ ingestion_metrics.failed }}, '#FF0000');
             drawGauge(document.getElementById('ingestions-no-changes').getContext('2d'), {{ ingestion_metrics.no_changes }}, '#40E0D0');
