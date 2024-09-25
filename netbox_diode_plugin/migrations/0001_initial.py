@@ -58,7 +58,7 @@ def configure_plugin(apps, schema_editor):
 
     diode_to_netbox_user_id = None
 
-    for user_category, username in get_diode_usernames.items():
+    for user_category, username in get_diode_usernames().items():
         is_superuser = user_category in ("netbox_to_diode",)
         user = _create_user_with_token(
             apps, user_category, username, group, is_superuser
