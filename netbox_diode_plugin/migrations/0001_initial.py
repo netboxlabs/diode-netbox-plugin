@@ -5,10 +5,12 @@
 import os
 
 from django.apps import apps as django_apps
-from django.conf import settings
+from django.conf import settings as netbox_settings
 from django.contrib.contenttypes.management import create_contenttypes
 from django.db import migrations, models
 from users.models import Token as NetBoxToken
+
+from netbox_diode_plugin.plugin_config import get_diode_usernames
 
 
 # Read secret from file
@@ -22,8 +24,10 @@ def _read_secret(secret_name, default=None):
             return f.readline().strip()
 
 
-def _create_user_with_token(apps, username, group, is_superuser: bool = False):
-    User = apps.get_model(settings.AUTH_USER_MODEL)
+def _create_user_with_token(
+    apps, user_category, username, group, is_superuser: bool = False
+):
+    User = apps.get_model(netbox_settings.AUTH_USER_MODEL)
     """Create a user with the given username and API key if it does not exist."""
     try:
         user = User.objects.get(username=username)
@@ -38,7 +42,7 @@ def _create_user_with_token(apps, username, group, is_superuser: bool = False):
     Token = apps.get_model("users", "Token")
 
     if not Token.objects.filter(user=user).exists():
-        key = f"{username}_API_KEY"
+        key = f"{user_category.upper()}_API_KEY"
         api_key = _read_secret(key.lower(), os.getenv(key))
         if api_key is None:
             api_key = NetBoxToken.generate_key()
@@ -49,18 +53,16 @@ def _create_user_with_token(apps, username, group, is_superuser: bool = False):
 
 def configure_plugin(apps, schema_editor):
     """Configure the plugin."""
-    diode_to_netbox_username = "DIODE_TO_NETBOX"
-    netbox_to_diode_username = "NETBOX_TO_DIODE"
-    diode_username = "DIODE"
-
     Group = apps.get_model("users", "Group")
     group, _ = Group.objects.get_or_create(name="diode")
 
-    diode_to_netbox_user = _create_user_with_token(
-        apps, diode_to_netbox_username, group
-    )
-    _ = _create_user_with_token(apps, netbox_to_diode_username, group, True)
-    _ = _create_user_with_token(apps, diode_username, group)
+    diode_to_netbox_user_id = None
+
+    for user_category, username in get_diode_usernames.items():
+        is_superuser = user_category in ("netbox_to_diode", )
+        user = _create_user_with_token(apps, user_category, username, group, is_superuser)
+        if user_category == "diode_to_netbox":
+            diode_to_netbox_user_id = user.id
 
     app_config = django_apps.get_app_config("netbox_diode_plugin")
 
@@ -78,7 +80,7 @@ def configure_plugin(apps, schema_editor):
         actions=["add", "view"],
     )
 
-    permission.users.set([diode_to_netbox_user.id])
+    permission.users.set([diode_to_netbox_user_id])
     permission.object_types.set([diode_plugin_object_type.id])
 
 

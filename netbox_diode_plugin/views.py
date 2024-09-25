@@ -13,6 +13,7 @@ from utilities.views import register_model_view
 
 from netbox_diode_plugin.forms import SettingsForm
 from netbox_diode_plugin.models import Setting
+from netbox_diode_plugin.plugin_config import get_diode_usernames
 from netbox_diode_plugin.reconciler.sdk.client import ReconcilerClient
 from netbox_diode_plugin.reconciler.sdk.exceptions import ReconcilerClientError
 from netbox_diode_plugin.tables import IngestionLogsTable
@@ -108,18 +109,12 @@ class SettingsView(View):
                 diode_target="grpc://localhost:8080/diode"
             )
 
-        diode_users = [
-            "DIODE",
-            "DIODE_TO_NETBOX",
-            "NETBOX_TO_DIODE",
-        ]
-
         diode_api_keys = {}
 
-        for username in diode_users:
+        for user_category, username in get_diode_usernames().items():
             user = get_user_model().objects.get(username=username)
             token = Token.objects.get(user=user)
-            diode_api_keys[f"{username}_API_KEY"] = token.key
+            diode_api_keys[f"{user_category.upper()}_API_KEY"] = token.key
 
         context = {
             "diode_target": settings.diode_target,
