@@ -53,7 +53,7 @@
                             <span class="diode-api-key font-monospace" data-diode-api-key="{{ user_info.api_key }}">{{ user_info.api_key|placeholder }}</span>
                         </td>
                         <td>
-                            {{ user_info.env_var_name}}
+                            Map to environment variable {{ user_info.env_var_name}} in Diode service{% if user_info.env_var_name == "DIODE_API_KEY" %} and Diode SDK{% endif %}
                         </td>
                         <td>
                             <div class="float-end">
