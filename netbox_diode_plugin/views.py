@@ -109,17 +109,20 @@ class SettingsView(View):
                 diode_target="grpc://localhost:8080/diode"
             )
 
-        diode_api_keys = {}
+        diode_users_info = {}
 
         for user_category, username in get_diode_usernames().items():
             user = get_user_model().objects.get(username=username)
             token = Token.objects.get(user=user)
-            diode_api_keys[f"{user_category.upper()}_API_KEY"] = token.key
+            diode_users_info[username] = {
+                "api_key": token.key,
+                "env_var_name": f"{user_category.upper()}_API_KEY",
+            }
 
         context = {
             "diode_target": settings.diode_target,
             "last_updated": settings.last_updated,
-            "api_keys": diode_api_keys,
+            "diode_users_info": diode_users_info,
         }
 
         return render(request, "diode/settings.html", context)
