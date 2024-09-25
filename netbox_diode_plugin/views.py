@@ -13,7 +13,10 @@ from utilities.views import register_model_view
 
 from netbox_diode_plugin.forms import SettingsForm
 from netbox_diode_plugin.models import Setting
-from netbox_diode_plugin.plugin_config import get_diode_usernames
+from netbox_diode_plugin.plugin_config import (
+    get_diode_usernames,
+    get_diode_username_for_user_category,
+)
 from netbox_diode_plugin.reconciler.sdk.client import ReconcilerClient
 from netbox_diode_plugin.reconciler.sdk.exceptions import ReconcilerClientError
 from netbox_diode_plugin.tables import IngestionLogsTable
@@ -31,7 +34,8 @@ class IngestionLogsView(View):
 
         diode_settings = Setting.objects.get()
 
-        user = get_user_model().objects.get(username="NETBOX_TO_DIODE")
+        netbox_to_diode_username = get_diode_username_for_user_category("netbox_to_diode")
+        user = get_user_model().objects.get(username=netbox_to_diode_username)
         token = Token.objects.get(user=user)
 
         reconciler_client = ReconcilerClient(
