@@ -55,7 +55,7 @@ PLUGINS_CONFIG = {
         # User allowed for NetBox to Diode communication
         "netbox_to_diode_username": "netbox-to-diode",
 
-        # # User allowed for data ingestion
+        # User allowed for data ingestion
         "diode_username": "diode-ingestion",
     },
 }
