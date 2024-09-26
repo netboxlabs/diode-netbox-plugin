@@ -1,0 +1,109 @@
+{% load django_tables2 %}
+{% load i18n %}
+{% load diode_filters %}
+
+<table{% if table.attrs %} {{ table.attrs.as_html }}{% endif %}>
+{% if table.show_header %}
+<thead>
+<tr>
+    {% for column in table.columns %}
+    {% if column.orderable %}
+    <th {{ column.attrs.th.as_html }}><a href="{% querystring table.prefixed_order_by_field=column.order_by_alias.next %}">{{ column.header }}</a></th>
+    {% else %}
+    <th {{ column.attrs.th.as_html }}>{{ column.header }}</th>
+    {% endif %}
+    {% endfor %}
+</tr>
+</thead>
+{% endif %}
+<tbody>
+{% for row in table.page.object_list|default:table.rows %}
+<tr {{ row.attrs.as_html }} role="button" data-bs-toggle="collapse" data-bs-target="#ingestion-log-{{ row.record.id }}">
+    {% for column, cell in row.items %}
+    <td {{ column.attrs.td.as_html }}>{{ cell }}</td>
+    {% endfor %}
+</tr>
+<tr>
+    <td colspan="{{ table.columns|length }}" style="padding: 0 !important;border: 0 !important;">
+        <div class="tab-pane accordion-collapse collapse border-bottom" id="ingestion-log-{{ row.record.id }}">
+            <div class="row p-0 m-0">
+                {% block tabs %}
+                <div class="page-tabs">
+                    <ul class="nav nav-tabs mx-3">
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link border-bottom-0 active" id="ingested-entity-{{ row.record.id }}-tab" data-bs-toggle="tab" data-bs-target="#ingested-entity-{{ row.record.id }}" type="button" role="tab" aria-selected="true">
+                            {% trans "Ingested Entity" %}
+                            </a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link border-bottom-0" id="change-set-{{ row.record.id }}-tab" data-bs-toggle="tab" data-bs-target="#change-set-{{ row.record.id }}" type="button" role="tab">
+                            {% trans "Change Set" %}
+                            </a>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <a class="nav-link border-bottom-0" id="error-{{ row.record.id }}-tab" data-bs-toggle="tab" data-bs-target="#error-{{ row.record.id }}" type="button" role="tab">
+                            {% trans "Error" %}
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+                {% endblock tabs %}
+                <div class="tab-content">
+                    <div class="tab-pane show active" id="ingested-entity-{{ row.record.id }}" role="tabpanel" aria-labelledby="ingested-entity-{{ row.record.id }}-tab">
+                        <div class="row">
+                            <div class="col px-0">
+                                <div class="card border-0 rounded-0 mb-0 px-3">
+                                    <pre>{{ row.record.entity|proto_to_json }}</pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tab-pane p-0" id="change-set-{{ row.record.id }}" role="tabpanel" aria-labelledby="change-set-{{ row.record.id }}-tab">
+                        <div class="row">
+                            <div class="col px-0">
+                                <div class="card border-0 rounded-0 mb-0 px-3">
+                                    {% if row.record.change_set.data != "" and row.record.change_set.data|length > 0 %}
+                                    <pre>{{ row.record.change_set|proto_to_json }}</pre>
+                                    {% else %}
+                                    <pre class="text-muted">None</pre>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tab-pane p-0" id="error-{{ row.record.id }}" role="tabpanel" aria-labelledby="error-{{ row.record.id }}-tab">
+                        <div class="row">
+                            <div class="col px-0">
+                                <div class="card border-0 rounded-0 mb-0 px-3">
+                                    {% if row.record.error.message != "" %}
+                                    <pre>{{ row.record.error|proto_to_json }}</pre>
+                                    {% else %}
+                                    <pre class="text-muted">None</pre>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </td>
+</tr>
+{% empty %}
+{% if table.empty_text %}
+<tr>
+    <td colspan="{{ table.columns|length }}" class="text-center text-muted">&mdash; {{ table.empty_text }} &mdash;</td>
+</tr>
+{% endif %}
+{% endfor %}
+</tbody>
+{% if table.has_footer %}
+<tfoot>
+<tr>
+    {% for column in table.columns %}
+    <td>{{ column.footer }}</td>
+    {% endfor %}
+</tr>
+</tfoot>
+{% endif %}
+</table>

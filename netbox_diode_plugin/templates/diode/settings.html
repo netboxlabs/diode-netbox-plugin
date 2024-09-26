@@ -1,0 +1,103 @@
+{% extends 'generic/_base.html' %}
+{% load buttons %}
+{% load helpers %}
+{% load i18n %}
+{% load render_table from django_tables2 %}
+{% block title %}{% trans "Settings" %}{% endblock %}
+
+{% block controls %}
+{% if not is_diode_target_overridden %}
+<div class="btn-list">
+    {% block control-buttons %}
+    {% url 'plugins:netbox_diode_plugin:settings_edit' as edit_url %}
+    {% include "buttons/edit.html" with url=edit_url %}
+    {% endblock control-buttons %}
+</div>
+{% endif %}
+{% endblock controls %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col">
+        <div class="card">
+            <table class="table table-hover attr-table">
+                <tr>
+                    <th scope="row">{% trans "Diode target" %}</th>
+                    <td>{{ diode_target }}</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% if diode_users_errors %}
+<div class="alert alert-danger mt-3" role="alert">
+    <h4 class="alert-heading">{% trans "Errors" %}</h4>
+    {% for error in diode_users_errors %}
+    <p>{{ error }}</p>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="row mb-3">
+    <div class="col col-md-12">
+        <div class="card">
+            <h2 class="card-header">{% trans "Diode users" %}</h2>
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>{% trans "Username" %}</th>
+                        <th>{% trans "API key" %}</th>
+                        <th>{% trans "Environment variable" %}</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for username, user_info in diode_users_info.items %}
+                    <tr class="align-middle">
+                        <td>{{ username }}</td>
+                        <td>
+                            <span class="diode-api-key font-monospace" data-diode-api-key="{{ user_info.api_key }}">{{ user_info.api_key|placeholder }}</span>
+                        </td>
+                        <td>
+                            Map to environment variable {{ user_info.env_var_name}} in Diode service{% if user_info.env_var_name == "DIODE_API_KEY" %} and Diode SDK{% endif %}
+                        </td>
+                        <td>
+                            <div class="float-end">
+                                <button type="button" class="btn btn-sm btn-info copy-content me-2" data-clipboard-text="{{ user_info.api_key }}" title="Copy to clipboard">
+                                    <i class="mdi mdi-content-copy"></i>
+                                </button>
+                                <button type="button" class="btn btn-sm btn-primary toggle-diode-api-key float-end" data-bs-toggle="button">
+                                    <i class="mdi mdi-eye"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+<script type="text/javascript">
+    diodeAPIKeySelector = '.diode-api-key';
+    diodeAPIKeyAttr = 'data-diode-api-key';
+
+    document.querySelectorAll(diodeAPIKeySelector).forEach(function (apiKey) {
+        apiKey.textContent = apiKey.getAttribute(diodeAPIKeyAttr).replace(/./g, '*');
+    });
+
+    document.querySelectorAll('.toggle-diode-api-key').forEach(function (button) {
+        button.addEventListener('click', function () {
+            var apiKey = this.parentElement.parentElement.parentElement.querySelector(diodeAPIKeySelector);
+            if (apiKey.getAttribute(diodeAPIKeyAttr) === apiKey.textContent) {
+                apiKey.textContent = apiKey.getAttribute(diodeAPIKeyAttr).replace(/./g, '*');
+                button.getElementsByTagName('i')[0].classList.replace('mdi-eye-off', 'mdi-eye');
+            } else {
+                apiKey.textContent = apiKey.getAttribute(diodeAPIKeyAttr);
+                button.getElementsByTagName('i')[0].classList.replace('mdi-eye', 'mdi-eye-off');
+            }
+        });
+    });
+</script>
+{% endblock content %}

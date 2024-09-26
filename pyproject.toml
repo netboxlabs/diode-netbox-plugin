@@ -24,7 +24,12 @@ classifiers = [
     'Programming Language :: Python :: 3.11',
 ]
 
-dependencies = []
+dependencies = [
+    "Brotli==1.1.0",
+    "certifi==2024.7.4",
+    "grpcio==1.62.1",
+    "protobuf==5.28.1",
+]
 
 [project.optional-dependencies]
 dev = ["black", "check-manifest", "ruff"]
@@ -49,6 +54,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 line-length = 140
+exclude = [
+    "*_pb2*",
+]
 
 [tool.ruff.format]
 quote-style = "double"
