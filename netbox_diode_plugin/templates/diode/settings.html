@@ -30,6 +30,15 @@
     </div>
 </div>
 
+{% if diode_users_errors %}
+<div class="alert alert-danger mt-3" role="alert">
+    <h4 class="alert-heading">{% trans "Errors" %}</h4>
+    {% for error in diode_users_errors %}
+    <p>{{ error }}</p>
+    {% endfor %}
+</div>
+{% endif %}
+
 <div class="row mb-3">
     <div class="col col-md-12">
         <div class="card">

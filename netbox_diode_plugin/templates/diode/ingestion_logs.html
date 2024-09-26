@@ -7,10 +7,16 @@
 {% block title %}{% trans "Ingestion Logs" %}{% endblock %}
 
 {% block content %}
-{% if error %}
+
+{% if netbox_to_diode_user_error %}
 <div class="alert alert-danger mt-3" role="alert">
     <h4 class="alert-heading">{% trans "Error" %}</h4>
-    <p>{{ error.status_code }}: {{ error.details }}</p>
+    <p>{{ netbox_to_diode_user_error }}</p>
+</div>
+{% elif ingestion_logs_error %}
+<div class="alert alert-danger mt-3" role="alert">
+    <h4 class="alert-heading">{% trans "Error" %}</h4>
+    <p>{{ ingestion_logs_error.status_code }}: {{ ingestion_logs_error.details }}</p>
 </div>
 {% else %}
 <div>

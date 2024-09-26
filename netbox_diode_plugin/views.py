@@ -36,7 +36,14 @@ class IngestionLogsView(View):
         netbox_to_diode_username = get_diode_username_for_user_category(
             "netbox_to_diode"
         )
-        user = get_user_model().objects.get(username=netbox_to_diode_username)
+        try:
+            user = get_user_model().objects.get(username=netbox_to_diode_username)
+        except get_user_model().DoesNotExist:
+            context = {
+                "netbox_to_diode_user_error": f"User '{netbox_to_diode_username}' does not exist, please check plugin configuration.",
+            }
+            return render(request, "diode/ingestion_logs.html", context)
+
         token = Token.objects.get(user=user)
 
         settings = Setting.objects.get()
@@ -96,7 +103,7 @@ class IngestionLogsView(View):
 
         except ReconcilerClientError as error:
             context = {
-                "error": error,
+                "ingestion_logs_error": error,
             }
 
         return render(request, "diode/ingestion_logs.html", context)
@@ -126,8 +133,15 @@ class SettingsView(View):
 
         diode_users_info = {}
 
+        diode_users_errors = []
+
         for user_category, username in get_diode_usernames().items():
-            user = get_user_model().objects.get(username=username)
+            try:
+                user = get_user_model().objects.get(username=username)
+            except get_user_model().DoesNotExist:
+                diode_users_errors.append(f"User '{username}' does not exist, please check plugin configuration.")
+                continue
+
             token = Token.objects.get(user=user)
             diode_users_info[username] = {
                 "api_key": token.key,
@@ -137,6 +151,7 @@ class SettingsView(View):
         diode_target = diode_target_override or settings.diode_target
 
         context = {
+            "diode_users_errors": diode_users_errors,
             "diode_target": diode_target,
             "is_diode_target_overridden": diode_target_override is not None,
             "diode_users_info": diode_users_info,
