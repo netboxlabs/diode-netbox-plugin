@@ -40,16 +40,29 @@ PLUGINS = [
 ]
 ```
 
-Also in your `configuration.py` file, add `netbox_diode_plugin`to the `PLUGINS_CONFIG` dictionary, e.g.:
+Also in your `configuration.py` file, in order to customise the plugin settings, add `netbox_diode_plugin`to the
+`PLUGINS_CONFIG` dictionary, e.g.:
 
 ```python
 PLUGINS_CONFIG = {
     "netbox_diode_plugin": {
-        "diode_target": "grpc://localhost:8080/diode", # The Diode gRPC target for communication with Diode server, default: "grpc://localhost:8080/diode"
-        "disallow_diode_target_override": True, # Disallow the Diode target to be overridden by the user, default: False
-    }
+        # Diode gRPC target for communication with Diode server
+        "diode_target_override": "grpc://localhost:8080/diode",
+
+        # User allowed for Diode to NetBox communication
+        "diode_to_netbox_username": "diode-to-netbox",
+
+        # User allowed for NetBox to Diode communication
+        "netbox_to_diode_username": "netbox-to-diode",
+
+        # # User allowed for data ingestion
+        "diode_username": "diode-ingestion",
+    },
 }
 ```
+
+Note: Once you customise usernames with PLUGINS_CONFIG during first installation, you should not change or remove them
+later on. Doing so will cause the plugin to stop working properly.
 
 Restart NetBox services to load the plugin:
 
