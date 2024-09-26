@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Tests."""
+import html
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -12,6 +13,7 @@ from django.core.cache import cache
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from rest_framework import status
+from users.models import Token
 
 from netbox_diode_plugin.models import Setting
 from netbox_diode_plugin.reconciler.sdk.v1 import ingester_pb2, reconciler_pb2
@@ -158,6 +160,35 @@ class IngestionLogsViewTestCase(TestCase):
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertNotIn("Server Error", str(response.content))
 
+    def test_error_message_displayed_on_missing_diode_user(self):
+        """Test that an error message is displayed when the Diode user is missing on settings page."""
+        self.request.user = User.objects.create_user("foo", password="pass")
+        self.request.user.is_staff = True
+
+        with (
+            mock.patch(
+                "netbox_diode_plugin.views.get_diode_username_for_user_category"
+            ) as mock_get_diode_username_for_user_category,
+            mock.patch(
+                "netbox_diode_plugin.views.get_user_model"
+            ) as mock_get_user_model,
+        ):
+            mock_get_diode_username_for_user_category.return_value = (
+                "fake-netbox-to-diode"
+            )
+            mock_get_user_model.return_value.objects.get.side_effect = User.DoesNotExist
+
+            response = self.view.get(self.request)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertNotIn("Server Error", str(response.content))
+            self.assertIn(
+                html.escape(
+                    "User 'fake-netbox-to-diode' does not exist, please check plugin configuration."
+                ),
+                str(response.content),
+            )
+
 
 class SettingsViewTestCase(TestCase):
     """Test case for the SettingsView."""
@@ -197,8 +228,41 @@ class SettingsViewTestCase(TestCase):
 
             response = self.view.get(self.request)
             self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertIn("grpc://localhost:8080/diode", str(response.content))
+
+    def test_error_message_displayed_on_missing_diode_user(self):
+        """Test that an error message is displayed when the Diode user is missing on settings page."""
+        self.request.user = User.objects.create_user("foo", password="pass")
+        self.request.user.is_staff = True
+
+        with (
+            mock.patch(
+                "netbox_diode_plugin.views.get_diode_usernames"
+            ) as mock_get_diode_usernames,
+            mock.patch(
+                "netbox_diode_plugin.views.get_user_model"
+            ) as mock_get_user_model,
+        ):
+            mock_get_diode_usernames.return_value = {
+                "diode_to_netbox": "diode-to-netbox",
+                "netbox_to_diode": "fake-netbox-to-diode",
+                "diode": "diode-ingestion",
+            }
+            mock_get_user_model.return_value.objects.get.side_effect = [
+                User.objects.get(username="diode-to-netbox"),
+                User.DoesNotExist,
+                User.objects.get(username="diode-ingestion"),
+            ]
+
+            response = self.view.get(self.request)
+
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertNotIn("Server Error", str(response.content))
             self.assertIn(
-                "grpc://localhost:8080/diode", str(response.content)
+                html.escape(
+                    "User 'fake-netbox-to-diode' does not exist, please check plugin configuration."
+                ),
+                str(response.content),
             )
 
 
@@ -287,7 +351,9 @@ class SettingsEditViewTestCase(TestCase):
 
     def test_settings_update_disallowed_on_get_method(self):
         """Test that the accessing settings edit is not allowed with diode target override."""
-        with mock.patch("netbox_diode_plugin.views.get_plugin_config") as mock_get_plugin_config:
+        with mock.patch(
+            "netbox_diode_plugin.views.get_plugin_config"
+        ) as mock_get_plugin_config:
             mock_get_plugin_config.return_value = "grpc://localhost:8080/diode"
 
             user = User.objects.create_user("foo", password="pass")
@@ -305,7 +371,7 @@ class SettingsEditViewTestCase(TestCase):
             middleware.process_request(request)
             request.session.save()
 
-            setattr(request, 'session', 'session')
+            setattr(request, "session", "session")
             messages = FallbackStorage(request)
             request._messages = messages
 
@@ -313,7 +379,9 @@ class SettingsEditViewTestCase(TestCase):
             response = self.view.get(request)
 
             self.assertEqual(response.status_code, status.HTTP_302_FOUND)
-            self.assertEqual(response.url, reverse("plugins:netbox_diode_plugin:settings"))
+            self.assertEqual(
+                response.url, reverse("plugins:netbox_diode_plugin:settings")
+            )
             self.assertEqual(len(request._messages._queued_messages), 1)
             self.assertEqual(
                 str(request._messages._queued_messages[0]),
@@ -322,7 +390,9 @@ class SettingsEditViewTestCase(TestCase):
 
     def test_settings_update_disallowed_on_post_method(self):
         """Test that the updating settings is not allowed with diode target override."""
-        with mock.patch("netbox_diode_plugin.views.get_plugin_config") as mock_get_plugin_config:
+        with mock.patch(
+            "netbox_diode_plugin.views.get_plugin_config"
+        ) as mock_get_plugin_config:
             mock_get_plugin_config.return_value = "grpc://localhost:8080/diode"
 
             user = User.objects.create_user("foo", password="pass")
@@ -341,7 +411,7 @@ class SettingsEditViewTestCase(TestCase):
             middleware.process_request(request)
             request.session.save()
 
-            setattr(request, 'session', 'session')
+            setattr(request, "session", "session")
             messages = FallbackStorage(request)
             request._messages = messages
 
@@ -349,7 +419,9 @@ class SettingsEditViewTestCase(TestCase):
             response = self.view.post(request)
 
             self.assertEqual(response.status_code, status.HTTP_302_FOUND)
-            self.assertEqual(response.url, reverse("plugins:netbox_diode_plugin:settings"))
+            self.assertEqual(
+                response.url, reverse("plugins:netbox_diode_plugin:settings")
+            )
             self.assertEqual(len(request._messages._queued_messages), 1)
             self.assertEqual(
                 str(request._messages._queued_messages[0]),

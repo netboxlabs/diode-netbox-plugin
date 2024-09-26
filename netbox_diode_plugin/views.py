@@ -22,6 +22,8 @@ from netbox_diode_plugin.reconciler.sdk.client import ReconcilerClient
 from netbox_diode_plugin.reconciler.sdk.exceptions import ReconcilerClientError
 from netbox_diode_plugin.tables import IngestionLogsTable
 
+User = get_user_model()
+
 
 class IngestionLogsView(View):
     """Ingestion logs view."""
@@ -38,7 +40,7 @@ class IngestionLogsView(View):
         )
         try:
             user = get_user_model().objects.get(username=netbox_to_diode_username)
-        except get_user_model().DoesNotExist:
+        except User.DoesNotExist:
             context = {
                 "netbox_to_diode_user_error": f"User '{netbox_to_diode_username}' does not exist, please check plugin configuration.",
             }
@@ -138,8 +140,10 @@ class SettingsView(View):
         for user_category, username in get_diode_usernames().items():
             try:
                 user = get_user_model().objects.get(username=username)
-            except get_user_model().DoesNotExist:
-                diode_users_errors.append(f"User '{username}' does not exist, please check plugin configuration.")
+            except User.DoesNotExist:
+                diode_users_errors.append(
+                    f"User '{username}' does not exist, please check plugin configuration."
+                )
                 continue
 
             token = Token.objects.get(user=user)
