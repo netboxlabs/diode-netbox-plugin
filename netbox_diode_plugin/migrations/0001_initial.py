@@ -24,18 +24,13 @@ def _read_secret(secret_name, default=None):
             return f.readline().strip()
 
 
-def _create_user_with_token(
-    apps, user_category, username, group, is_superuser: bool = False
-):
+def _create_user_with_token(apps, user_category, username, group):
     User = apps.get_model(netbox_settings.AUTH_USER_MODEL)
     """Create a user with the given username and API key if it does not exist."""
     try:
         user = User.objects.get(username=username)
     except User.DoesNotExist:
-        if is_superuser:
-            user = User.objects.create_superuser(username=username, is_active=True)
-        else:
-            user = User.objects.create(username=username, is_active=True)
+        user = User.objects.create(username=username, is_active=True)
 
     user.groups.add(*[group.id])
 
@@ -56,22 +51,10 @@ def configure_plugin(apps, schema_editor):
     Group = apps.get_model("users", "Group")
     group, _ = Group.objects.get_or_create(name="diode")
 
-    diode_to_netbox_user_id = None
-
-    for user_category, username in get_diode_usernames().items():
-        is_superuser = user_category in ("netbox_to_diode",)
-        user = _create_user_with_token(
-            apps, user_category, username, group, is_superuser
-        )
-        if user_category == "diode_to_netbox":
-            diode_to_netbox_user_id = user.id
-
     app_config = django_apps.get_app_config("netbox_diode_plugin")
-
     create_contenttypes(app_config, verbosity=0)
 
     ContentType = apps.get_model("contenttypes", "ContentType")
-
     diode_plugin_object_type = ContentType.objects.get(
         app_label="netbox_diode_plugin", model="diode"
     )
@@ -81,9 +64,16 @@ def configure_plugin(apps, schema_editor):
         name="Diode",
         actions=["add", "view"],
     )
+    permission.object_types.set([diode_plugin_object_type.id])
+
+    diode_to_netbox_user_id = None
+
+    for user_category, username in get_diode_usernames().items():
+        user = _create_user_with_token(apps, user_category, username, group)
+        if user_category == "diode_to_netbox":
+            diode_to_netbox_user_id = user.id
 
     permission.users.set([diode_to_netbox_user_id])
-    permission.object_types.set([diode_plugin_object_type.id])
 
 
 class Migration(migrations.Migration):
