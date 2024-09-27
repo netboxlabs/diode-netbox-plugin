@@ -17,6 +17,9 @@ class NetBoxDiodePluginConfig(PluginConfig):
     base_url = "diode"
     min_version = "3.7.2"
     default_settings = {
+        # Auto-provision users for Diode plugin
+        "auto_provision_users": False,
+
         # Default Diode gRPC target for communication with Diode server
         "diode_target": "grpc://localhost:8080/diode",
 

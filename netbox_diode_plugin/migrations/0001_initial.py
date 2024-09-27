@@ -9,6 +9,7 @@ from django.conf import settings as netbox_settings
 from django.contrib.contenttypes.management import create_contenttypes
 from django.db import migrations, models
 from users.models import Token as NetBoxToken
+from netbox.plugins import get_plugin_config
 
 from netbox_diode_plugin.plugin_config import get_diode_usernames
 
@@ -65,6 +66,13 @@ def configure_plugin(apps, schema_editor):
         actions=["add", "view"],
     )
     permission.object_types.set([diode_plugin_object_type.id])
+
+    auto_provision_users = get_plugin_config(
+        "netbox_diode_plugin", "auto_provision_users"
+    )
+
+    if not auto_provision_users:
+        return
 
     diode_to_netbox_user_id = None
 

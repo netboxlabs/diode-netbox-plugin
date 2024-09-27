@@ -8,6 +8,9 @@ PLUGINS = ["netbox_diode_plugin"]
 
 # PLUGINS_CONFIG = {
 #     "netbox_diode_plugin": {
+#         # Auto-provision users for Diode plugin
+#         "auto_provision_users": True,
+#
 #         # Diode gRPC target for communication with Diode server
 #         "diode_target_override": "grpc://localhost:8080/diode",
 #
