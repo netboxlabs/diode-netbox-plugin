@@ -14,8 +14,8 @@ at [https://netboxlabs.com/blog/introducing-diode-streamlining-data-ingestion-in
 
 | NetBox Version | Plugin Version |
 |:--------------:|:--------------:|
-|    >= 3.7.2    |     0.1.0      |
-|    >= 4.1.0    |     0.4.0      |
+|    == 3.7.x    |     0.1.0+     |
+|    >= 4.0.0    |     0.4.0+     |
 
 ## Installation
 
