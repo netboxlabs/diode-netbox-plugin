@@ -59,10 +59,7 @@ class SetupForm(forms.Form):
             username_or_type = user_properties.get("username") or user_type
             label = f"{username_or_type}"
 
-            disabled = user_properties.get("user") is not None or (
-                user_properties.get("predefined_api_key") is not None
-                or user_properties.get("api_key") is not None
-            )
+            disabled = user_properties.get("predefined_api_key") is not None or user_properties.get("api_key") is not None
             help_text = _(
                 f"Key must be at least 40 characters in length.<br />Map to environment variable "
                 f'{user_properties["api_key_env_var_name"]} in Diode service'
