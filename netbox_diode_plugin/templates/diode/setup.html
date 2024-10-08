@@ -4,6 +4,13 @@
 {% block title %}{% trans "Setup" %}{% endblock %}
 
 {% block content %}
+
+<div class="alert alert-warning mt-3" role="alert">
+    <h4 class="alert-heading">{% trans "Important" %}</h4>
+    <p>{% trans "The following Diode users and API keys are required for the plugin to work correctly. If the field is disabled, it means we pre-populated it with detected pre-defined API keys." %}</p>
+    <p>{% trans "Please ensure you click the \"Create\" button to make these users and their API keys active." %}</p>
+</div>
+
 <div class="tab-pane show active" id="setup-form" role="tabpanel" aria-labelledby="setup-tab">
     <form action="" method="post" enctype="multipart/form-data" class="object-edit mt-5">
         {% csrf_token %}
@@ -21,7 +28,7 @@
         <div class="text-end my-3">
             {% block buttons %}
             <button type="submit" name="_update" class="btn btn-primary">
-                {% trans "Save" %}
+                {% trans "Create" %}
             </button>
             {% endblock buttons %}
         </div>
