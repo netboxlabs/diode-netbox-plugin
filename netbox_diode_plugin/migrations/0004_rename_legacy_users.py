@@ -9,7 +9,7 @@ from netbox_diode_plugin.plugin_config import get_diode_usernames
 
 def rename_legacy_users(apps, schema_editor):
     """Rename legacy users."""
-    legacy_usernames_to_user_category_map = {
+    legacy_usernames_to_user_type_map = {
         "DIODE_TO_NETBOX": "diode_to_netbox",
         "NETBOX_TO_DIODE": "netbox_to_diode",
         "DIODE": "diode",
@@ -17,13 +17,13 @@ def rename_legacy_users(apps, schema_editor):
 
     User = apps.get_model("users", "User")
     users = User.objects.filter(
-        username__in=legacy_usernames_to_user_category_map.keys(),
+        username__in=legacy_usernames_to_user_type_map.keys(),
         groups__name="diode",
     )
 
     for user in users:
-        user_category = legacy_usernames_to_user_category_map.get(user.username)
-        user.username = get_diode_usernames().get(user_category)
+        user_type = legacy_usernames_to_user_type_map.get(user.username)
+        user.username = get_diode_usernames().get(user_type)
         user.save()
 
 
