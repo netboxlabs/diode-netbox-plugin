@@ -8,6 +8,7 @@ from django.apps import apps as django_apps
 from django.conf import settings as netbox_settings
 from django.contrib.contenttypes.management import create_contenttypes
 from django.db import migrations, models
+from netbox.plugins import get_plugin_config
 from users.models import Token as NetBoxToken
 
 from netbox_diode_plugin.plugin_config import get_diode_usernames
@@ -24,7 +25,7 @@ def _read_secret(secret_name, default=None):
             return f.readline().strip()
 
 
-def _create_user_with_token(apps, user_category, username, group):
+def _create_user_with_token(apps, user_type, username, group):
     User = apps.get_model(netbox_settings.AUTH_USER_MODEL)
     """Create a user with the given username and API key if it does not exist."""
     try:
@@ -37,7 +38,7 @@ def _create_user_with_token(apps, user_category, username, group):
     Token = apps.get_model("users", "Token")
 
     if not Token.objects.filter(user=user).exists():
-        key = f"{user_category.upper()}_API_KEY"
+        key = f"{user_type.upper()}_API_KEY"
         api_key = _read_secret(key.lower(), os.getenv(key))
         if api_key is None:
             api_key = NetBoxToken.generate_key()
@@ -66,11 +67,18 @@ def configure_plugin(apps, schema_editor):
     )
     permission.object_types.set([diode_plugin_object_type.id])
 
+    auto_provision_users = get_plugin_config(
+        "netbox_diode_plugin", "auto_provision_users"
+    )
+
+    if not auto_provision_users:
+        return
+
     diode_to_netbox_user_id = None
 
-    for user_category, username in get_diode_usernames().items():
-        user = _create_user_with_token(apps, user_category, username, group)
-        if user_category == "diode_to_netbox":
+    for user_type, username in get_diode_usernames().items():
+        user = _create_user_with_token(apps, user_type, username, group)
+        if user_type == "diode_to_netbox":
             diode_to_netbox_user_id = user.id
 
     permission.users.set([diode_to_netbox_user_id])
