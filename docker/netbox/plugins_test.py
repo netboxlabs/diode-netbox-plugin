@@ -8,6 +8,6 @@ PLUGINS = ["netbox_diode_plugin"]
 
 PLUGINS_CONFIG = {
     "netbox_diode_plugin": {
-        "enable_ingestion_logs": True,
+        "auto_provision_users": True,
     }
 }

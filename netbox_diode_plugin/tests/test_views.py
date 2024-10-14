@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Tests."""
-import html
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -17,7 +16,7 @@ from users.models import Token
 
 from netbox_diode_plugin.models import Setting
 from netbox_diode_plugin.reconciler.sdk.v1 import ingester_pb2, reconciler_pb2
-from netbox_diode_plugin.views import IngestionLogsView, SettingsEditView, SettingsView
+from netbox_diode_plugin.views import IngestionLogsView, SettingsEditView, SettingsView, SetupView
 
 User = get_user_model()
 
@@ -160,34 +159,51 @@ class IngestionLogsViewTestCase(TestCase):
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertNotIn("Server Error", str(response.content))
 
-    def test_error_message_displayed_on_missing_diode_user(self):
-        """Test that an error message is displayed when the Diode user is missing on settings page."""
+    def test_redirects_to_setup_view_on_missing_diode_user(self):
+        """Test that we redirect to plugin setup view if the Diode user is missing."""
         self.request.user = User.objects.create_user("foo", password="pass")
         self.request.user.is_staff = True
 
         with (
             mock.patch(
-                "netbox_diode_plugin.views.get_diode_username_for_user_category"
-            ) as mock_get_diode_username_for_user_category,
+                "netbox_diode_plugin.views.get_diode_username_for_user_type"
+            ) as mock_get_diode_username_for_user_type,
             mock.patch(
                 "netbox_diode_plugin.views.get_user_model"
             ) as mock_get_user_model,
         ):
-            mock_get_diode_username_for_user_category.return_value = (
+            mock_get_diode_username_for_user_type.return_value = (
                 "fake-netbox-to-diode"
             )
             mock_get_user_model.return_value.objects.get.side_effect = User.DoesNotExist
 
             response = self.view.get(self.request)
 
-            self.assertEqual(response.status_code, status.HTTP_200_OK)
-            self.assertNotIn("Server Error", str(response.content))
-            self.assertIn(
-                html.escape(
-                    "User 'fake-netbox-to-diode' does not exist, please check plugin configuration."
-                ),
-                str(response.content),
+            self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+            self.assertEqual(response.url, reverse("plugins:netbox_diode_plugin:setup"))
+
+    def test_redirects_to_setup_view_on_missing_diode_user_token(self):
+        """Test that we redirect to plugin setup view if the Diode user token is missing."""
+        self.request.user = User.objects.create_user("foo", password="pass")
+        self.request.user.is_staff = True
+
+        with (
+            mock.patch(
+                "netbox_diode_plugin.views.get_diode_username_for_user_type"
+            ) as mock_get_diode_username_for_user_type,
+            mock.patch(
+                "netbox_diode_plugin.views.Token.objects.filter"
+            ) as mock_token_objects_filter,
+        ):
+            mock_get_diode_username_for_user_type.return_value = (
+                "netbox-to-diode"
             )
+            mock_token_objects_filter.return_value.exists.return_value = False
+
+            response = self.view.get(self.request)
+
+            self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+            self.assertEqual(response.url, reverse("plugins:netbox_diode_plugin:setup"))
 
 
 class SettingsViewTestCase(TestCase):
@@ -230,8 +246,8 @@ class SettingsViewTestCase(TestCase):
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertIn("grpc://localhost:8080/diode", str(response.content))
 
-    def test_error_message_displayed_on_missing_diode_user(self):
-        """Test that an error message is displayed when the Diode user is missing on settings page."""
+    def test_redirects_to_setup_view_on_missing_diode_user(self):
+        """Test that we redirect to setup view when the Diode user is missing."""
         self.request.user = User.objects.create_user("foo", password="pass")
         self.request.user.is_staff = True
 
@@ -256,14 +272,33 @@ class SettingsViewTestCase(TestCase):
 
             response = self.view.get(self.request)
 
-            self.assertEqual(response.status_code, status.HTTP_200_OK)
-            self.assertNotIn("Server Error", str(response.content))
-            self.assertIn(
-                html.escape(
-                    "User 'fake-netbox-to-diode' does not exist, please check plugin configuration."
-                ),
-                str(response.content),
-            )
+            self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+            self.assertEqual(response.url, reverse("plugins:netbox_diode_plugin:setup"))
+
+    def test_redirects_to_setup_view_on_missing_diode_user_token(self):
+        """Test that we redirect to setup view when the Diode user token is missing."""
+        self.request.user = User.objects.create_user("foo", password="pass")
+        self.request.user.is_staff = True
+
+        with (
+            mock.patch(
+                "netbox_diode_plugin.views.get_diode_usernames"
+            ) as mock_get_diode_usernames,
+            mock.patch(
+                "netbox_diode_plugin.views.Token.objects.filter"
+            ) as mock_token_objects_filter,
+        ):
+            mock_get_diode_usernames.return_value = {
+                "diode_to_netbox": "diode-to-netbox",
+                "netbox_to_diode": "fake-netbox-to-diode",
+                "diode": "diode-ingestion",
+            }
+            mock_token_objects_filter.return_value.exists.return_value = False
+
+            response = self.view.get(self.request)
+
+            self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+            self.assertEqual(response.url, reverse("plugins:netbox_diode_plugin:setup"))
 
 
 class SettingsEditViewTestCase(TestCase):
@@ -427,3 +462,164 @@ class SettingsEditViewTestCase(TestCase):
                 str(request._messages._queued_messages[0]),
                 "The Diode target is not allowed to be modified.",
             )
+
+
+class SetupViewTestCase(TestCase):
+    """Test case for the SetupView."""
+
+    def setUp(self):
+        """Setup the test case."""
+        self.path = reverse("plugins:netbox_diode_plugin:setup")
+        self.request_factory = RequestFactory()
+        self.view = SetupView()
+
+    def test_get_method_redirects_to_login_page_for_unauthenticated_user(self):
+        """Test that the get method redirects an authenticated user to login page."""
+        request = self.request_factory.get(self.path)
+        request.user = AnonymousUser()
+        self.view.setup(request)
+
+        response = self.view.get(request)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertEqual(response.url, f"/netbox/login/?next={self.path}")
+
+    def test_all_users_with_tokens_found(self):
+        """Test that the setup with all users and tokens displays correct data."""
+        user = User.objects.create_user("foo", password="pass")
+        user.is_staff = True
+
+        request = self.request_factory.get(self.path)
+        request.user = user
+        request.htmx = None
+        self.view.setup(request)
+
+        users = {
+            "diode-to-netbox": User.objects.get(username="diode-to-netbox"),
+            "netbox-to-diode": User.objects.get(username="netbox-to-diode"),
+            "diode-ingestion": User.objects.get(username="diode-ingestion"),
+        }
+
+        response = self.view.get(request)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("Diode users and API Keys", str(response.content))
+        self.assertIn("diode-to-netbox", str(response.content))
+        self.assertIn("netbox-to-diode", str(response.content))
+        self.assertIn("diode-ingestion", str(response.content))
+        self.assertIn(Token.objects.get(user=users.get("diode-to-netbox")).key, str(response.content))
+        self.assertIn(Token.objects.get(user=users.get("netbox-to-diode")).key, str(response.content))
+        self.assertIn(Token.objects.get(user=users.get("diode-ingestion")).key, str(response.content))
+
+    def test_not_all_users_with_tokens_found(self):
+        """Test that the setup with all users and tokens displays correct data."""
+        user = User.objects.create_user("foo", password="pass")
+        user.is_staff = True
+
+        request = self.request_factory.get(self.path)
+        request.user = user
+        request.htmx = None
+        self.view.setup(request)
+
+        with mock.patch(
+            "netbox_diode_plugin.views.get_user_model"
+        ) as mock_get_user_model:
+            mock_get_user_model.return_value.objects.get.side_effect = [
+                User.objects.get(username="diode-to-netbox"),
+                User.DoesNotExist,
+                User.objects.get(username="diode-ingestion"),
+            ]
+
+            response = self.view.get(request)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertIn("Diode users and API Keys", str(response.content))
+            self.assertIn("diode-to-netbox", str(response.content))
+            self.assertIn("netbox-to-diode", str(response.content))
+            self.assertIn("diode-ingestion", str(response.content))
+
+    def test_post_method_redirects_to_login_page_for_unauthenticated_user(self):
+        """Test that the post method redirects an authenticated user to login page."""
+        request = self.request_factory.get(self.path)
+        request.user = AnonymousUser()
+        self.view.setup(request)
+
+        response = self.view.post(request)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertEqual(response.url, f"/netbox/login/?next={self.path}")
+
+    def test_post_method_creates_users_and_tokens(self):
+        """Test that the post method creates users and tokens."""
+        user = User.objects.create_user("foo", password="pass")
+        user.is_staff = True
+
+        request = self.request_factory.post(self.path)
+        request.user = user
+        request.htmx = None
+
+        with mock.patch(
+            "netbox_diode_plugin.views.SetupView._retrieve_users"
+        ) as mock_retrieve_users:
+            mock_retrieve_users.return_value = {
+                "diode_to_netbox": {
+                    "username": "diode-to-netbox-1",
+                    "user": None,
+                    "api_key": None,
+                    "api_key_env_var_name": "DIODE_TO_NETBOX_API_KEY",
+                    "predefined_api_key": "be9b2530d690f07066fa8c37a4e054ff36cbb7d3",
+                },
+                "netbox_to_diode": {
+                    "username": "netbox-to-diode-1",
+                    "user": None,
+                    "api_key": None,
+                    "api_key_env_var_name": "NETBOX_TO_DIODE_API_KEY",
+                    "predefined_api_key": "61f693dc5ac62d150a13d462beb29f6d7e82b365",
+                },
+                "diode": {
+                    "username": "diode-ingestion-1",
+                    "user": None,
+                    "api_key": None,
+                    "api_key_env_var_name": "DIODE_API_KEY",
+                    "predefined_api_key": "20590746f3c5ab8ccccb6adcb1d5e101ebd254e8",
+                },
+            }
+            self.view.setup(request)
+
+            response = self.view.post(request)
+            self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+            self.assertEqual(
+                response.url, reverse("plugins:netbox_diode_plugin:settings")
+            )
+
+            for user_type, user_info in mock_retrieve_users.return_value.items():
+                user = User.objects.get(username=user_info.get("username"))
+                self.assertTrue(user)
+                self.assertEqual(Token.objects.get(user=user).key, user_info.get("predefined_api_key"))
+
+    def test_post_method_displays_form_on_invalid_data(self):
+        """Test that the post method displays the form on invalid data."""
+        user = User.objects.create_user("foo", password="pass")
+        user.is_staff = True
+
+        request = self.request_factory.post(self.path)
+        request.user = user
+        request.htmx = None
+
+        with mock.patch(
+            "netbox_diode_plugin.views.SetupView._retrieve_users"
+        ) as mock_retrieve_users:
+            mock_retrieve_users.return_value = {
+                "diode_to_netbox": {
+                    "username": "diode-to-netbox-1",
+                    "user": None,
+                    "api_key": None,
+                    "api_key_env_var_name": "DIODE_TO_NETBOX_API_KEY",
+                    "predefined_api_key": None,
+                },
+            }
+            request.POST = {
+                "diode_to_netbox_api_key": "foobar",
+            }
+            self.view.setup(request)
+
+            response = self.view.post(request)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertIn("Ensure this value has at least 40 characters (it has 6).", str(response.content))
+
