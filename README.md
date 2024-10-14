@@ -107,10 +107,9 @@ If you don't set these environment variables, the plugin will generate random AP
 migration process (with `auto_provision_users` set to `True`) or when you manually create the users in the plugin's
 setup page in the NetBox UI.
 
-It's important to note that the environment variables with API keys should be populated in the Diode server's
-environment variables (
-see [docs](https://github.com/netboxlabs/diode/tree/develop/diode-server#running-the-diode-server)) as well to ensure
-proper communication between the Diode SDK, Diode server and the NetBox plugin.
+It's important to note that environment variables with API keys should be populated in the Diode server's
+environment variables (see [docs](https://github.com/netboxlabs/diode/tree/develop/diode-server#running-the-diode-server)) 
+as well to ensure proper communication between the Diode SDK, Diode server and the NetBox plugin.
 
 Run migrations to create all necessary resources:
 
