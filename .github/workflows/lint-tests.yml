@@ -2,9 +2,13 @@ name: Lint and tests
 on:
   workflow_dispatch:
   pull_request:
+    paths:
+      - "netbox_diode_plugin/**"
   push:
     branches:
       - "!release"
+    paths:
+      - "netbox_diode_plugin/**"
 
 concurrency:
   group: ${{ github.workflow }}
