@@ -15,6 +15,10 @@ env:
   APP_NAME: diode-netbox-plugin
   PYTHON_PACKAGE_NAME: netboxlabs-diode-netbox-plugin
 
+permissions:
+  id-token: write
+  contents: write
+
 jobs:
   get-python-package-name:
     name: Get Python package name
@@ -126,9 +130,6 @@ jobs:
     needs: [ get-python-package-name, get-next-version ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      id-token: write
-      contents: read
     env:
       BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
       BUILD_TRACK: release
