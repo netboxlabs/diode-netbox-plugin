@@ -1,6 +1,6 @@
 name: diode-netbox-plugin
 services:
-  netbox:
+  netbox: &netbox
     image: netboxcommunity/netbox:v4.1-3.0.1-diode-netbox-plugin
     build:
       context: .
@@ -28,7 +28,23 @@ services:
       - netbox-scripts-files:/opt/netbox/netbox/scripts:rw
     ports:
       - "8000:8080"
-
+  
+  netbox-worker:
+    <<: *netbox
+    depends_on:
+      netbox:
+        condition: service_healthy
+    command:
+      - /opt/netbox/venv/bin/python
+      - /opt/netbox/netbox/manage.py
+      - rqworker
+    healthcheck:
+      test: ps -aux | grep -v grep | grep -q rqworker || exit 1
+      start_period: 20s
+      timeout: 3s
+      interval: 15s
+    ports: []
+  
   # postgres
   netbox-postgres:
     image: docker.io/postgres:16-alpine
