@@ -4,5 +4,9 @@ COPY ./netbox/configuration/ /etc/netbox/config/
 RUN chmod 755 /etc/netbox/config/* && \
     chown unit:root /etc/netbox/config/*
 
+COPY ./netbox/local_settings.py /opt/netbox/netbox/netbox/local_settings.py
+RUN chmod 755 /opt/netbox/netbox/netbox/local_settings.py && \
+    chown unit:root /opt/netbox/netbox/netbox/local_settings.py
+
 COPY ./requirements-diode-netbox-plugin.txt /opt/netbox/
 RUN /opt/netbox/venv/bin/pip install  --no-warn-script-location -r /opt/netbox/requirements-diode-netbox-plugin.txt
