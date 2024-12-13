@@ -379,3 +379,17 @@ class ObjectStateTestCase(APITestCase):
             .get("name"),
             self.interfaces[0].name,
         )
+
+    def test_common_user_get_object_state_with_branch_parameter_specified(self):
+        """Test searching accepts _branch parameter with additional attributes specified."""
+        query_parameters = {
+            "q": self.ip_addresses[0].address.__str__(),
+            "object_type": "ipam.ipaddress",
+            "interface": self.interfaces[0].id,
+            "_branch": ""
+        }
+
+        response = self.client.get(self.url, query_parameters, **self.user_header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json().get("object_type"), "ipam.ipaddress")

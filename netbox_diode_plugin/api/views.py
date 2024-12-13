@@ -145,7 +145,7 @@ class ObjectStateView(views.APIView):
         """Get the additional attributes query filter."""
         additional_attributes = {}
         for attr in self.request.query_params:
-            if attr not in ["object_type", "id", "q"]:
+            if attr not in ["object_type", "id", "q", "_branch"]:
                 additional_attributes[attr] = self.request.query_params.get(attr)
 
         return dict(additional_attributes.items())
