@@ -7,7 +7,9 @@ from django.conf import settings as netbox_settings
 from django.contrib import messages
 from django.contrib.auth import get_user, get_user_model
 from django.core.cache import cache
+from django.http import HttpResponseRedirect
 from django.shortcuts import redirect, render
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import View
 from netbox.plugins import get_plugin_config
 from netbox.views import generic
@@ -28,6 +30,17 @@ from netbox_diode_plugin.tables import IngestionLogsTable
 User = get_user_model()
 
 
+def redirect_to_login(request):
+    """Redirect to login view."""
+    redirect_url = netbox_settings.LOGIN_URL
+    target = request.path
+
+    if target and url_has_allowed_host_and_scheme(target, allowed_hosts=None):
+        redirect_url = f"{netbox_settings.LOGIN_URL}?next={target}"
+
+    return HttpResponseRedirect(redirect_url)
+
+
 class IngestionLogsView(View):
     """Ingestion logs view."""
 
@@ -36,7 +49,7 @@ class IngestionLogsView(View):
     def get(self, request):
         """Render ingestion logs template."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+            return redirect_to_login(request)
 
         netbox_to_diode_username = get_diode_username_for_user_type("netbox_to_diode")
         try:
@@ -118,7 +131,7 @@ class SettingsView(View):
     def get(self, request):
         """Render settings template."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+            return redirect_to_login(request)
 
         diode_target_override = get_plugin_config(
             "netbox_diode_plugin", "diode_target_override"
@@ -187,7 +200,7 @@ class SettingsEditView(generic.ObjectEditView):
     def get(self, request, *args, **kwargs):
         """GET request handler."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+            return redirect_to_login(request)
 
         diode_target_override = get_plugin_config(
             "netbox_diode_plugin", "diode_target_override"
@@ -207,7 +220,7 @@ class SettingsEditView(generic.ObjectEditView):
     def post(self, request, *args, **kwargs):
         """POST request handler."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+            return redirect_to_login(request)
 
         diode_target_override = get_plugin_config(
             "netbox_diode_plugin", "diode_target_override"
@@ -272,7 +285,7 @@ class SetupView(View):
     def get(self, request):
         """GET request handler."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+            return redirect_to_login(request)
 
         users = self._retrieve_users()
 
@@ -285,7 +298,7 @@ class SetupView(View):
     def post(self, request):
         """POST request handler."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect(f"{netbox_settings.LOGIN_URL}?next={request.path}")
+            return redirect_to_login(request)
 
         users = self._retrieve_users()
 
