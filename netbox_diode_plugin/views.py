@@ -35,7 +35,7 @@ def redirect_to_login(request):
     redirect_url = netbox_settings.LOGIN_URL
     target = request.path
 
-    if target and url_has_allowed_host_and_scheme(request.path, allowed_hosts=None):
+    if target and url_has_allowed_host_and_scheme(target, allowed_hosts=None):
         redirect_url = f"{netbox_settings.LOGIN_URL}?next={target}"
 
     return HttpResponseRedirect(redirect_url)
