@@ -47,7 +47,7 @@ jobs:
         run: |
           make docker-compose-netbox-plugin-test-cover
       - name: Coverage comment
-        uses: orgoro/coverage@v3.2
+        uses: orgoro/coverage@3f13a558c5af7376496aa4848bf0224aead366ac # v3.2
         with:
           coverageFile: ./docker/coverage/report.xml
           token: ${{ secrets.GITHUB_TOKEN }}
