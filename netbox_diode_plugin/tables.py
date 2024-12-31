@@ -31,7 +31,10 @@ class IngestionStateColumn(tables.Column):
     def render(self, value):
         """Renders the ingestion state as a human-readable string."""
         if value:
-            state_name = reconciler_pb2.State.Name(value)
+            try:
+                state_name = reconciler_pb2.State.Name(value)
+            except ValueError:
+                state_name = reconciler_pb2.State.Name(reconciler_pb2.State.UNSPECIFIED)
             return " ".join(state_name.title().split("_"))
         return None
 

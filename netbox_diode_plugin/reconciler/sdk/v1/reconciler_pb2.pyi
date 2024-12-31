@@ -15,11 +15,13 @@ class State(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     RECONCILED: _ClassVar[State]
     FAILED: _ClassVar[State]
     NO_CHANGES: _ClassVar[State]
+    IGNORED: _ClassVar[State]
 UNSPECIFIED: State
 QUEUED: State
 RECONCILED: State
 FAILED: State
 NO_CHANGES: State
+IGNORED: State
 
 class IngestionDataSource(_message.Message):
     __slots__ = ("name", "api_key")
@@ -86,12 +88,14 @@ class IngestionMetrics(_message.Message):
     def __init__(self, total: _Optional[int] = ..., queued: _Optional[int] = ..., reconciled: _Optional[int] = ..., failed: _Optional[int] = ..., no_changes: _Optional[int] = ...) -> None: ...
 
 class ChangeSet(_message.Message):
-    __slots__ = ("id", "data")
+    __slots__ = ("id", "data", "branch_id")
     ID_FIELD_NUMBER: _ClassVar[int]
     DATA_FIELD_NUMBER: _ClassVar[int]
+    BRANCH_ID_FIELD_NUMBER: _ClassVar[int]
     id: str
     data: bytes
-    def __init__(self, id: _Optional[str] = ..., data: _Optional[bytes] = ...) -> None: ...
+    branch_id: str
+    def __init__(self, id: _Optional[str] = ..., data: _Optional[bytes] = ..., branch_id: _Optional[str] = ...) -> None: ...
 
 class IngestionLog(_message.Message):
     __slots__ = ("id", "data_type", "state", "request_id", "ingestion_ts", "producer_app_name", "producer_app_version", "sdk_name", "sdk_version", "entity", "error", "change_set")
