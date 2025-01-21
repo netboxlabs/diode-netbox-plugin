@@ -74,7 +74,7 @@ class IngestionLogsViewTestCase(TestCase):
                     logs=[
                         reconciler_pb2.IngestionLog(
                             data_type="dcim.site",
-                            state=reconciler_pb2.State.RECONCILED,
+                            state=reconciler_pb2.State.APPLIED,
                             request_id="c6ecd1ea-b23b-4f98-8593-d01d5a0da012",
                             ingestion_ts=1725617988,
                             producer_app_name="diode-test-app",
@@ -119,7 +119,7 @@ class IngestionLogsViewTestCase(TestCase):
                     logs=[
                         reconciler_pb2.IngestionLog(
                             data_type="dcim.site",
-                            state=reconciler_pb2.State.RECONCILED,
+                            state=reconciler_pb2.State.APPLIED,
                             request_id="c6ecd1ea-b23b-4f98-8593-d01d5a0da012",
                             ingestion_ts=1725617988,
                             producer_app_name="diode-test-app",
@@ -145,7 +145,7 @@ class IngestionLogsViewTestCase(TestCase):
                 "ingestion_metrics",
                 {
                     "queued": 10,
-                    "reconciled": 20,
+                    "applied": 20,
                     "failed": 5,
                     "no_changes": 65,
                     "total": 1,
