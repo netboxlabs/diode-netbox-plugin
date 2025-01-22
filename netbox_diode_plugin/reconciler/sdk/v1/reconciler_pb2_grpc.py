@@ -15,28 +15,26 @@ class ReconcilerServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.RetrieveIngestionDataSources = channel.unary_unary(
-                '/diode.v1.ReconcilerService/RetrieveIngestionDataSources',
-                request_serializer=diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionDataSourcesRequest.SerializeToString,
-                response_deserializer=diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionDataSourcesResponse.FromString,
-                )
         self.RetrieveIngestionLogs = channel.unary_unary(
                 '/diode.v1.ReconcilerService/RetrieveIngestionLogs',
                 request_serializer=diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionLogsRequest.SerializeToString,
                 response_deserializer=diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionLogsResponse.FromString,
+                )
+        self.RetrieveDeviations = channel.unary_unary(
+                '/diode.v1.ReconcilerService/RetrieveDeviations',
+                request_serializer=diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationsRequest.SerializeToString,
+                response_deserializer=diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationsResponse.FromString,
+                )
+        self.RetrieveDeviationByID = channel.unary_unary(
+                '/diode.v1.ReconcilerService/RetrieveDeviationByID',
+                request_serializer=diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationByIDRequest.SerializeToString,
+                response_deserializer=diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationByIDResponse.FromString,
                 )
 
 
 class ReconcilerServiceServicer(object):
     """Reconciler service API
     """
-
-    def RetrieveIngestionDataSources(self, request, context):
-        """Retrieves ingestion data sources
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
 
     def RetrieveIngestionLogs(self, request, context):
         """Retrieves ingestion logs
@@ -45,18 +43,37 @@ class ReconcilerServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RetrieveDeviations(self, request, context):
+        """Retrieve deviations
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RetrieveDeviationByID(self, request, context):
+        """Retrieve deviation by ID
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ReconcilerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'RetrieveIngestionDataSources': grpc.unary_unary_rpc_method_handler(
-                    servicer.RetrieveIngestionDataSources,
-                    request_deserializer=diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionDataSourcesRequest.FromString,
-                    response_serializer=diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionDataSourcesResponse.SerializeToString,
-            ),
             'RetrieveIngestionLogs': grpc.unary_unary_rpc_method_handler(
                     servicer.RetrieveIngestionLogs,
                     request_deserializer=diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionLogsRequest.FromString,
                     response_serializer=diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionLogsResponse.SerializeToString,
+            ),
+            'RetrieveDeviations': grpc.unary_unary_rpc_method_handler(
+                    servicer.RetrieveDeviations,
+                    request_deserializer=diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationsRequest.FromString,
+                    response_serializer=diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationsResponse.SerializeToString,
+            ),
+            'RetrieveDeviationByID': grpc.unary_unary_rpc_method_handler(
+                    servicer.RetrieveDeviationByID,
+                    request_deserializer=diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationByIDRequest.FromString,
+                    response_serializer=diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationByIDResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -68,23 +85,6 @@ def add_ReconcilerServiceServicer_to_server(servicer, server):
 class ReconcilerService(object):
     """Reconciler service API
     """
-
-    @staticmethod
-    def RetrieveIngestionDataSources(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(request, target, '/diode.v1.ReconcilerService/RetrieveIngestionDataSources',
-            diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionDataSourcesRequest.SerializeToString,
-            diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionDataSourcesResponse.FromString,
-            options, channel_credentials,
-            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
     @staticmethod
     def RetrieveIngestionLogs(request,
@@ -100,5 +100,39 @@ class ReconcilerService(object):
         return grpc.experimental.unary_unary(request, target, '/diode.v1.ReconcilerService/RetrieveIngestionLogs',
             diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionLogsRequest.SerializeToString,
             diode_dot_v1_dot_reconciler__pb2.RetrieveIngestionLogsResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def RetrieveDeviations(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/diode.v1.ReconcilerService/RetrieveDeviations',
+            diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationsRequest.SerializeToString,
+            diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationsResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def RetrieveDeviationByID(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/diode.v1.ReconcilerService/RetrieveDeviationByID',
+            diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationByIDRequest.SerializeToString,
+            diode_dot_v1_dot_reconciler__pb2.RetrieveDeviationByIDResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)

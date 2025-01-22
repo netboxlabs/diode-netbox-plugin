@@ -16,7 +16,7 @@ from netbox_diode_plugin.reconciler.sdk.v1 import ingester_pb2 as diode_dot_v1_d
 from netbox_diode_plugin.reconciler.sdk.validate import validate_pb2 as validate_dot_validate__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19\x64iode/v1/reconciler.proto\x12\x08\x64iode.v1\x1a\x17\x64iode/v1/ingester.proto\x1a\x17validate/validate.proto\"Y\n\x13IngestionDataSource\x12\x1e\n\x04name\x18\x01 \x01(\tB\n\xfa\x42\x07r\x05\x10\x01\x18\xff\x01R\x04name\x12\"\n\x07\x61pi_key\x18\x02 \x01(\tB\t\xfa\x42\x06r\x04\x10(\x18(R\x06\x61piKey\"\xab\x01\n#RetrieveIngestionDataSourcesRequest\x12\x1e\n\x04name\x18\x01 \x01(\tB\n\xfa\x42\x07r\x05\x10\x01\x18\xff\x01R\x04name\x12%\n\x08sdk_name\x18\x02 \x01(\tB\n\xfa\x42\x07r\x05\x10\x01\x18\xff\x01R\x07sdkName\x12=\n\x0bsdk_version\x18\x03 \x01(\tB\x1c\xfa\x42\x19r\x17\x32\x15^(\\d)+\\.(\\d)+\\.(\\d)+$R\nsdkVersion\"{\n$RetrieveIngestionDataSourcesResponse\x12S\n\x16ingestion_data_sources\x18\x01 \x03(\x0b\x32\x1d.diode.v1.IngestionDataSourceR\x14ingestionDataSources\"\xbe\x02\n\x0eIngestionError\x12\x18\n\x07message\x18\x01 \x01(\tR\x07message\x12\x12\n\x04\x63ode\x18\x02 \x01(\x05R\x04\x63ode\x12:\n\x07\x64\x65tails\x18\x03 \x01(\x0b\x32 .diode.v1.IngestionError.DetailsR\x07\x64\x65tails\x1a\xc1\x01\n\x07\x44\x65tails\x12\"\n\rchange_set_id\x18\x01 \x01(\tR\x0b\x63hangeSetId\x12\x16\n\x06result\x18\x02 \x01(\tR\x06result\x12>\n\x06\x65rrors\x18\x03 \x03(\x0b\x32&.diode.v1.IngestionError.Details.ErrorR\x06\x65rrors\x1a:\n\x05\x45rror\x12\x14\n\x05\x65rror\x18\x01 \x01(\tR\x05\x65rror\x12\x1b\n\tchange_id\x18\x02 \x01(\tR\x08\x63hangeId\"\x97\x01\n\x10IngestionMetrics\x12\x14\n\x05total\x18\x01 \x01(\x05R\x05total\x12\x16\n\x06queued\x18\x02 \x01(\x05R\x06queued\x12\x1e\n\nreconciled\x18\x03 \x01(\x05R\nreconciled\x12\x16\n\x06\x66\x61iled\x18\x04 \x01(\x05R\x06\x66\x61iled\x12\x1d\n\nno_changes\x18\x05 \x01(\x05R\tnoChanges\"_\n\tChangeSet\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n\x04\x64\x61ta\x18\x02 \x01(\x0cR\x04\x64\x61ta\x12 \n\tbranch_id\x18\x03 \x01(\tH\x00R\x08\x62ranchId\x88\x01\x01\x42\x0c\n\n_branch_id\"\xcc\x03\n\x0cIngestionLog\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n\tdata_type\x18\x02 \x01(\tR\x08\x64\x61taType\x12%\n\x05state\x18\x03 \x01(\x0e\x32\x0f.diode.v1.StateR\x05state\x12\x1d\n\nrequest_id\x18\x04 \x01(\tR\trequestId\x12!\n\x0cingestion_ts\x18\x05 \x01(\x03R\x0bingestionTs\x12*\n\x11producer_app_name\x18\x06 \x01(\tR\x0fproducerAppName\x12\x30\n\x14producer_app_version\x18\x07 \x01(\tR\x12producerAppVersion\x12\x19\n\x08sdk_name\x18\x08 \x01(\tR\x07sdkName\x12\x1f\n\x0bsdk_version\x18\t \x01(\tR\nsdkVersion\x12(\n\x06\x65ntity\x18\n \x01(\x0b\x32\x10.diode.v1.EntityR\x06\x65ntity\x12.\n\x05\x65rror\x18\x0b \x01(\x0b\x32\x18.diode.v1.IngestionErrorR\x05\x65rror\x12\x32\n\nchange_set\x18\x0c \x01(\x0b\x32\x13.diode.v1.ChangeSetR\tchangeSet\"\xda\x02\n\x1cRetrieveIngestionLogsRequest\x12 \n\tpage_size\x18\x01 \x01(\x05H\x00R\x08pageSize\x88\x01\x01\x12*\n\x05state\x18\x02 \x01(\x0e\x32\x0f.diode.v1.StateH\x01R\x05state\x88\x01\x01\x12\x1b\n\tdata_type\x18\x03 \x01(\tR\x08\x64\x61taType\x12\x1d\n\nrequest_id\x18\x04 \x01(\tR\trequestId\x12,\n\x12ingestion_ts_start\x18\x05 \x01(\x03R\x10ingestionTsStart\x12(\n\x10ingestion_ts_end\x18\x06 \x01(\x03R\x0eingestionTsEnd\x12\x1d\n\npage_token\x18\x07 \x01(\tR\tpageToken\x12!\n\x0conly_metrics\x18\x08 \x01(\x08R\x0bonlyMetricsB\x0c\n\n_page_sizeB\x08\n\x06_state\"\xa9\x01\n\x1dRetrieveIngestionLogsResponse\x12*\n\x04logs\x18\x01 \x03(\x0b\x32\x16.diode.v1.IngestionLogR\x04logs\x12\x34\n\x07metrics\x18\x02 \x01(\x0b\x32\x1a.diode.v1.IngestionMetricsR\x07metrics\x12&\n\x0fnext_page_token\x18\x03 \x01(\tR\rnextPageToken*]\n\x05State\x12\x0f\n\x0bUNSPECIFIED\x10\x00\x12\n\n\x06QUEUED\x10\x01\x12\x0e\n\nRECONCILED\x10\x02\x12\n\n\x06\x46\x41ILED\x10\x03\x12\x0e\n\nNO_CHANGES\x10\x04\x12\x0b\n\x07IGNORED\x10\x05\x32\xfe\x01\n\x11ReconcilerService\x12\x7f\n\x1cRetrieveIngestionDataSources\x12-.diode.v1.RetrieveIngestionDataSourcesRequest\x1a..diode.v1.RetrieveIngestionDataSourcesResponse\"\x00\x12h\n\x15RetrieveIngestionLogs\x12&.diode.v1.RetrieveIngestionLogsRequest\x1a\'.diode.v1.RetrieveIngestionLogsResponseBDZBgithub.com/netboxlabs/diode/diode-server/gen/diode/v1/reconcilerpbb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19\x64iode/v1/reconciler.proto\x12\x08\x64iode.v1\x1a\x17\x64iode/v1/ingester.proto\x1a\x17validate/validate.proto\"\xbe\x02\n\x0eIngestionError\x12\x18\n\x07message\x18\x01 \x01(\tR\x07message\x12\x12\n\x04\x63ode\x18\x02 \x01(\x05R\x04\x63ode\x12:\n\x07\x64\x65tails\x18\x03 \x01(\x0b\x32 .diode.v1.IngestionError.DetailsR\x07\x64\x65tails\x1a\xc1\x01\n\x07\x44\x65tails\x12\"\n\rchange_set_id\x18\x01 \x01(\tR\x0b\x63hangeSetId\x12\x16\n\x06result\x18\x02 \x01(\tR\x06result\x12>\n\x06\x65rrors\x18\x03 \x03(\x0b\x32&.diode.v1.IngestionError.Details.ErrorR\x06\x65rrors\x1a:\n\x05\x45rror\x12\x14\n\x05\x65rror\x18\x01 \x01(\tR\x05\x65rror\x12\x1b\n\tchange_id\x18\x02 \x01(\tR\x08\x63hangeId\"\x97\x01\n\x10IngestionMetrics\x12\x14\n\x05total\x18\x01 \x01(\x05R\x05total\x12\x16\n\x06queued\x18\x02 \x01(\x05R\x06queued\x12\x1e\n\nreconciled\x18\x03 \x01(\x05R\nreconciled\x12\x16\n\x06\x66\x61iled\x18\x04 \x01(\x05R\x06\x66\x61iled\x12\x1d\n\nno_changes\x18\x05 \x01(\x05R\tnoChanges\"\x9e\x01\n\tChangeSet\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n\x04\x64\x61ta\x18\x02 \x01(\x0cR\x04\x64\x61ta\x12 \n\tbranch_id\x18\x03 \x01(\tH\x00R\x08\x62ranchId\x88\x01\x01\x12*\n\x0e\x64\x65viation_name\x18\x04 \x01(\tH\x01R\rdeviationName\x88\x01\x01\x42\x0c\n\n_branch_idB\x11\n\x0f_deviation_name\"\xf1\x03\n\x0cIngestionLog\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n\tdata_type\x18\x02 \x01(\tB\x02\x18\x01R\x08\x64\x61taType\x12%\n\x05state\x18\x03 \x01(\x0e\x32\x0f.diode.v1.StateR\x05state\x12\x1d\n\nrequest_id\x18\x04 \x01(\tR\trequestId\x12!\n\x0cingestion_ts\x18\x05 \x01(\x03R\x0bingestionTs\x12*\n\x11producer_app_name\x18\x06 \x01(\tR\x0fproducerAppName\x12\x30\n\x14producer_app_version\x18\x07 \x01(\tR\x12producerAppVersion\x12\x19\n\x08sdk_name\x18\x08 \x01(\tR\x07sdkName\x12\x1f\n\x0bsdk_version\x18\t \x01(\tR\nsdkVersion\x12(\n\x06\x65ntity\x18\n \x01(\x0b\x32\x10.diode.v1.EntityR\x06\x65ntity\x12.\n\x05\x65rror\x18\x0b \x01(\x0b\x32\x18.diode.v1.IngestionErrorR\x05\x65rror\x12\x32\n\nchange_set\x18\x0c \x01(\x0b\x32\x13.diode.v1.ChangeSetR\tchangeSet\x12\x1f\n\x0bobject_type\x18\r \x01(\tR\nobjectType\"\xff\x02\n\x1cRetrieveIngestionLogsRequest\x12 \n\tpage_size\x18\x01 \x01(\x05H\x00R\x08pageSize\x88\x01\x01\x12*\n\x05state\x18\x02 \x01(\x0e\x32\x0f.diode.v1.StateH\x01R\x05state\x88\x01\x01\x12\x1f\n\tdata_type\x18\x03 \x01(\tB\x02\x18\x01R\x08\x64\x61taType\x12\x1d\n\nrequest_id\x18\x04 \x01(\tR\trequestId\x12,\n\x12ingestion_ts_start\x18\x05 \x01(\x03R\x10ingestionTsStart\x12(\n\x10ingestion_ts_end\x18\x06 \x01(\x03R\x0eingestionTsEnd\x12\x1d\n\npage_token\x18\x07 \x01(\tR\tpageToken\x12!\n\x0conly_metrics\x18\x08 \x01(\x08R\x0bonlyMetrics\x12\x1f\n\x0bobject_type\x18\t \x01(\tR\nobjectTypeB\x0c\n\n_page_sizeB\x08\n\x06_state\"\xa9\x01\n\x1dRetrieveIngestionLogsResponse\x12*\n\x04logs\x18\x01 \x03(\x0b\x32\x16.diode.v1.IngestionLogR\x04logs\x12\x34\n\x07metrics\x18\x02 \x01(\x0b\x32\x1a.diode.v1.IngestionMetricsR\x07metrics\x12&\n\x0fnext_page_token\x18\x03 \x01(\tR\rnextPageToken\"\xbb\x02\n\x19RetrieveDeviationsRequest\x12 \n\tpage_size\x18\x01 \x01(\x05H\x00R\x08pageSize\x88\x01\x01\x12\x1d\n\npage_token\x18\x02 \x01(\tR\tpageToken\x12,\n\x12ingestion_ts_start\x18\x03 \x01(\x03R\x10ingestionTsStart\x12(\n\x10ingestion_ts_end\x18\x04 \x01(\x03R\x0eingestionTsEnd\x12%\n\x05state\x18\x05 \x03(\x0e\x32\x0f.diode.v1.StateR\x05state\x12\x1f\n\x0bobject_type\x18\x06 \x03(\tR\nobjectType\x12\x1b\n\tbranch_id\x18\x07 \x03(\tR\x08\x62ranchId\x12\x12\n\x04site\x18\x08 \x03(\tR\x04siteB\x0c\n\n_page_size\">\n\x0e\x44\x65viationError\x12\x18\n\x07message\x18\x01 \x01(\tR\x07message\x12\x12\n\x04\x63ode\x18\x02 \x01(\x05R\x04\x63ode\"\xba\x01\n\x06\x43hange\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n\x0bobject_type\x18\x02 \x01(\tR\nobjectType\x12\x30\n\x14object_primary_value\x18\x03 \x01(\tR\x12objectPrimaryValue\x12\x1f\n\x0b\x63hange_type\x18\x04 \x01(\tR\nchangeType\x12\x16\n\x06\x62\x65\x66ore\x18\x05 \x01(\x0cR\x06\x62\x65\x66ore\x12\x14\n\x05\x61\x66ter\x18\x06 \x01(\x0cR\x05\x61\x66ter\"\x9f\x03\n\tDeviation\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\x12!\n\x0cingestion_ts\x18\x02 \x01(\x03R\x0bingestionTs\x12$\n\x0elast_update_ts\x18\x03 \x01(\x03R\x0clastUpdateTs\x12\x12\n\x04name\x18\x04 \x01(\tR\x04name\x12\x16\n\x06source\x18\x05 \x01(\tR\x06source\x12%\n\x05state\x18\x06 \x01(\x0e\x32\x0f.diode.v1.StateR\x05state\x12\x1f\n\x0bobject_type\x18\x07 \x01(\tR\nobjectType\x12 \n\tbranch_id\x18\x08 \x01(\tH\x00R\x08\x62ranchId\x88\x01\x01\x12\x39\n\x0fingested_entity\x18\t \x01(\x0b\x32\x10.diode.v1.EntityR\x0eingestedEntity\x12.\n\x05\x65rror\x18\n \x01(\x0b\x32\x18.diode.v1.DeviationErrorR\x05\x65rror\x12*\n\x07\x63hanges\x18\x0b \x03(\x0b\x32\x10.diode.v1.ChangeR\x07\x63hangesB\x0c\n\n_branch_id\"y\n\x1aRetrieveDeviationsResponse\x12\x33\n\ndeviations\x18\x01 \x03(\x0b\x32\x13.diode.v1.DeviationR\ndeviations\x12&\n\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\".\n\x1cRetrieveDeviationByIDRequest\x12\x0e\n\x02id\x18\x01 \x01(\tR\x02id\"R\n\x1dRetrieveDeviationByIDResponse\x12\x31\n\tdeviation\x18\x01 \x01(\x0b\x32\x13.diode.v1.DeviationR\tdeviation*w\n\x05State\x12\x15\n\x11STATE_UNSPECIFIED\x10\x00\x12\n\n\x06QUEUED\x10\x01\x12\x08\n\x04OPEN\x10\x02\x12\x0b\n\x07\x41PPLIED\x10\x03\x12\n\n\x06\x46\x41ILED\x10\x04\x12\x0e\n\nNO_CHANGES\x10\x05\x12\x0b\n\x07IGNORED\x10\x06\x12\x0b\n\x07\x45RRORED\x10\x07\x32\xcd\x02\n\x11ReconcilerService\x12m\n\x15RetrieveIngestionLogs\x12&.diode.v1.RetrieveIngestionLogsRequest\x1a\'.diode.v1.RetrieveIngestionLogsResponse\"\x03\x88\x02\x01\x12_\n\x12RetrieveDeviations\x12#.diode.v1.RetrieveDeviationsRequest\x1a$.diode.v1.RetrieveDeviationsResponse\x12h\n\x15RetrieveDeviationByID\x12&.diode.v1.RetrieveDeviationByIDRequest\x1a\'.diode.v1.RetrieveDeviationByIDResponseBDZBgithub.com/netboxlabs/diode/diode-server/gen/diode/v1/reconcilerpbb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -24,40 +24,44 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'diode.v1.reconciler_pb2', _
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'ZBgithub.com/netboxlabs/diode/diode-server/gen/diode/v1/reconcilerpb'
-  _globals['_INGESTIONDATASOURCE'].fields_by_name['name']._loaded_options = None
-  _globals['_INGESTIONDATASOURCE'].fields_by_name['name']._serialized_options = b'\372B\007r\005\020\001\030\377\001'
-  _globals['_INGESTIONDATASOURCE'].fields_by_name['api_key']._loaded_options = None
-  _globals['_INGESTIONDATASOURCE'].fields_by_name['api_key']._serialized_options = b'\372B\006r\004\020(\030('
-  _globals['_RETRIEVEINGESTIONDATASOURCESREQUEST'].fields_by_name['name']._loaded_options = None
-  _globals['_RETRIEVEINGESTIONDATASOURCESREQUEST'].fields_by_name['name']._serialized_options = b'\372B\007r\005\020\001\030\377\001'
-  _globals['_RETRIEVEINGESTIONDATASOURCESREQUEST'].fields_by_name['sdk_name']._loaded_options = None
-  _globals['_RETRIEVEINGESTIONDATASOURCESREQUEST'].fields_by_name['sdk_name']._serialized_options = b'\372B\007r\005\020\001\030\377\001'
-  _globals['_RETRIEVEINGESTIONDATASOURCESREQUEST'].fields_by_name['sdk_version']._loaded_options = None
-  _globals['_RETRIEVEINGESTIONDATASOURCESREQUEST'].fields_by_name['sdk_version']._serialized_options = b'\372B\031r\0272\025^(\\d)+\\.(\\d)+\\.(\\d)+$'
-  _globals['_STATE']._serialized_start=2035
-  _globals['_STATE']._serialized_end=2128
-  _globals['_INGESTIONDATASOURCE']._serialized_start=89
-  _globals['_INGESTIONDATASOURCE']._serialized_end=178
-  _globals['_RETRIEVEINGESTIONDATASOURCESREQUEST']._serialized_start=181
-  _globals['_RETRIEVEINGESTIONDATASOURCESREQUEST']._serialized_end=352
-  _globals['_RETRIEVEINGESTIONDATASOURCESRESPONSE']._serialized_start=354
-  _globals['_RETRIEVEINGESTIONDATASOURCESRESPONSE']._serialized_end=477
-  _globals['_INGESTIONERROR']._serialized_start=480
-  _globals['_INGESTIONERROR']._serialized_end=798
-  _globals['_INGESTIONERROR_DETAILS']._serialized_start=605
-  _globals['_INGESTIONERROR_DETAILS']._serialized_end=798
-  _globals['_INGESTIONERROR_DETAILS_ERROR']._serialized_start=740
-  _globals['_INGESTIONERROR_DETAILS_ERROR']._serialized_end=798
-  _globals['_INGESTIONMETRICS']._serialized_start=801
-  _globals['_INGESTIONMETRICS']._serialized_end=952
-  _globals['_CHANGESET']._serialized_start=954
-  _globals['_CHANGESET']._serialized_end=1049
-  _globals['_INGESTIONLOG']._serialized_start=1052
-  _globals['_INGESTIONLOG']._serialized_end=1512
-  _globals['_RETRIEVEINGESTIONLOGSREQUEST']._serialized_start=1515
-  _globals['_RETRIEVEINGESTIONLOGSREQUEST']._serialized_end=1861
-  _globals['_RETRIEVEINGESTIONLOGSRESPONSE']._serialized_start=1864
-  _globals['_RETRIEVEINGESTIONLOGSRESPONSE']._serialized_end=2033
-  _globals['_RECONCILERSERVICE']._serialized_start=2131
-  _globals['_RECONCILERSERVICE']._serialized_end=2385
+  _globals['_INGESTIONLOG'].fields_by_name['data_type']._loaded_options = None
+  _globals['_INGESTIONLOG'].fields_by_name['data_type']._serialized_options = b'\030\001'
+  _globals['_RETRIEVEINGESTIONLOGSREQUEST'].fields_by_name['data_type']._loaded_options = None
+  _globals['_RETRIEVEINGESTIONLOGSREQUEST'].fields_by_name['data_type']._serialized_options = b'\030\001'
+  _globals['_RECONCILERSERVICE'].methods_by_name['RetrieveIngestionLogs']._loaded_options = None
+  _globals['_RECONCILERSERVICE'].methods_by_name['RetrieveIngestionLogs']._serialized_options = b'\210\002\001'
+  _globals['_STATE']._serialized_start=3027
+  _globals['_STATE']._serialized_end=3146
+  _globals['_INGESTIONERROR']._serialized_start=90
+  _globals['_INGESTIONERROR']._serialized_end=408
+  _globals['_INGESTIONERROR_DETAILS']._serialized_start=215
+  _globals['_INGESTIONERROR_DETAILS']._serialized_end=408
+  _globals['_INGESTIONERROR_DETAILS_ERROR']._serialized_start=350
+  _globals['_INGESTIONERROR_DETAILS_ERROR']._serialized_end=408
+  _globals['_INGESTIONMETRICS']._serialized_start=411
+  _globals['_INGESTIONMETRICS']._serialized_end=562
+  _globals['_CHANGESET']._serialized_start=565
+  _globals['_CHANGESET']._serialized_end=723
+  _globals['_INGESTIONLOG']._serialized_start=726
+  _globals['_INGESTIONLOG']._serialized_end=1223
+  _globals['_RETRIEVEINGESTIONLOGSREQUEST']._serialized_start=1226
+  _globals['_RETRIEVEINGESTIONLOGSREQUEST']._serialized_end=1609
+  _globals['_RETRIEVEINGESTIONLOGSRESPONSE']._serialized_start=1612
+  _globals['_RETRIEVEINGESTIONLOGSRESPONSE']._serialized_end=1781
+  _globals['_RETRIEVEDEVIATIONSREQUEST']._serialized_start=1784
+  _globals['_RETRIEVEDEVIATIONSREQUEST']._serialized_end=2099
+  _globals['_DEVIATIONERROR']._serialized_start=2101
+  _globals['_DEVIATIONERROR']._serialized_end=2163
+  _globals['_CHANGE']._serialized_start=2166
+  _globals['_CHANGE']._serialized_end=2352
+  _globals['_DEVIATION']._serialized_start=2355
+  _globals['_DEVIATION']._serialized_end=2770
+  _globals['_RETRIEVEDEVIATIONSRESPONSE']._serialized_start=2772
+  _globals['_RETRIEVEDEVIATIONSRESPONSE']._serialized_end=2893
+  _globals['_RETRIEVEDEVIATIONBYIDREQUEST']._serialized_start=2895
+  _globals['_RETRIEVEDEVIATIONBYIDREQUEST']._serialized_end=2941
+  _globals['_RETRIEVEDEVIATIONBYIDRESPONSE']._serialized_start=2943
+  _globals['_RETRIEVEDEVIATIONBYIDRESPONSE']._serialized_end=3025
+  _globals['_RECONCILERSERVICE']._serialized_start=3149
+  _globals['_RECONCILERSERVICE']._serialized_end=3482
 # @@protoc_insertion_point(module_scope)

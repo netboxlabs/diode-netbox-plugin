@@ -20,7 +20,7 @@ class IngestionLogsTableTestCase(TestCase):
         self.mock_data = [
             reconciler_pb2.IngestionLog(
                 ingestion_ts=1638316800000000000,  # Example timestamp in nanoseconds
-                state=reconciler_pb2.State.RECONCILED,
+                state=reconciler_pb2.State.APPLIED,
                 data_type="dcim.site",
                 request_id="12345",
                 producer_app_name="TestApp",
@@ -59,7 +59,7 @@ class IngestionLogsTableTestCase(TestCase):
     def test_state_rendering(self):
         """Test rendering of the state column."""
         table = IngestionLogsTable(self.mock_data)
-        self.assertEqual(table.rows[0].get_cell("state"), "Reconciled")
+        self.assertEqual(table.rows[0].get_cell("state"), "Applied")
         self.assertEqual(table.rows[1].get_cell("state"), None)
 
     def test_data_type_rendering(self):

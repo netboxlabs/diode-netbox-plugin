@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   manifest-modified:
     uses: netboxlabs/public-workflows/.github/workflows/reusable-plugin-manifest-modified.yml@release
