@@ -142,7 +142,7 @@ class RetrieveIngestionLogsResponse(_message.Message):
     def __init__(self, logs: _Optional[_Iterable[_Union[IngestionLog, _Mapping]]] = ..., metrics: _Optional[_Union[IngestionMetrics, _Mapping]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
 class RetrieveDeviationsRequest(_message.Message):
-    __slots__ = ("page_size", "page_token", "ingestion_ts_start", "ingestion_ts_end", "state", "object_type", "branch_id", "site")
+    __slots__ = ("page_size", "page_token", "ingestion_ts_start", "ingestion_ts_end", "state", "object_type", "branch_id")
     PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
     PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
     INGESTION_TS_START_FIELD_NUMBER: _ClassVar[int]
@@ -150,7 +150,6 @@ class RetrieveDeviationsRequest(_message.Message):
     STATE_FIELD_NUMBER: _ClassVar[int]
     OBJECT_TYPE_FIELD_NUMBER: _ClassVar[int]
     BRANCH_ID_FIELD_NUMBER: _ClassVar[int]
-    SITE_FIELD_NUMBER: _ClassVar[int]
     page_size: int
     page_token: str
     ingestion_ts_start: int
@@ -158,8 +157,7 @@ class RetrieveDeviationsRequest(_message.Message):
     state: _containers.RepeatedScalarFieldContainer[State]
     object_type: _containers.RepeatedScalarFieldContainer[str]
     branch_id: _containers.RepeatedScalarFieldContainer[str]
-    site: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, page_size: _Optional[int] = ..., page_token: _Optional[str] = ..., ingestion_ts_start: _Optional[int] = ..., ingestion_ts_end: _Optional[int] = ..., state: _Optional[_Iterable[_Union[State, str]]] = ..., object_type: _Optional[_Iterable[str]] = ..., branch_id: _Optional[_Iterable[str]] = ..., site: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, page_size: _Optional[int] = ..., page_token: _Optional[str] = ..., ingestion_ts_start: _Optional[int] = ..., ingestion_ts_end: _Optional[int] = ..., state: _Optional[_Iterable[_Union[State, str]]] = ..., object_type: _Optional[_Iterable[str]] = ..., branch_id: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class DeviationError(_message.Message):
     __slots__ = ("message", "code")
