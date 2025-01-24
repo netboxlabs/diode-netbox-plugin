@@ -80,7 +80,7 @@ class ChangeSet(_message.Message):
     def __init__(self, id: _Optional[str] = ..., data: _Optional[bytes] = ..., branch_id: _Optional[str] = ..., deviation_name: _Optional[str] = ...) -> None: ...
 
 class IngestionLog(_message.Message):
-    __slots__ = ("id", "data_type", "state", "request_id", "ingestion_ts", "producer_app_name", "producer_app_version", "sdk_name", "sdk_version", "entity", "error", "change_set", "object_type")
+    __slots__ = ("id", "data_type", "state", "request_id", "ingestion_ts", "producer_app_name", "producer_app_version", "sdk_name", "sdk_version", "entity", "error", "change_set", "object_type", "source_ts")
     ID_FIELD_NUMBER: _ClassVar[int]
     DATA_TYPE_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
@@ -94,6 +94,7 @@ class IngestionLog(_message.Message):
     ERROR_FIELD_NUMBER: _ClassVar[int]
     CHANGE_SET_FIELD_NUMBER: _ClassVar[int]
     OBJECT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_TS_FIELD_NUMBER: _ClassVar[int]
     id: str
     data_type: str
     state: State
@@ -107,7 +108,8 @@ class IngestionLog(_message.Message):
     error: IngestionError
     change_set: ChangeSet
     object_type: str
-    def __init__(self, id: _Optional[str] = ..., data_type: _Optional[str] = ..., state: _Optional[_Union[State, str]] = ..., request_id: _Optional[str] = ..., ingestion_ts: _Optional[int] = ..., producer_app_name: _Optional[str] = ..., producer_app_version: _Optional[str] = ..., sdk_name: _Optional[str] = ..., sdk_version: _Optional[str] = ..., entity: _Optional[_Union[_ingester_pb2.Entity, _Mapping]] = ..., error: _Optional[_Union[IngestionError, _Mapping]] = ..., change_set: _Optional[_Union[ChangeSet, _Mapping]] = ..., object_type: _Optional[str] = ...) -> None: ...
+    source_ts: int
+    def __init__(self, id: _Optional[str] = ..., data_type: _Optional[str] = ..., state: _Optional[_Union[State, str]] = ..., request_id: _Optional[str] = ..., ingestion_ts: _Optional[int] = ..., producer_app_name: _Optional[str] = ..., producer_app_version: _Optional[str] = ..., sdk_name: _Optional[str] = ..., sdk_version: _Optional[str] = ..., entity: _Optional[_Union[_ingester_pb2.Entity, _Mapping]] = ..., error: _Optional[_Union[IngestionError, _Mapping]] = ..., change_set: _Optional[_Union[ChangeSet, _Mapping]] = ..., object_type: _Optional[str] = ..., source_ts: _Optional[int] = ...) -> None: ...
 
 class RetrieveIngestionLogsRequest(_message.Message):
     __slots__ = ("page_size", "state", "data_type", "request_id", "ingestion_ts_start", "ingestion_ts_end", "page_token", "only_metrics", "object_type")
@@ -184,7 +186,7 @@ class Change(_message.Message):
     def __init__(self, id: _Optional[str] = ..., object_type: _Optional[str] = ..., object_primary_value: _Optional[str] = ..., change_type: _Optional[str] = ..., before: _Optional[bytes] = ..., after: _Optional[bytes] = ...) -> None: ...
 
 class Deviation(_message.Message):
-    __slots__ = ("id", "ingestion_ts", "last_update_ts", "name", "source", "state", "object_type", "branch_id", "ingested_entity", "error", "changes")
+    __slots__ = ("id", "ingestion_ts", "last_update_ts", "name", "source", "state", "object_type", "branch_id", "ingested_entity", "error", "changes", "source_ts")
     ID_FIELD_NUMBER: _ClassVar[int]
     INGESTION_TS_FIELD_NUMBER: _ClassVar[int]
     LAST_UPDATE_TS_FIELD_NUMBER: _ClassVar[int]
@@ -196,6 +198,7 @@ class Deviation(_message.Message):
     INGESTED_ENTITY_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
     CHANGES_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_TS_FIELD_NUMBER: _ClassVar[int]
     id: str
     ingestion_ts: int
     last_update_ts: int
@@ -207,7 +210,8 @@ class Deviation(_message.Message):
     ingested_entity: _ingester_pb2.Entity
     error: DeviationError
     changes: _containers.RepeatedCompositeFieldContainer[Change]
-    def __init__(self, id: _Optional[str] = ..., ingestion_ts: _Optional[int] = ..., last_update_ts: _Optional[int] = ..., name: _Optional[str] = ..., source: _Optional[str] = ..., state: _Optional[_Union[State, str]] = ..., object_type: _Optional[str] = ..., branch_id: _Optional[str] = ..., ingested_entity: _Optional[_Union[_ingester_pb2.Entity, _Mapping]] = ..., error: _Optional[_Union[DeviationError, _Mapping]] = ..., changes: _Optional[_Iterable[_Union[Change, _Mapping]]] = ...) -> None: ...
+    source_ts: int
+    def __init__(self, id: _Optional[str] = ..., ingestion_ts: _Optional[int] = ..., last_update_ts: _Optional[int] = ..., name: _Optional[str] = ..., source: _Optional[str] = ..., state: _Optional[_Union[State, str]] = ..., object_type: _Optional[str] = ..., branch_id: _Optional[str] = ..., ingested_entity: _Optional[_Union[_ingester_pb2.Entity, _Mapping]] = ..., error: _Optional[_Union[DeviationError, _Mapping]] = ..., changes: _Optional[_Iterable[_Union[Change, _Mapping]]] = ..., source_ts: _Optional[int] = ...) -> None: ...
 
 class RetrieveDeviationsResponse(_message.Message):
     __slots__ = ("deviations", "next_page_token")
