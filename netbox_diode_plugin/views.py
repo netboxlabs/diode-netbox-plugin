@@ -5,8 +5,7 @@ import os
 
 from django.conf import settings as netbox_settings
 from django.contrib import messages
-from django.contrib.auth import get_user, get_user_model
-from django.core.cache import cache
+from django.contrib.auth import get_user_model
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -23,9 +22,6 @@ from netbox_diode_plugin.plugin_config import (
     get_diode_username_for_user_type,
     get_diode_usernames,
 )
-from netbox_diode_plugin.reconciler.sdk.client import ReconcilerClient
-from netbox_diode_plugin.reconciler.sdk.exceptions import ReconcilerClientError
-from netbox_diode_plugin.tables import IngestionLogsTable
 
 User = get_user_model()
 
@@ -39,90 +35,6 @@ def redirect_to_login(request):
         redirect_url = f"{netbox_settings.LOGIN_URL}?next={target}"
 
     return HttpResponseRedirect(redirect_url)
-
-
-class IngestionLogsView(View):
-    """Ingestion logs view."""
-
-    INGESTION_METRICS_CACHE_KEY = "ingestion_metrics"
-
-    def get(self, request):
-        """Render ingestion logs template."""
-        if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect_to_login(request)
-
-        netbox_to_diode_username = get_diode_username_for_user_type("netbox_to_diode")
-        try:
-            user = get_user_model().objects.get(username=netbox_to_diode_username)
-        except User.DoesNotExist:
-            return redirect("plugins:netbox_diode_plugin:setup")
-
-        if not Token.objects.filter(user=user).exists():
-            return redirect("plugins:netbox_diode_plugin:setup")
-
-        token = Token.objects.get(user=user)
-
-        settings = Setting.objects.get()
-
-        diode_target_override = get_plugin_config(
-            "netbox_diode_plugin", "diode_target_override"
-        )
-        diode_target = diode_target_override or settings.diode_target
-
-        reconciler_client = ReconcilerClient(
-            target=diode_target,
-            api_key=token.key,
-        )
-
-        page_size = 50
-
-        try:
-            ingestion_logs_filters = {
-                "page_size": page_size,
-            }
-            request_page_token = request.GET.get("page_token")
-            if request_page_token is not None:
-                ingestion_logs_filters["page_token"] = request_page_token
-
-            resp = reconciler_client.retrieve_ingestion_logs(**ingestion_logs_filters)
-            table = IngestionLogsTable(resp.logs)
-
-            cached_ingestion_metrics = cache.get(self.INGESTION_METRICS_CACHE_KEY)
-            if (
-                cached_ingestion_metrics is not None
-                and cached_ingestion_metrics["total"] == resp.metrics.total
-            ):
-                metrics = cached_ingestion_metrics
-            else:
-                ingestion_metrics = reconciler_client.retrieve_ingestion_logs(
-                    only_metrics=True
-                )
-                metrics = {
-                    "queued": ingestion_metrics.metrics.queued or 0,
-                    "reconciled": ingestion_metrics.metrics.reconciled or 0,
-                    "failed": ingestion_metrics.metrics.failed or 0,
-                    "no_changes": ingestion_metrics.metrics.no_changes or 0,
-                    "total": ingestion_metrics.metrics.total or 0,
-                }
-                cache.set(
-                    self.INGESTION_METRICS_CACHE_KEY,
-                    metrics,
-                    timeout=300,
-                )
-
-            context = {
-                "next_page_token": resp.next_page_token,
-                "ingestion_logs_table": table,
-                "total_count": resp.metrics.total,
-                "ingestion_metrics": metrics,
-            }
-
-        except ReconcilerClientError as error:
-            context = {
-                "ingestion_logs_error": error,
-            }
-
-        return render(request, "diode/ingestion_logs.html", context)
 
 
 class SettingsView(View):
