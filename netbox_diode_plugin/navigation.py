@@ -4,12 +4,6 @@
 
 from netbox.plugins import PluginMenu, PluginMenuItem
 
-ingestion_logs = {
-    "link": "plugins:netbox_diode_plugin:ingestion_logs",
-    "link_text": "Ingestion Logs",
-    "staff_only": True,
-}
-
 settings = {
     "link": "plugins:netbox_diode_plugin:settings",
     "link_text": "Settings",
@@ -23,7 +17,6 @@ menu = PluginMenu(
         (
             "Diode",
             (
-                PluginMenuItem(**ingestion_logs),
                 PluginMenuItem(**settings),
             ),
         ),
