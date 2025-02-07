@@ -7,10 +7,13 @@ from typing import Any, Dict, Optional
 from django.conf import settings
 from packaging import version
 
-if version.parse(settings.VERSION).major >= 4:
+try:
+    if version.parse(settings.VERSION).major >= 4:
+        from core.models import ObjectType as NetBoxType
+    else:
+        from django.contrib.contenttypes.models import ContentType as NetBoxType
+except version.InvalidVersion as e:
     from core.models import ObjectType as NetBoxType
-else:
-    from django.contrib.contenttypes.models import ContentType as NetBoxType
 from django.core.exceptions import FieldError
 from django.db import transaction
 from django.db.models import Q

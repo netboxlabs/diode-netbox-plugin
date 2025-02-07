@@ -8,10 +8,13 @@ import zoneinfo
 from django.conf import settings
 from packaging import version
 
-if version.parse(settings.VERSION).major >= 4:
+try:
+    if version.parse(settings.VERSION).major >= 4:
+        from core.models import ObjectType as NetBoxType
+    else:
+        from django.contrib.contenttypes.models import ContentType as NetBoxType
+except version.InvalidVersion as e:
     from core.models import ObjectType as NetBoxType
-else:
-    from django.contrib.contenttypes.models import ContentType as NetBoxType
 
 from netbox.tables import BaseTable, columns
 from utilities.object_types import object_type_identifier, object_type_name

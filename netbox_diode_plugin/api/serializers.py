@@ -19,10 +19,16 @@ from packaging import version
 
 from netbox_diode_plugin.models import Setting
 
-if version.parse(version.parse(settings.VERSION).base_version) >= version.parse("4.1"):
+try:
+    if version.parse(version.parse(settings.VERSION).base_version) >= version.parse(
+        "4.1"
+    ):
+        from core.models import ObjectChange
+    else:
+        from extras.models import ObjectChange
+except version.InvalidVersion as e:
     from core.models import ObjectChange
-else:
-    from extras.models import ObjectChange
+
 from ipam.api.serializers import IPAddressSerializer, PrefixSerializer
 from rest_framework import serializers
 from utilities.api import get_serializer_for_model
