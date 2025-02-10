@@ -497,8 +497,6 @@ class ApplyChangeSetView(views.APIView):
 
         ipaddress_assigned_object = self._ipaddress_assigned_object(change_set)
 
-        print(f"ipaddress_assigned_object: {ipaddress_assigned_object}")
-
         try:
             with transaction.atomic():
                 for change in change_set:
