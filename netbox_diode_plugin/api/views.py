@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - API Views."""
-
 from typing import Any, Dict, Optional
 
+from django.apps import apps
 from django.conf import settings
 from packaging import version
 
@@ -11,11 +11,11 @@ if version.parse(settings.VERSION).major >= 4:
     from core.models import ObjectType as NetBoxType
 else:
     from django.contrib.contenttypes.models import ContentType as NetBoxType
-from django.core.exceptions import FieldError
-from django.db import transaction
+
+from django.core.exceptions import FieldDoesNotExist, FieldError
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import models, transaction
 from django.db.models import Q
-from extras.models import CachedValue
-from netbox.search import LookupTypes
 from rest_framework import status, views
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
@@ -24,9 +24,86 @@ from utilities.api import get_serializer_for_model
 
 from netbox_diode_plugin.api.permissions import IsDiodeReader, IsDiodeWriter
 from netbox_diode_plugin.api.serializers import (
-    ApplyChangeSetRequestSerializer,
-    ObjectStateSerializer,
-)
+    ApplyChangeSetRequestSerializer, ObjectStateSerializer)
+
+
+def dynamic_import(name):
+    """Dynamically import a class from an absolute path string."""
+    components = name.split(".")
+    mod = __import__(components[0])
+    for comp in components[1:]:
+        mod = getattr(mod, comp)
+    return mod
+
+
+def _get_index_class_fields(object_type):
+    """
+    Given an object type name (e.g., 'dcim.site'), dynamically find and return the corresponding Index class fields.
+
+    :param object_type: Object type name in the format 'app_label.model_name'
+    :return: The corresponding model and its Index class (e.g., SiteIndex) field names or None.
+    """
+    try:
+        # Extract app_label and model_name from 'dcim.site'
+        app_label, model_name = object_type.split('.')
+
+        # Get the model class dynamically
+        model = apps.get_model(app_label, model_name)
+
+        # Import the module where index classes are defined (adjust if needed)
+        index_module = dynamic_import(f"{app_label}.search.{model.__name__}Index")
+
+        # Retrieve the index class fields tuple
+        fields = getattr(index_module, "fields", None)
+
+        # Extract the field names list from the tuple
+        field_names = [field[0] for field in fields]
+
+        return model, field_names
+
+    except (LookupError, ModuleNotFoundError, AttributeError, ValueError) as e:
+        return None, None
+
+def _validate_model_instance_fields(instance, fields, value):
+    """
+    Validate the model instance fields against the value.
+
+    :param instance: The model instance.
+    :param fields: The fields of the model instance.
+    :param value: The value to validate against the model instance fields.
+    :return: fields list passed validation
+    """
+    errors = {}
+
+    # Set provided values to the instance fields
+    for field in fields:
+        if hasattr(instance, field):
+            # get the field type
+            field_cls = instance._meta.get_field(field).__class__
+
+            field_value = _convert_field_value(field_cls, value)
+            setattr(instance, field, field_value)
+
+    # Attempt to validate the instance
+    try:
+        instance.full_clean(validate_unique=False)
+    except DjangoValidationError as e:
+        errors = e.message_dict
+    return errors
+
+def _convert_field_value(field_cls, value):
+    """
+    Return the converted field value based on the field type.
+    """
+    try:
+        if issubclass(field_cls, (models.FloatField, models.DecimalField)):
+            return float(value)
+        if issubclass(field_cls, models.IntegerField):
+            return int(value)
+    except ValueError:
+        pass
+
+    return value
 
 
 class ObjectStateView(views.APIView):
@@ -60,6 +137,52 @@ class ObjectStateView(views.APIView):
             return ("site",)
         return ()
 
+    def _search_queryset(self, request):
+        """Search for objects according to object type using search index classes."""
+        object_type = request.GET.get("object_type", None)
+        object_id = request.GET.get("id", None)
+        query = request.GET.get("q", None)
+
+        if not object_type:
+            raise ValidationError("object_type parameter is required")
+
+        if not object_id and not query:
+            raise ValidationError("id or q parameter is required")
+
+        model, fields = _get_index_class_fields(object_type)
+
+        if object_id:
+            queryset = model.objects.filter(id=object_id)
+        else:
+            q = Q()
+
+            invalid_fields = _validate_model_instance_fields(model(), fields, query)
+
+            fields = [field for field in fields if field not in invalid_fields]
+
+            for field in fields:
+                q |= Q(**{f"{field}__exact": query})  # Exact match
+
+            try:
+                queryset = model.objects.filter(q)
+            except DjangoValidationError as e:
+                queryset = model.objects.none()
+                pass
+
+            lookups = self._get_lookups(str(model).lower())
+
+            if lookups:
+                queryset = queryset.prefetch_related(*lookups)
+
+            additional_attributes_query_filter = (
+                self._additional_attributes_query_filter()
+            )
+
+            if additional_attributes_query_filter:
+                queryset = queryset.filter(**additional_attributes_query_filter)
+
+        return queryset
+
     def get(self, request, *args, **kwargs):
         """
         Return a JSON with object_type, object_change_id, and object.
@@ -70,57 +193,18 @@ class ObjectStateView(views.APIView):
         If ID is not provided, use the q parameter for searching.
         Lookup is iexact
         """
-        object_type = self.request.query_params.get("object_type", None)
 
-        if not object_type:
-            raise ValidationError("object_type parameter is required")
-
-        app_label, model_name = object_type.split(".")
-        object_content_type = NetBoxType.objects.get_by_natural_key(
-            app_label, model_name
-        )
-        object_type_model = object_content_type.model_class()
-
-        object_id = self.request.query_params.get("id", None)
-
-        if object_id:
-            queryset = object_type_model.objects.filter(id=object_id)
-        else:
-            lookup = LookupTypes.EXACT
-            search_value = self.request.query_params.get("q", None)
-            if not search_value:
-                raise ValidationError("id or q parameter is required")
-
-            query_filter = Q(**{f"value__{lookup}": search_value})
-            query_filter &= Q(object_type__in=[object_content_type])
-
-            object_id_in_cached_value = CachedValue.objects.filter(
-                query_filter
-            ).values_list("object_id", flat=True)
-
-            queryset = object_type_model.objects.filter(
-                id__in=object_id_in_cached_value
+        try:
+            queryset = self._search_queryset(request)
+        except (FieldError, ValueError) as e:
+            return Response(
+                {"errors": ["invalid additional attributes provided"]},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-
-            lookups = self._get_lookups(str(object_type_model).lower())
-
-            if lookups:
-                queryset = queryset.prefetch_related(*lookups)
-
-            additional_attributes_query_filter = (
-                self._additional_attributes_query_filter()
-            )
-
-            if additional_attributes_query_filter:
-                try:
-                    queryset = queryset.filter(**additional_attributes_query_filter)
-                except (FieldError, ValueError):
-                    return Response(
-                        {"errors": ["invalid additional attributes provided"]},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
 
         self.check_object_permissions(request, queryset)
+
+        object_type = request.GET.get("object_type", None)
 
         serializer = ObjectStateSerializer(
             queryset,
@@ -412,6 +496,8 @@ class ApplyChangeSetView(views.APIView):
         change_set = request_serializer.data.get("change_set", None)
 
         ipaddress_assigned_object = self._ipaddress_assigned_object(change_set)
+
+        print(f"ipaddress_assigned_object: {ipaddress_assigned_object}")
 
         try:
             with transaction.atomic():
