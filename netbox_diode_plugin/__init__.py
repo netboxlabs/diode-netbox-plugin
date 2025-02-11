@@ -15,7 +15,7 @@ class NetBoxDiodePluginConfig(PluginConfig):
     description = "Diode plugin for NetBox."
     version = version_semver()
     base_url = "diode"
-    min_version = "3.7.2"
+    min_version = "4.2.3"
     default_settings = {
         # Auto-provision users for Diode plugin
         "auto_provision_users": False,
