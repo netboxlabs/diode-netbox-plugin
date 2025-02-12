@@ -19,7 +19,7 @@ from netaddr import IPNetwork
 from rest_framework import status
 from users.models import Token
 from utilities.testing import APITestCase
-from virtualization.models import Cluster, ClusterType
+from virtualization.models import Cluster, ClusterType, VMInterface, VirtualMachine
 
 User = get_user_model()
 
@@ -144,6 +144,12 @@ class BaseApplyChangeSet(APITestCase):
             ),
         )
         IPAddress.objects.bulk_create(self.ip_addresses)
+
+        self.virtual_machines = (
+            VirtualMachine(name="Virtual Machine 1"),
+            VirtualMachine(name="Virtual Machine 2"),
+        )
+        VirtualMachine.objects.bulk_create(self.virtual_machines)
 
         self.url = "/netbox/api/plugins/diode/apply-change-set/"
 
@@ -982,3 +988,110 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         self.assertEqual(response.json().get("result"), "success")
         self.assertEqual(device_updated.name, self.devices[0].name)
         self.assertEqual(device_updated.primary_ip4, self.ip_addresses[0])
+
+    def test_create_and_update_interface_with_compat_mac_address_field(self):
+        """Test create interface using backward compatible mac_address field."""
+        payload = {
+            "change_set_id": str(uuid.uuid4()),
+            "change_set": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.interface",
+                    "object_id": None,
+                    "data": {
+                        "name": "Interface 6",
+                        "type": "virtual",
+                        "mac_address": "00:00:00:00:00:01",
+                        "device": {
+                            "id": self.devices[1].pk,
+                        },
+                    },
+                },
+            ],
+        }
+
+        response = self.send_request(payload)        
+        self.assertEqual(response.json().get("result"), "success")
+        self.assertEqual(Interface.objects.count(), 6)
+        interface_id = Interface.objects.order_by('-id').first().id
+        self.assertEqual(Interface.objects.get(id=interface_id).mac_address, "00:00:00:00:00:01")
+
+        payload = {
+            "change_set_id": str(uuid.uuid4()),
+            "change_set": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "update",
+                    "object_version": None,
+                    "object_type": "dcim.interface",
+                    "object_id": interface_id,
+                    "data": {
+                        "name": "Interface 6",
+                        "mac_address": "00:00:00:00:00:02",
+                        "type": "virtual",
+                        "device": {
+                            "id": self.devices[1].pk,
+                        },
+                    },
+                },
+            ],
+        }
+        response = self.send_request(payload)        
+        self.assertEqual(response.json().get("result"), "success")
+        self.assertEqual(response.json().get("result"), "success")
+        self.assertEqual(Interface.objects.count(), 6)
+        self.assertEqual(Interface.objects.get(id=interface_id).mac_address, "00:00:00:00:00:02")
+
+    def test_create_and_update_vminterface_with_compat_mac_address_field(self):
+        """Test create vminterface using backward compatible mac_address field."""
+        payload = {
+            "change_set_id": str(uuid.uuid4()),
+            "change_set": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "virtualization.vminterface",
+                    "object_id": None,
+                    "data": {
+                        "name": "VM Interface 1",
+                        "mac_address": "00:00:00:00:00:01",
+                        "virtual_machine": {
+                            "id": self.virtual_machines[0].pk,
+                        },
+                    },
+                },
+            ],
+        }
+
+        response = self.send_request(payload)        
+        self.assertEqual(response.json().get("result"), "success")
+        self.assertEqual(VMInterface.objects.count(), 1)
+        interface_id = VMInterface.objects.order_by('-id').first().id
+        self.assertEqual(VMInterface.objects.get(id=interface_id).mac_address, "00:00:00:00:00:01")
+
+        payload = {
+            "change_set_id": str(uuid.uuid4()),
+            "change_set": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "update",
+                    "object_version": None,
+                    "object_type": "virtualization.vminterface",
+                    "object_id": interface_id,
+                    "data": {
+                        "name": "VM Interface 1",
+                        "mac_address": "00:00:00:00:00:02",
+                        "virtual_machine": {
+                            "id": self.virtual_machines[0].pk,
+                        },
+                    },
+                },
+            ],
+        }
+        response = self.send_request(payload)        
+        self.assertEqual(response.json().get("result"), "success")
+        self.assertEqual(VMInterface.objects.count(), 1)
+        self.assertEqual(VMInterface.objects.get(id=interface_id).mac_address, "00:00:00:00:00:02")
