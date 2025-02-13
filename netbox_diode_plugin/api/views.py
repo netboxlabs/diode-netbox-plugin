@@ -12,7 +12,7 @@ if version.parse(settings.VERSION).major >= 4:
 else:
     from django.contrib.contenttypes.models import ContentType as NetBoxType
 
-from django.core.exceptions import FieldDoesNotExist, FieldError
+from django.core.exceptions import FieldError
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models, transaction
 from django.db.models import Q
@@ -23,8 +23,7 @@ from rest_framework.response import Response
 from utilities.api import get_serializer_for_model
 
 from netbox_diode_plugin.api.permissions import IsDiodeReader, IsDiodeWriter
-from netbox_diode_plugin.api.serializers import (
-    ApplyChangeSetRequestSerializer, ObjectStateSerializer)
+from netbox_diode_plugin.api.serializers import ApplyChangeSetRequestSerializer, ObjectStateSerializer
 
 
 def dynamic_import(name):
@@ -61,7 +60,7 @@ def _get_index_class_fields(object_type):
 
         return model, field_names
 
-    except (LookupError, ModuleNotFoundError, AttributeError, ValueError) as e:
+    except (LookupError, ModuleNotFoundError, AttributeError, ValueError):
         return None, None
 
 def _validate_model_instance_fields(instance, fields, value):
@@ -86,21 +85,22 @@ def _validate_model_instance_fields(instance, fields, value):
 
     # Attempt to validate the instance
     try:
-        instance.full_clean(validate_unique=False)
+        instance.clean_fields()
     except DjangoValidationError as e:
         errors = e.message_dict
     return errors
 
 def _convert_field_value(field_cls, value):
-    """
-    Return the converted field value based on the field type.
-    """
+    """Return the converted field value based on the field type."""
+    if value is None:
+        return value
+
     try:
         if issubclass(field_cls, (models.FloatField, models.DecimalField)):
             return float(value)
         if issubclass(field_cls, models.IntegerField):
             return int(value)
-    except ValueError:
+    except (ValueError, TypeError):
         pass
 
     return value
@@ -165,7 +165,7 @@ class ObjectStateView(views.APIView):
 
             try:
                 queryset = model.objects.filter(q)
-            except DjangoValidationError as e:
+            except DjangoValidationError:
                 queryset = model.objects.none()
                 pass
 
@@ -193,10 +193,9 @@ class ObjectStateView(views.APIView):
         If ID is not provided, use the q parameter for searching.
         Lookup is iexact
         """
-
         try:
             queryset = self._search_queryset(request)
-        except (FieldError, ValueError) as e:
+        except (FieldError, ValueError):
             return Response(
                 {"errors": ["invalid additional attributes provided"]},
                 status=status.HTTP_400_BAD_REQUEST,
