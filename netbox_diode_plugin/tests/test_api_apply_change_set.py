@@ -19,7 +19,12 @@ from netaddr import IPNetwork
 from rest_framework import status
 from users.models import Token
 from utilities.testing import APITestCase
-from virtualization.models import Cluster, ClusterType, VMInterface, VirtualMachine
+from virtualization.models import (
+    Cluster,
+    ClusterType,
+    VirtualMachine,
+    VMInterface,
+)
 
 User = get_user_model()
 
@@ -1012,7 +1017,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             ],
         }
 
-        response = self.send_request(payload)        
+        response = self.send_request(payload)
         self.assertEqual(response.json().get("result"), "success")
         self.assertEqual(Interface.objects.count(), 6)
         interface_id = Interface.objects.order_by('-id').first().id
@@ -1038,7 +1043,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
                 },
             ],
         }
-        response = self.send_request(payload)        
+        response = self.send_request(payload)
         self.assertEqual(response.json().get("result"), "success")
         self.assertEqual(response.json().get("result"), "success")
         self.assertEqual(Interface.objects.count(), 6)
@@ -1066,7 +1071,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             ],
         }
 
-        response = self.send_request(payload)        
+        response = self.send_request(payload)
         self.assertEqual(response.json().get("result"), "success")
         self.assertEqual(VMInterface.objects.count(), 1)
         interface_id = VMInterface.objects.order_by('-id').first().id
@@ -1091,7 +1096,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
                 },
             ],
         }
-        response = self.send_request(payload)        
+        response = self.send_request(payload)
         self.assertEqual(response.json().get("result"), "success")
         self.assertEqual(VMInterface.objects.count(), 1)
         self.assertEqual(VMInterface.objects.get(id=interface_id).mac_address, "00:00:00:00:00:02")

@@ -471,10 +471,13 @@ class ApplyChangeSetView(views.APIView):
             object_data["assigned_object_type"] = assigned_object_type
             object_data["assigned_object_id"] = assigned_object_instance.id
         return None
-    
+
     def _handle_interface_mac_address_compat(self,  instance, object_type: str, object_data: dict) -> Optional[Dict[str, Any]]:
-        """Handle interface mac address backward compatibility"""
-        # TODO(ltucker): deprecate.  
+        """Handle interface mac address backward compatibility."""
+        # TODO(ltucker): deprecate.
+        if object_type != "dcim.interface" and object_type != "virtualization.vminterface":
+            return None
+
         if object_data.get("mac_address"):
             mac_address_value = object_data.pop("mac_address")
             mac_address_instance, _ = instance.mac_addresses.get_or_create(
@@ -547,11 +550,10 @@ class ApplyChangeSetView(views.APIView):
                         )
                         continue
 
-                    if object_type == "dcim.interface" or object_type == "virtualization.vminterface":
-                        errors = self._handle_interface_mac_address_compat(serializer.instance, object_type, object_data)
-                        if errors is not None:
-                            serializer_errors.append({"change_id": change_id, **errors})
-                            continue
+                    errors = self._handle_interface_mac_address_compat(serializer.instance, object_type, object_data)
+                    if errors is not None:
+                        serializer_errors.append({"change_id": change_id, **errors})
+                        continue
                 if len(serializer_errors) > 0:
                     raise ApplyChangeSetException
         except ApplyChangeSetException:
