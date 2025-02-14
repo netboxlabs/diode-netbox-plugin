@@ -14,7 +14,7 @@ from dcim.models import (
     Site,
 )
 from django.contrib.auth import get_user_model
-from ipam.models import ASN, RIR, IPAddress
+from ipam.models import ASN, RIR, IPAddress, Prefix
 from netaddr import IPNetwork
 from rest_framework import status
 from users.models import Token
@@ -1100,3 +1100,57 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         self.assertEqual(response.json().get("result"), "success")
         self.assertEqual(VMInterface.objects.count(), 1)
         self.assertEqual(VMInterface.objects.get(id=interface_id).mac_address, "00:00:00:00:00:02")
+
+    def test_create_prefix_with_site_stored_as_scope(self):
+        """Test create prefix with site stored as scope."""
+        payload = {
+            "change_set_id": str(uuid.uuid4()),
+            "change_set": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "ipam.prefix",
+                    "object_id": None,
+                    "data": {
+                        "prefix": "192.168.0.0/24",
+                        "site": {
+                            "name": self.sites[0].name,
+                        },
+                    },
+                },
+            ],
+        }
+        response = self.send_request(payload)
+
+        self.assertEqual(response.json().get("result"), "success")
+        self.assertEqual(Prefix.objects.get(prefix="192.168.0.0/24").scope, self.sites[0])
+
+    def test_create_prefix_with_unknown_site_fails(self):
+        """Test create prefix with unknown site fails."""
+        payload = {
+            "change_set_id": str(uuid.uuid4()),
+            "change_set": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "ipam.prefix",
+                    "object_id": None,
+                    "data": {
+                        "prefix": "192.168.0.0/24",
+                        "site": {
+                            "name": "unknown site"
+                        },
+                    },
+                },
+            ],
+        }
+        response = self.send_request(payload, status_code=status.HTTP_400_BAD_REQUEST)
+
+        self.assertEqual(response.json().get("result"), "failed")
+        self.assertIn(
+            'site with name unknown site does not exist',
+            response.json().get("errors")[0].get("site"),
+        )
+        self.assertFalse(Prefix.objects.filter(prefix="192.168.0.0/24").exists())

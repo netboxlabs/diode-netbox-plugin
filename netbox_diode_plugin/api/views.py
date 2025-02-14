@@ -368,17 +368,6 @@ class ApplyChangeSetView(views.APIView):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    def _ipaddress_assigned_object(self, change_set: list) -> list:
-        """Retrieve the IP address assigned object from the change set."""
-        ipaddress_assigned_object = [
-            change.get("data").get("assigned_object", None)
-            for change in change_set
-            if change.get("object_type") == "ipam.ipaddress"
-            and change.get("data", {}).get("assigned_object", None)
-        ]
-
-        return ipaddress_assigned_object
-
     def _retrieve_assigned_object_interface_device_lookup_args(
         self, device: dict
     ) -> dict:
@@ -421,17 +410,17 @@ class ApplyChangeSetView(views.APIView):
                 )
         return args
 
-    def _handle_ipaddress_assigned_object(
-        self, object_data: dict, ipaddress_assigned_object: list
-    ) -> Optional[Dict[str, Any]]:
+    def _handle_ipaddress_assigned_object(self, object_data: dict) -> Optional[Dict[str, Any]]:
         """Handle IPAM IP address assigned object."""
-        if any(ipaddress_assigned_object):
-            assigned_object_keys = list(ipaddress_assigned_object[0].keys())
+        ipaddress_assigned_object = object_data.get("assigned_object", None)
+
+        if ipaddress_assigned_object is not None:
+            assigned_object_keys = list(ipaddress_assigned_object.keys())
             model_name = assigned_object_keys[0]
             assigned_object_type = self._get_assigned_object_type(model_name)
             assigned_object_model = self._get_object_type_model(assigned_object_type)
             assigned_object_properties_dict = dict(
-                ipaddress_assigned_object[0][model_name].items()
+                ipaddress_assigned_object[model_name].items()
             )
 
             if len(assigned_object_properties_dict) == 0:
@@ -464,7 +453,7 @@ class ApplyChangeSetView(views.APIView):
                 )
             except assigned_object_model.DoesNotExist:
                 return {
-                    "assigned_object": f"Assigned object with name {ipaddress_assigned_object[0][model_name]} does not exist"
+                    "assigned_object": f"Assigned object with name {ipaddress_assigned_object[model_name]} does not exist"
                 }
 
             object_data.pop("assigned_object")
@@ -486,6 +475,42 @@ class ApplyChangeSetView(views.APIView):
             instance.primary_mac_address = mac_address_instance
             instance.save()
         return None
+
+    def _handle_scope(self, object_data: dict) -> Optional[Dict[str, Any]]:
+        """Handle scope object."""
+        if object_data.get("site"):
+            site = object_data.pop("site")
+            object_data["scope_type"] = "dcim.site"
+            scope_type_model = self._get_object_type_model("dcim.site")
+            site_id = site.get("id", None)
+            if site_id is None:
+                try:
+                    site = scope_type_model.objects.get(
+                        name=site.get("name")
+                    )
+                    site_id = site.id
+                except scope_type_model.DoesNotExist:
+                    return {"site": f"site with name {site.get('name')} does not exist"}
+
+            object_data["scope_id"] = site_id
+
+        return None
+
+    def _transform_object_data(self, object_type: str, object_data: dict) -> Optional[Dict[str, Any]]:
+        """Transform object data."""
+        errors = None
+
+        match object_type:
+            case "ipam.ipaddress":
+                errors = self._handle_ipaddress_assigned_object(object_data)
+            case "ipam.prefix":
+                errors = self._handle_scope(object_data)
+            case "virtualization.cluster":
+                errors = self._handle_scope(object_data)
+            case _:
+                pass
+
+        return errors
 
     def post(self, request, *args, **kwargs):
         """
@@ -509,8 +534,6 @@ class ApplyChangeSetView(views.APIView):
 
         change_set = request_serializer.data.get("change_set", None)
 
-        ipaddress_assigned_object = self._ipaddress_assigned_object(change_set)
-
         try:
             with transaction.atomic():
                 for change in change_set:
@@ -520,14 +543,7 @@ class ApplyChangeSetView(views.APIView):
                     object_data = change.get("data", None)
                     object_id = change.get("object_id", None)
 
-                    errors = None
-                    if (
-                        any(ipaddress_assigned_object)
-                        and object_type == "ipam.ipaddress"
-                    ):
-                        errors = self._handle_ipaddress_assigned_object(
-                            object_data, ipaddress_assigned_object
-                        )
+                    errors = self._transform_object_data(object_type, object_data)
 
                     if errors is not None:
                         serializer_errors.append({"change_id": change_id, **errors})
