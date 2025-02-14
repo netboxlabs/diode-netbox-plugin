@@ -275,14 +275,27 @@ class DiodeInterfaceSerializer(InterfaceSerializer):
 class DiodePrefixSerializer(PrefixSerializer):
     """Diode Prefix Serializer."""
 
-    site = DiodeSiteSerializer()
     status = serializers.CharField()
+    site = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         """Meta class."""
 
         model = PrefixSerializer.Meta.model
-        fields = PrefixSerializer.Meta.fields
+        fields = PrefixSerializer.Meta.fields + ["site"]
+
+    def get_site(self, obj):
+        """Get the site from the instance scope."""
+        if obj.scope is None:
+            return None
+
+        scope_model_meta = obj.scope_type.model_class()._meta
+        if scope_model_meta.app_label == "dcim" and scope_model_meta.model_name == "site":
+            serializer = get_serializer_for_model(obj.scope)
+            context = {'request': self.context['request']}
+            return serializer(obj.scope, nested=True, context=context).data
+
+        return None
 
 
 class DiodeClusterGroupSerializer(ClusterGroupSerializer):
@@ -311,13 +324,26 @@ class DiodeClusterSerializer(ClusterSerializer):
     type = DiodeClusterTypeSerializer()
     group = DiodeClusterGroupSerializer()
     status = serializers.CharField()
-    site = DiodeSiteSerializer()
+    site = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         """Meta class."""
 
         model = ClusterSerializer.Meta.model
-        fields = ClusterSerializer.Meta.fields
+        fields = ClusterSerializer.Meta.fields + ["site"]
+
+    def get_site(self, obj):
+        """Get the site from the instance scope."""
+        if obj.scope is None:
+            return None
+
+        scope_model_meta = obj.scope_type.model_class()._meta
+        if scope_model_meta.app_label == "dcim" and scope_model_meta.model_name == "site":
+            serializer = get_serializer_for_model(obj.scope)
+            context = {'request': self.context['request']}
+            return serializer(obj.scope, nested=True, context=context).data
+
+        return None
 
 
 class DiodeVirtualMachineSerializer(VirtualMachineSerializer):

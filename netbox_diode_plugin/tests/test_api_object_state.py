@@ -12,7 +12,6 @@ from dcim.models import (
     Site,
 )
 from django.contrib.auth import get_user_model
-from django.core.management import call_command
 from ipam.models import IPAddress
 from netaddr import IPNetwork
 from rest_framework import status
@@ -154,9 +153,6 @@ class ObjectStateTestCase(APITestCase):
         )
         IPAddress.objects.bulk_create(cls.ip_addresses)
 
-        # call_command is because the searching using q parameter uses CachedValue to get the object ID
-        call_command("reindex")
-
     def setUp(self):
         """Set up test."""
         self.root_user = User.objects.create_user(
@@ -182,7 +178,7 @@ class ObjectStateTestCase(APITestCase):
 
     def test_return_object_state_using_id(self):
         """Test searching using id parameter - Root User."""
-        site_id = Site.objects.get(name=self.sites[0]).id
+        site_id = Site.objects.get(name=self.sites[0].name).id
         query_parameters = {"id": site_id, "object_type": "dcim.site"}
 
         response = self.client.get(self.url, query_parameters, **self.root_header)
