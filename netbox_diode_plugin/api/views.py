@@ -520,7 +520,7 @@ class ApplyChangeSetView(views.APIView):
         if object_data.get("site"):
             site = object_data.pop("site")
             scope_type = "dcim.site"
-            scope_type_model, object_type_model_class = self._get_object_type_model(scope_type)
+            _, object_type_model_class = self._get_object_type_model(scope_type)
             object_data["scope_type"] = scope_type
             site_id = site.get("id", None)
             if site_id is None:
