@@ -259,12 +259,12 @@ class ApplyChangeSetView(views.APIView):
         }
         return assignable_object_types.get(model_name.lower(), None)
 
-    def _add_nested_opts(self, opts, key, value):
+    def _add_nested_opts(self, fields, key, value):
         if isinstance(value, dict):
             for nested_key, nested_value in value.items():
-                self._add_nested_opts(opts, f"{key}__{nested_key}", nested_value)
+                self._add_nested_opts(fields, f"{key}__{nested_key}", nested_value)
         elif not isinstance(value, list):
-            opts[key] = value
+            fields[key] = value
 
     def _get_serializer(
         self,
@@ -277,92 +277,95 @@ class ApplyChangeSetView(views.APIView):
         object_type_model, object_type_model_class = self._get_object_type_model(object_type)
 
         if change_type == "create":
-            # Get object data fields that are not dictionaries or lists
-            opts = {}
-            for key, value in object_data.items():
-                self._add_nested_opts(opts, key, value)
+            return self._get_serializer_to_create(object_data, object_type, object_type_model, object_type_model_class)
 
-            match object_type:
-                case "dcim.interface" | "virtualization.vminterface":
-                    mac_address = opts.pop("mac_address", None)
-                    if mac_address is not None:
-                        opts["primary_mac_address__mac_address"] = mac_address
-                case "ipam.ipaddress":
-                    opts.pop("assigned_object_type")
-                    opts["assigned_object_type_id"] = opts.pop("assigned_object_id")
-                case "ipam.prefix" | "virtualization.cluster":
-                    opts["scope_type"] = object_type_model
+        if change_type == "update":
+            return self._get_serializer_to_update(object_data, object_id, object_type, object_type_model_class)
 
-            # Check if the object already exists
-            try:
-                instance = object_type_model_class.objects.get(**opts)
-                return get_serializer_for_model(object_type_model_class)(
-                    instance, data=object_data, context={"request": self.request, "pk": instance.pk}
-                )
-            except object_type_model_class.DoesNotExist:
-                pass
+        raise ValidationError("Invalid change_type")
 
-            serializer = get_serializer_for_model(object_type_model_class)(
-                data=object_data, context={"request": self.request}
+    def _get_serializer_to_create(self, object_data, object_type, object_type_model, object_type_model_class):
+        # Get object data fields that are not dictionaries or lists
+        fields = self._get_fields_to_find_existing_objects(object_data, object_type, object_type_model)
+        # Check if the object already exists
+        try:
+            instance = object_type_model_class.objects.get(**fields)
+            return get_serializer_for_model(object_type_model_class)(
+                instance, data=object_data, context={"request": self.request, "pk": instance.pk}
             )
-        elif change_type == "update":
-            lookups = ()
-            args = {}
-
-            primary_ip_to_set: Optional[dict] = None
-
-            if object_id:
-                args["id"] = object_id
-            elif object_type == "dcim.device" and any(
-                object_data.get(attr) for attr in ("primary_ip4", "primary_ip6")
-            ):
-                ip_address = self._retrieve_primary_ip_address(
-                    "primary_ip4", object_data
-                )
-
-                if ip_address is None:
-                    ip_address = self._retrieve_primary_ip_address(
-                        "primary_ip6", object_data
-                    )
-
-                if ip_address is None:
-                    raise ValidationError("primary IP not found")
-
-                if ip_address:
-                    primary_ip_to_set = {
-                        "id": ip_address.id,
-                        "family": ip_address.family,
-                    }
-
-                lookups = ("site",)
-                args["name"] = object_data.get("name")
-                args["site__name"] = object_data.get("site").get("name")
-            else:
-                raise ValidationError("object_id parameter is required")
-
-            try:
-                instance = object_type_model_class.objects.prefetch_related(*lookups).get(
-                    **args
-                )
-                if object_type == "dcim.device" and primary_ip_to_set:
-                    object_data = {
-                        "id": instance.id,
-                        "device_type": instance.device_type.id,
-                        "role": instance.role.id,
-                        "site": instance.site.id,
-                        f'primary_ip{primary_ip_to_set.get("family")}': primary_ip_to_set.get(
-                            "id"
-                        ),
-                    }
-            except object_type_model_class.DoesNotExist:
-                raise ValidationError(f"object with id {object_id} does not exist")
-
-            serializer = get_serializer_for_model(object_type_model_class)(
-                instance, data=object_data, context={"request": self.request}
-            )
-        else:
-            raise ValidationError("Invalid change_type")
+        except object_type_model_class.DoesNotExist:
+            pass
+        serializer = get_serializer_for_model(object_type_model_class)(
+            data=object_data, context={"request": self.request}
+        )
         return serializer
+
+    def _get_serializer_to_update(self, object_data, object_id, object_type, object_type_model_class):
+        lookups = ()
+        fields = {}
+        primary_ip_to_set: Optional[dict] = None
+        if object_id:
+            fields["id"] = object_id
+        elif object_type == "dcim.device" and any(
+                object_data.get(attr) for attr in ("primary_ip4", "primary_ip6")
+        ):
+            ip_address = self._retrieve_primary_ip_address(
+                "primary_ip4", object_data
+            )
+
+            if ip_address is None:
+                ip_address = self._retrieve_primary_ip_address(
+                    "primary_ip6", object_data
+                )
+
+            if ip_address is None:
+                raise ValidationError("primary IP not found")
+
+            if ip_address:
+                primary_ip_to_set = {
+                    "id": ip_address.id,
+                    "family": ip_address.family,
+                }
+
+            lookups = ("site",)
+            fields["name"] = object_data.get("name")
+            fields["site__name"] = object_data.get("site").get("name")
+        else:
+            raise ValidationError("object_id parameter is required")
+        try:
+            instance = object_type_model_class.objects.prefetch_related(*lookups).get(**fields)
+            if object_type == "dcim.device" and primary_ip_to_set:
+                object_data = {
+                    "id": instance.id,
+                    "device_type": instance.device_type.id,
+                    "role": instance.role.id,
+                    "site": instance.site.id,
+                    f'primary_ip{primary_ip_to_set.get("family")}': primary_ip_to_set.get(
+                        "id"
+                    ),
+                }
+        except object_type_model_class.DoesNotExist:
+            raise ValidationError(f"object with id {object_id} does not exist")
+        serializer = get_serializer_for_model(object_type_model_class)(
+            instance, data=object_data, context={"request": self.request}
+        )
+        return serializer
+
+    def _get_fields_to_find_existing_objects(self, object_data, object_type, object_type_model):
+        fields = {}
+        for key, value in object_data.items():
+            self._add_nested_opts(fields, key, value)
+        match object_type:
+            case "dcim.interface" | "virtualization.vminterface":
+                mac_address = fields.pop("mac_address", None)
+                if mac_address is not None:
+                    fields["primary_mac_address__mac_address"] = mac_address
+            case "ipam.ipaddress":
+                fields.pop("assigned_object_type")
+                fields["assigned_object_type_id"] = fields.pop("assigned_object_id")
+            case "ipam.prefix" | "virtualization.cluster":
+                fields["scope_type"] = object_type_model
+        return fields
 
     def _retrieve_primary_ip_address(self, primary_ip_attr: str, object_data: dict):
         """Retrieve the primary IP address object."""
