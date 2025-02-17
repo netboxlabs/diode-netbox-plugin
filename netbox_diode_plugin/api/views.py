@@ -250,7 +250,7 @@ class ApplyChangeSetView(views.APIView):
         object_content_type = NetBoxType.objects.get_by_natural_key(
             app_label, model_name
         )
-        return object_content_type.model_class()
+        return object_content_type, object_content_type.model_class()
 
     def _get_assigned_object_type(self, model_name: str):
         """Get the object type model from applied IPAddress assigned object."""
@@ -259,18 +259,50 @@ class ApplyChangeSetView(views.APIView):
         }
         return assignable_object_types.get(model_name.lower(), None)
 
+    def _add_nested_opts(self, opts, key, value):
+        if isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                self._add_nested_opts(opts, f"{key}__{nested_key}", nested_value)
+        elif not isinstance(value, list):
+            opts[key] = value
+
     def _get_serializer(
         self,
         change_type: str,
         object_id: int,
         object_type: str,
         object_data: dict,
-        change_set_id: str,
     ):
         """Get the serializer for the object type."""
-        object_type_model = self._get_object_type_model(object_type)
+        object_type_model, object_type_model_class = self._get_object_type_model(object_type)
+
         if change_type == "create":
-            serializer = get_serializer_for_model(object_type_model)(
+            # Get object data fields that are not dictionaries or lists
+            opts = {}
+            for key, value in object_data.items():
+                self._add_nested_opts(opts, key, value)
+
+            match object_type:
+                case "dcim.interface" | "virtualization.vminterface":
+                    mac_address = opts.pop("mac_address", None)
+                    if mac_address is not None:
+                        opts["primary_mac_address__mac_address"] = mac_address
+                case "ipam.ipaddress":
+                    opts.pop("assigned_object_type")
+                    opts["assigned_object_type_id"] = opts.pop("assigned_object_id")
+                case "ipam.prefix" | "virtualization.cluster":
+                    opts["scope_type"] = object_type_model
+
+            # Check if the object already exists
+            try:
+                instance = object_type_model_class.objects.get(**opts)
+                return get_serializer_for_model(object_type_model_class)(
+                    instance, data=object_data, context={"request": self.request, "pk": instance.pk}
+                )
+            except object_type_model_class.DoesNotExist:
+                pass
+
+            serializer = get_serializer_for_model(object_type_model_class)(
                 data=object_data, context={"request": self.request}
             )
         elif change_type == "update":
@@ -309,7 +341,7 @@ class ApplyChangeSetView(views.APIView):
                 raise ValidationError("object_id parameter is required")
 
             try:
-                instance = object_type_model.objects.prefetch_related(*lookups).get(
+                instance = object_type_model_class.objects.prefetch_related(*lookups).get(
                     **args
                 )
                 if object_type == "dcim.device" and primary_ip_to_set:
@@ -322,10 +354,10 @@ class ApplyChangeSetView(views.APIView):
                             "id"
                         ),
                     }
-            except object_type_model.DoesNotExist:
+            except object_type_model_class.DoesNotExist:
                 raise ValidationError(f"object with id {object_id} does not exist")
 
-            serializer = get_serializer_for_model(object_type_model)(
+            serializer = get_serializer_for_model(object_type_model_class)(
                 instance, data=object_data, context={"request": self.request}
             )
         else:
@@ -351,8 +383,8 @@ class ApplyChangeSetView(views.APIView):
         interface_device = interface.get("device")
         if interface_device is None:
             return None
-
-        ip_address_object = self._get_object_type_model("ipam.ipaddress").objects.get(
+        object_type_mode, object_type_model_class = self._get_object_type_model("ipam.ipaddress")
+        ip_address_object = object_type_model_class.objects.get(
             address=ip_address.get("address"),
             interface__name=interface.get("name"),
             interface__device__name=interface_device.get("name"),
@@ -422,7 +454,7 @@ class ApplyChangeSetView(views.APIView):
             assigned_object_keys = list(ipaddress_assigned_object.keys())
             model_name = assigned_object_keys[0]
             assigned_object_type = self._get_assigned_object_type(model_name)
-            assigned_object_model = self._get_object_type_model(assigned_object_type)
+            assigned_object_model, object_type_model_class = self._get_object_type_model(assigned_object_type)
             assigned_object_properties_dict = dict(
                 ipaddress_assigned_object[model_name].items()
             )
@@ -453,9 +485,9 @@ class ApplyChangeSetView(views.APIView):
                         return {"assigned_object": error}
 
                 assigned_object_instance = (
-                    assigned_object_model.objects.prefetch_related(*lookups).get(**args)
+                    object_type_model_class.objects.prefetch_related(*lookups).get(**args)
                 )
-            except assigned_object_model.DoesNotExist:
+            except object_type_model_class.DoesNotExist:
                 return {
                     "assigned_object": f"Assigned object with name {ipaddress_assigned_object[model_name]} does not exist"
                 }
@@ -484,16 +516,17 @@ class ApplyChangeSetView(views.APIView):
         """Handle scope object."""
         if object_data.get("site"):
             site = object_data.pop("site")
-            object_data["scope_type"] = "dcim.site"
-            scope_type_model = self._get_object_type_model("dcim.site")
+            scope_type = "dcim.site"
+            scope_type_model, object_type_model_class = self._get_object_type_model(scope_type)
+            object_data["scope_type"] = scope_type
             site_id = site.get("id", None)
             if site_id is None:
                 try:
-                    site = scope_type_model.objects.get(
+                    site = object_type_model_class.objects.get(
                         name=site.get("name")
                     )
                     site_id = site.id
-                except scope_type_model.DoesNotExist:
+                except object_type_model_class.DoesNotExist:
                     return {"site": f"site with name {site.get('name')} does not exist"}
 
             object_data["scope_id"] = site_id
@@ -553,9 +586,11 @@ class ApplyChangeSetView(views.APIView):
                         serializer_errors.append({"change_id": change_id, **errors})
                         continue
 
-                    serializer = self._get_serializer(
-                        change_type, object_id, object_type, object_data, change_set_id
-                    )
+                    serializer = self._get_serializer(change_type, object_id, object_type, object_data)
+
+                    # Skip creating an object if it already exists
+                    if change_type == "create" and serializer.context.get("pk"):
+                        continue
 
                     if serializer.is_valid():
                         serializer.save()
