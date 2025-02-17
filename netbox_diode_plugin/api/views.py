@@ -49,6 +49,10 @@ def _get_index_class_fields(object_type):
         # Get the model class dynamically
         model = apps.get_model(app_label, model_name)
 
+        # TagIndex registered in the netbox_diode_plugin
+        if app_label == "extras" and model_name == "tag":
+            app_label = "netbox_diode_plugin"
+
         # Import the module where index classes are defined (adjust if needed)
         index_module = dynamic_import(f"{app_label}.search.{model.__name__}Index")
 
