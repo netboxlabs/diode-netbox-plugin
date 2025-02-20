@@ -5,12 +5,13 @@
 from django.urls import include, path
 from netbox.api.routers import NetBoxRouter
 
-from .views import ApplyChangeSetView, ObjectStateView
+from .views import ApplyChangeSetView, ObjectStateView, GenerateDiffView
 
 router = NetBoxRouter()
 
 urlpatterns = [
     path("object-state/", ObjectStateView.as_view()),
     path("apply-change-set/", ApplyChangeSetView.as_view()),
+    path("generate-diff/", GenerateDiffView.as_view()),
     path("", include(router.urls)),
 ]

@@ -673,3 +673,24 @@ class ApplyChangeSetException(Exception):
     """ApplyChangeSetException used to cause atomic transaction rollback."""
 
     pass
+
+#####
+
+import logging
+logger = logging.getLogger("netbox.diode_data")
+
+
+class GenerateDiffView(views.APIView):
+    """GenerateDiff view."""
+
+    permission_classes = [IsAuthenticated, IsDiodeWriter]
+
+    def post(self, request, *args, **kwargs):
+        """Generate diff for entity."""
+
+        entity = request.data.get("entity")
+        object_type = request.data.get("object_type")
+
+        logger.error(f"generate diff called with entity: {entity} and object_type: {object_type}")
+
+        return Response({}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
