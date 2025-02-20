@@ -14,6 +14,7 @@ from dcim.models import (
     Site,
 )
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from ipam.models import ASN, RIR, IPAddress, Prefix
 from netaddr import IPNetwork
 from rest_framework import status
@@ -101,9 +102,13 @@ class BaseApplyChangeSet(APITestCase):
             name="Cluster Type 1", slug="cluster-type-1"
         )
 
+        self.cluster_types = (cluster_type,)
+
+        site_content_type = ContentType.objects.get_for_model(Site)
+
         self.clusters = (
-            Cluster(name="Cluster 1", type=cluster_type),
-            Cluster(name="Cluster 2", type=cluster_type),
+            Cluster(name="Cluster 1", type=cluster_type, scope_type=site_content_type, scope_id=self.sites[0].id),
+            Cluster(name="Cluster 2", type=cluster_type, scope_type=site_content_type, scope_id=self.sites[0].id),
         )
         Cluster.objects.bulk_create(self.clusters)
 
@@ -1154,3 +1159,65 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             response.json().get("errors")[0].get("site"),
         )
         self.assertFalse(Prefix.objects.filter(prefix="192.168.0.0/24").exists())
+
+    def test_create_virtualization_cluster_with_site_stored_as_scope(self):
+        """Test create cluster with site stored as scope."""
+        payload = {
+            "change_set_id": str(uuid.uuid4()),
+            "change_set": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "virtualization.cluster",
+                    "object_id": None,
+                    "data": {
+                        "name": "Cluster 3",
+                        "type": {
+                            "name": self.cluster_types[0].name,
+                        },
+                        "site": {
+                            "name": self.sites[0].name,
+                        },
+                    },
+                },
+            ],
+        }
+        response = self.send_request(payload)
+
+        self.assertEqual(response.json().get("result"), "success")
+        self.assertEqual(Cluster.objects.get(name="Cluster 3").scope, self.sites[0])
+
+    def test_create_virtualmachine_with_cluster_site_stored_as_scope(self):
+        """Test create virtualmachine with cluster site stored as scope."""
+        payload = {
+            "change_set_id": str(uuid.uuid4()),
+            "change_set": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "virtualization.virtualmachine",
+                    "object_id": None,
+                    "data": {
+                        "name": "VM foobar",
+                        "site": {
+                            "name": self.sites[0].name,
+                        },
+                        "cluster": {
+                            "name": self.clusters[0].name,
+                            "type": {
+                                "name": self.cluster_types[0].name,
+                            },
+                            "site": {
+                                "name": self.sites[0].name,
+                            },
+                        },
+                    },
+                },
+            ],
+        }
+        response = self.send_request(payload)
+
+        self.assertEqual(response.json().get("result"), "success")
+        self.assertEqual(VirtualMachine.objects.get(name="VM foobar", site_id=self.sites[0].id).cluster.scope, self.sites[0])
