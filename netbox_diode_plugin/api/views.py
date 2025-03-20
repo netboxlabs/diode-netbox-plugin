@@ -12,7 +12,7 @@ try:
         from core.models import ObjectType as NetBoxType
     else:
         from django.contrib.contenttypes.models import ContentType as NetBoxType
-except version.InvalidVersion as e:
+except version.InvalidVersion:
     from core.models import ObjectType as NetBoxType
 from django.core.exceptions import FieldError
 from django.db import transaction

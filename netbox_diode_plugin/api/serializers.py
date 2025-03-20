@@ -26,7 +26,7 @@ try:
         from core.models import ObjectChange
     else:
         from extras.models import ObjectChange
-except version.InvalidVersion as e:
+except version.InvalidVersion:
     from core.models import ObjectChange
 
 from ipam.api.serializers import IPAddressSerializer, PrefixSerializer
