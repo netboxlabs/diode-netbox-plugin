@@ -1,4 +1,7 @@
-"""Object resolution for diffing."""
+#!/usr/bin/env python
+# Copyright 2024 NetBox Labs Inc
+"""Diode NetBox Plugin - API - Object resolution for diffing."""
+
 from collections import defaultdict
 import copy
 from dataclasses import dataclass
