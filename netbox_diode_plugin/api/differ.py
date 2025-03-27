@@ -163,7 +163,6 @@ def diff_to_change(
         change.ref_id = postchange_data.get("id")
 
     postchange_data_clean = clean_diff_data(postchange_data)
-    change.data = postchange_data_clean
 
     if change_type == ChangeType.UPDATE:
         # remove null values
@@ -176,10 +175,22 @@ def diff_to_change(
             for attr in changed_attrs
             if attr in postchange_data_clean
         })
-        change.before = prechange_data_clean
-        change.data = merged_data
+        change.before = sort_dict_recursively(prechange_data_clean)
+        change.data = sort_dict_recursively(merged_data)
+    else:
+        change.data = sort_dict_recursively(postchange_data_clean)
 
     return change
+
+def sort_dict_recursively(d):
+    """Recursively sorts a dictionary by keys."""
+    if isinstance(d, dict):
+        return {k: sort_dict_recursively(v) for k, v in sorted(d.items())}
+    if isinstance(d, list):
+        return sorted([sort_dict_recursively(item) for item in d])
+    return d
+
+
 
 def generate_changeset(entity: dict, object_type: str) -> ChangeSet:
     """Generate a changeset for an entity."""
