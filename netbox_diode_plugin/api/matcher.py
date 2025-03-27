@@ -1,4 +1,6 @@
-"""Object matching utilities."""
+#!/usr/bin/env python
+# Copyright 2024 NetBox Labs Inc
+"""Diode NetBox Plugin - API - Object matching utilities."""
 
 import logging
 from functools import cache, lru_cache

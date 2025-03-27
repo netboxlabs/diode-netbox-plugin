@@ -1,4 +1,6 @@
-"""Differ."""
+#!/usr/bin/env python
+# Copyright 2024 NetBox Labs Inc
+"""Diode NetBox Plugin - API - Differ."""
 
 import copy
 import json
