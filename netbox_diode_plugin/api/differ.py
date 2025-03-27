@@ -17,7 +17,7 @@ from utilities.data import shallow_compare_dict
 
 from .supported_models import extract_supported_models
 from .transformer import transform_proto_json, cleanup_unresolved_references
-
+from .plugin_utils import get_primary_value
 
 logger = logging.getLogger(__name__)
 
@@ -148,11 +148,15 @@ def diff_to_change(
     if change_type == ChangeType.UPDATE and not len(changed_attrs) > 0:
         change_type = ChangeType.NOOP
 
+    primary_value = get_primary_value(postchange_data, object_type)
+    if primary_value is None:
+        primary_value = "(unnamed)"
+
     change = Change(
         change_type=change_type,
         object_type=object_type,
         object_id=prechange_data.get("id"),
-        object_primary_value="__PLACEHOLDER__",  # TODO: get primary value
+        object_primary_value=primary_value,
         new_refs=unresolved_references,
     )
     if change.object_id is None:
