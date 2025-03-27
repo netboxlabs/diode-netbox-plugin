@@ -82,7 +82,7 @@ def prechange_data_from_instance(instance) -> dict:
         return prechange_data
 
     model_class = instance.__class__
-    object_type = f"{model_class._meta.app_label}.{model_class.__name__}"
+    object_type = f"{model_class._meta.app_label}.{model_class._meta.model_name}"
 
     model = SUPPORTED_MODELS.get(object_type)
     if not model:
