@@ -87,10 +87,12 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     logger.error(f"_transform_proto_json_1: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
     deduplicated = _fingerprint_dedupe(entities)
     logger.error(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
-    # TODO: do we want to set defaults and slugs before resolving or after, as it may affect search scope?
-    _set_defaults(deduplicated, supported_models)
+    _set_slugs(deduplicated, supported_models)
+    logger.error(f"_set_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
     resolved = _resolve_existing_references(deduplicated)
     logger.error(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    _set_defaults(resolved, supported_models)
+    logger.error(f"_set_defaults: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
 
     return resolved
 
@@ -149,7 +151,15 @@ def _set_defaults(entities: list[dict], supported_models: dict):
         for field_name, field_info in model_fields.get('fields', {}).items():
             if entity.get(field_name) is None and field_info.get("default") is not None:
                 entity[field_name] = field_info["default"]
-            elif field_info["type"] == "SlugField" and entity.get(field_name) is None:
+
+def _set_slugs(entities: list[dict], supported_models: dict):
+    for entity in entities:
+        model_fields = supported_models.get(entity['_object_type'])
+        if model_fields is None:
+            raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
+        
+        for field_name, field_info in model_fields.get('fields', {}).items():
+            if field_info["type"] == "SlugField" and entity.get(field_name) is None:
                 entity[field_name] = _generate_slug(entity['_object_type'], entity)
 
 def _generate_slug(object_type, data):
