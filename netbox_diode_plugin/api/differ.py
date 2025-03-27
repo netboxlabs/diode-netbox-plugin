@@ -1,25 +1,19 @@
 """Differ."""
 
 import copy
-import decimal
 import json
 import logging
-import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from functools import lru_cache
 from dataclasses import dataclass, field
 from enum import Enum
 import copy
 import uuid
 
-from django.db import models
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.utils.text import slugify
 from utilities.data import shallow_compare_dict
-from vpn.constants import L2VPN_ASSIGNMENT_MODELS
 
 from .supported_models import extract_supported_models
 from .transformer import transform_proto_json, cleanup_unresolved_references
