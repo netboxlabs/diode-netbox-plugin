@@ -5,7 +5,7 @@
 from django.urls import include, path
 from netbox.api.routers import NetBoxRouter
 
-from .views import ApplyChangeSetView, ObjectStateView, GenerateDiffView
+from .views import ApplyChangeSetView, GenerateDiffView, ObjectStateView
 
 router = NetBoxRouter()
 
