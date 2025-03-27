@@ -42,7 +42,6 @@ EXCLUDED_MODELS = [
 def extract_supported_models() -> dict[str, dict]:
     """Extract supported models from NetBox."""
     supported_models = discover_models(SUPPORTED_APPS)
-    processed_models = set()
 
     logger.debug(f"Supported models: {supported_models}")
 
@@ -58,15 +57,16 @@ def extract_supported_models() -> dict[str, dict]:
                 continue
 
             prerequisites = get_prerequisites(model, fields)
-            extracted_models[model.__name__] = {
+            object_type = f"{model._meta.app_label}.{model._meta.model_name}"
+            extracted_models[object_type] = {
                 "fields": fields,
                 "prerequisites": prerequisites,
             }
-            processed_models.add(model.__name__)
             for related_model in related_models:
+                related_object_type = f"{related_model._meta.app_label}.{related_model._meta.model_name}"
                 if (
-                    related_model.__name__ not in extracted_models
-                    and related_model not in models_to_process
+                    related_object_type not in extracted_models
+                    and related_object_type not in models_to_process
                 ):
                     models_to_process.append(related_model)
         except Exception as e:

@@ -88,8 +88,9 @@ def prechange_data_from_instance(instance) -> dict:
         return prechange_data
 
     model_class = instance.__class__
+    object_type = f"{model_class._meta.app_label}.{model_class.__name__}"
 
-    model = SUPPORTED_MODELS.get(model_class.__name__)
+    model = SUPPORTED_MODELS.get(object_type)
     if not model:
         raise ValidationError(f"Model {model_class.__name__} is not supported")
 
@@ -182,7 +183,7 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSet:
     """Generate a changeset for an entity."""
     change_set = ChangeSet()
 
-    entities = transform_proto_json(entity, object_type)
+    entities = transform_proto_json(entity, object_type, SUPPORTED_MODELS)
     for entity in entities:
         prechange_data = {}
         changed_attrs = []
