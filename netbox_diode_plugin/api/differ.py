@@ -6,10 +6,6 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from dataclasses import dataclass, field
-from enum import Enum
-import copy
-import uuid
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -37,8 +33,8 @@ class Change:
 
     change_type: ChangeType
     object_type: str
-    object_id: int | None
-    object_primary_value: str
+    object_id: int | None = field(default=None)
+    object_primary_value: str | None = field(default=None)
     ref_id: str | None = field(default=None)
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     before: dict | None = field(default=None)
@@ -162,6 +158,7 @@ def diff_to_change(
     )
     if change.object_id is None:
         change.ref_id = postchange_data.get("id")
+        _ = postchange_data.pop("id", None)
 
     postchange_data_clean = clean_diff_data(postchange_data)
 
