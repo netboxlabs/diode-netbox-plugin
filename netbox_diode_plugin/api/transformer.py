@@ -7,12 +7,21 @@ import json
 import logging
 import re
 from uuid import uuid4
+from django.core.exceptions import ValidationError
+from django.utils.text import slugify
 
 from .plugin_utils import get_json_ref_info
 from .matcher import fingerprint, merge_data, find_existing_object
 
 
 logger = logging.getLogger("netbox.diode_data")
+
+_DEFAULT_SLUG_SOURCE_FIELD_NAME = "name"
+
+_OBJECT_TYPE_SLUG_FIELD_MAP = {
+    "dcim.devicetype": "model",
+    "dcim.racktype": "model",
+}
 
 @dataclass
 class UnresolvedReference:
@@ -67,7 +76,7 @@ def _nested_context(object_type, uuid, field_name):
 def _is_circular(object_type, field_name):
     return field_name in _IS_CIRCULAR.get(object_type, set())
 
-def transform_proto_json(proto_json: dict, object_type: str) -> list[dict]:
+def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]:
     """
     Transform keys of proto json dict to flattened dictionaries with model field keys.
 
@@ -78,8 +87,7 @@ def transform_proto_json(proto_json: dict, object_type: str) -> list[dict]:
     logger.error(f"_transform_proto_json_1: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
     deduplicated = _fingerprint_dedupe(entities)
     logger.error(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
-    # TODO defaulting
-    # TODO autoslug
+    deduplicated = _set_defaults(deduplicated, supported_models)
     resolved = _resolve_existing_references(deduplicated)
     logger.error(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
 
@@ -130,6 +138,30 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None, ex
             )
             entities = nested_refs + entities
     return entities
+
+def _set_defaults(entities: list[dict], supported_models: dict):
+    for entity in entities:
+        model_fields = supported_models.get(entity['_object_type'])
+        if model_fields is None:
+            raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
+        
+        for field_name, field_info in model_fields.get('fields', {}).items():
+            if entity.get(field_name) is None and field_info.get("default") is not None:
+                entity[field_name] = field_info["default"]
+            elif field_info["type"] == "SlugField" and entity.get(field_name) is None:
+                entity[field_name] = _generate_slug(entity['_object_type'], entity)
+
+def _generate_slug(object_type, data):
+    """Generate a slug for a model instance."""
+    source_field = get_field_to_slugify(object_type)
+    if source_field in data and data[source_field]:
+        return slugify(str(data[source_field]))
+
+    return None
+
+def get_field_to_slugify(object_type):
+    """Get the field to use as the source for the slug."""
+    return _OBJECT_TYPE_SLUG_FIELD_MAP.get(object_type, _DEFAULT_SLUG_SOURCE_FIELD_NAME)
 
 def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
     by_fp = {}
