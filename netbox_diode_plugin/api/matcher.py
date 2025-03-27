@@ -102,7 +102,7 @@ class ObjectMatchCriteria:
             if field in insensitive:
                 value = value.lower()
             values.append(value)
-        # logger.error(f"fingerprint {self}: {data} -> values: {tuple(values)}")
+        # logger.debug(f"fingerprint {self}: {data} -> values: {tuple(values)}")
 
         return hash(tuple(values))
 
@@ -155,7 +155,7 @@ class ObjectMatchCriteria:
             lookup_value = data.get(field.attname)
             lookup_kwargs[field.name] = lookup_value
 
-        logger.error(f"      * query kwargs: {lookup_kwargs}")
+        # logger.error(f"      * query kwargs: {lookup_kwargs}")
         qs = self.model_class.objects.filter(**lookup_kwargs)
         if self.condition:
             qs = qs.filter(self.condition)
@@ -331,25 +331,25 @@ def find_existing_object(data: dict, object_type: str):
 
     Returns the object if found, otherwise None.
     """
-    logger.error(f"resolving {data}")
+    logger.debug(f"resolving {data}")
     model_class = get_object_type_model(object_type)
     for matcher in get_model_matchers(model_class):
         if not matcher.has_required_fields(data):
-            logger.error(f"  * skipped matcher {matcher.name} (missing fields)")
+            logger.debug(f"  * skipped matcher {matcher.name} (missing fields)")
             continue
         q = matcher.build_queryset(data)
         if q is None:
-            logger.error(f"  * skipped matcher {matcher.name} (no queryset)")
+            logger.debug(f"  * skipped matcher {matcher.name} (no queryset)")
             continue
         try:
-            logger.error(f"  * trying query {q.query}")
+            logger.debug(f"  * trying query {q.query}")
             existing = q.get()
-            logger.error(f"      -> Found object {existing} via {matcher.name}")
+            logger.debug(f"      -> Found object {existing} via {matcher.name}")
             return existing
         except model_class.DoesNotExist:
-            logger.error(f"      -> No object found for matcher {matcher.name}")
+            logger.debug(f"      -> No object found for matcher {matcher.name}")
             continue
-    logger.error("  * No matchers found an existing object")
+        logger.debug("  * No matchers found an existing object")
     return None
 
 @lru_cache(maxsize=256)

@@ -29,6 +29,8 @@ class UnresolvedReference:
         return f"new_object:{self.object_type}:{self.uuid}"
 
     def __eq__(self, other):
+        if not isinstance(other, UnresolvedReference):
+            return False
         return self.object_type == other.object_type and self.uuid == other.uuid
 
     def __hash__(self):
@@ -45,8 +47,7 @@ def _camel_to_snake_case(name):
     return re.sub("([a-z0-9])([A-Z])", r"\1_\2", name).lower()
 
 
-# These are cases that imply a circular reference / implied parentage.
-# TODO: Can we detect these cases ?
+# these are implied values pushed down to referenced objects.
 _NESTED_CONTEXT = {
     "dcim.interface": {
         # interface.primary_mac_address -> mac_address.assigned_object = interface
@@ -55,11 +56,13 @@ _NESTED_CONTEXT = {
             "assigned_object_id": UnresolvedReference(object_type=object_type, uuid=uuid),
         },
     },
-}
-
-# these fields cannot be assigned until both objects are saved already.
-_IS_CIRCULAR = {
-    "dcim.interface": {"primary_mac_address", },
+    "virtualization.vminterface": {
+        # interface.primary_mac_address -> mac_address.assigned_object = vinterface
+        "primary_mac_address": lambda object_type, uuid: {
+            "assigned_object_type": object_type,
+            "assigned_object_id": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+    },
 }
 
 def _no_context(object_type, uuid):
@@ -68,8 +71,13 @@ def _no_context(object_type, uuid):
 def _nested_context(object_type, uuid, field_name):
     return _NESTED_CONTEXT.get(object_type, {}).get(field_name, _no_context)(object_type, uuid)
 
-def _is_circular(object_type, field_name):
-    return field_name in _IS_CIRCULAR.get(object_type, set())
+_IS_CIRCULAR_REFERENCE = {
+    "dcim.interface": frozenset(["primary_mac_address"]),
+    "virtualization.vminterface": frozenset(["primary_mac_address"]),
+}
+
+def _is_circular_reference(object_type, field_name):
+    return field_name in _IS_CIRCULAR_REFERENCE.get(object_type, frozenset())
 
 def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]:
     """
@@ -88,8 +96,11 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     logger.error(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
     _set_defaults(resolved, supported_models)
     logger.error(f"_set_defaults: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    output = _move_if_unresolved(resolved)
+    logger.error(f"_move_if_unresolved: {json.dumps(output, default=lambda o: str(o), indent=4)}")
 
-    return resolved
+    _check_unresolved_refs(output)
+    return output
 
 def _transform_proto_json_1(proto_json: dict, object_type: str, context=None, existing=None) -> list[dict]:
     uuid = str(uuid4())
@@ -101,6 +112,9 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None, ex
         transformed.update(context)
     existing = existing or {}
     entities = [transformed]
+
+    move_if_unresolved = defaultdict(list)
+
     for key, value in proto_json.items():
         ref_info = get_json_ref_info(object_type, key)
         if ref_info is None:
@@ -112,6 +126,10 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None, ex
         # nested reference
         field_name = ref_info.field_name
 
+        # if this is potentially a circular reference, we need to mark this for
+        # later checking.
+        is_circular = _is_circular_reference(object_type, field_name)
+
         if ref_info.is_generic:
             transformed[field_name + "_type"] = ref_info.object_type
             field_name = field_name + "_id"
@@ -121,6 +139,8 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None, ex
             for item in value:
                 nested_refs = _transform_proto_json_1(item, ref_info.object_type, nested_context)
                 ref = nested_refs[-1]
+                if is_circular:
+                    move_if_unresolved[field_name].append(ref['_uuid'])
                 ref_values.append(UnresolvedReference(
                     object_type=ref_info.object_type,
                     uuid=ref['_uuid'],
@@ -130,11 +150,15 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None, ex
         else:
             nested_refs = _transform_proto_json_1(value, ref_info.object_type, nested_context)
             ref = nested_refs[-1]
+            if is_circular:
+                move_if_unresolved[field_name].append(ref['_uuid'])
             transformed[field_name] = UnresolvedReference(
                 object_type=ref_info.object_type,
                 uuid=ref['_uuid'],
             )
             entities = nested_refs + entities
+    if len(move_if_unresolved) > 0:
+        transformed['_move_if_unresolved'] = move_if_unresolved
     return entities
 
 def _set_defaults(entities: list[dict], supported_models: dict):
@@ -178,13 +202,13 @@ def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
         fp = fingerprint(entity, entity['_object_type'])
         existing = by_fp.get(fp)
         if existing is None:
-            logger.error("  * entity is new.")
+            logger.debug("  * entity is new.")
             new_entity = copy.deepcopy(entity)
             _update_unresolved_refs(new_entity, new_refs)
             by_fp[fp] = new_entity
             deduplicated.append(fp)
         else:
-            logger.error("  * entity already exists.")
+            logger.debug("  * entity already exists.")
             new_refs[entity['_uuid']] = existing['_uuid']
             merged = merge_data(existing, entity)
             _update_unresolved_refs(merged, new_refs)
@@ -260,3 +284,43 @@ def cleanup_unresolved_references(data: dict) -> list[str]:
             data[k] = items
         # TODO maps
     return sorted(unresolved)
+
+def _move_if_unresolved(entities: list[dict]) -> list[str]:
+    min_index = {}
+    by_uuid = {x['_uuid']: x for x in entities}
+
+    cur = 1
+    for entity in entities:
+        min_index[entity['_uuid']] = cur
+        cur += 1
+
+        moves = entity.pop('_move_if_unresolved', None)
+        if moves is None or entity.get('_instance') is not None:
+            continue
+
+        logger.debug(f"  * {entity} needs circular reference moves: {moves}")
+        entity2 = entity.copy()
+        entity2['_uuid'] = str(uuid4())
+        by_uuid[entity2['_uuid']] = entity2
+        for field_name, uuids in moves.items():
+            entity.pop(field_name, None)
+            for uuid in uuids:
+                min_index[uuid] = cur
+                cur += 1
+
+        entity2['_instance'] = entity['_uuid']
+        min_index[entity2['_uuid']] = cur
+        cur += 1
+
+    in_order = sorted((min_index[x], x) for x in min_index)
+    return [by_uuid[x[1]] for x in in_order]
+
+
+def _check_unresolved_refs(entities: list[dict]) -> list[str]:
+    seen = set()
+    for e in entities:
+        seen.add((e['_object_type'], e['_uuid']))
+        for k, v in e.items():
+            if isinstance(v, UnresolvedReference):
+                if (v.object_type, v.uuid) not in seen:
+                    raise ValueError(f"Unresolved reference {v} in {e} does not refer to a prior created object (circular reference?)")

@@ -152,10 +152,11 @@ def diff_to_change(
     if primary_value is None:
         primary_value = "(unnamed)"
 
+    prior_id = prechange_data.get("id")
     change = Change(
         change_type=change_type,
         object_type=object_type,
-        object_id=prechange_data.get("id"),
+        object_id=prior_id if isinstance(prior_id, int) else None,
         object_primary_value=primary_value,
         new_refs=unresolved_references,
     )
@@ -197,6 +198,7 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSet:
     change_set = ChangeSet()
 
     entities = transform_proto_json(entity, object_type, SUPPORTED_MODELS)
+    by_uuid = {x['_uuid']: x for x in entities}
     for entity in entities:
         prechange_data = {}
         changed_attrs = []
@@ -206,7 +208,13 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSet:
         instance = entity.pop("_instance", None)
 
         if instance:
-            prechange_data = prechange_data_from_instance(instance)
+            # the prior state is another new object...
+            if isinstance(instance, str):
+                prechange_data = copy.deepcopy(by_uuid[instance])
+            # prior state is a model instance
+            else:
+                prechange_data = prechange_data_from_instance(instance)
+
             changed_data = shallow_compare_dict(
                 prechange_data, entity,
             )
