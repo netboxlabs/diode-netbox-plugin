@@ -87,7 +87,8 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     logger.error(f"_transform_proto_json_1: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
     deduplicated = _fingerprint_dedupe(entities)
     logger.error(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
-    deduplicated = _set_defaults(deduplicated, supported_models)
+    # TODO: do we want to set defaults and slugs before resolving or after, as it may affect search scope?
+    _set_defaults(deduplicated, supported_models)
     resolved = _resolve_existing_references(deduplicated)
     logger.error(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
 
