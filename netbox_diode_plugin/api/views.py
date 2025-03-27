@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - API Views."""
 import json
 import logging
+import re
 from typing import Any, Dict, Optional
 
 from django.apps import apps
@@ -689,17 +690,14 @@ class ApplyChangeSetException(Exception):
     pass
 
 
-def pascal_to_lower_camel_case(name):
-    """Convert PascalCase to lowerCamelCase."""
-    return name[0].lower() + name[1:]
 
 def get_entity_key(model_name):
     """Get the entity key for a model name."""
-    # Use a dictionary for special cases instead of match-case
-    special_cases = {"VMInterface": "vminterface", "IPAddress": "ipAddress"}
-
-    # Return from special cases if present, otherwise convert to lowerCamelCase
-    return special_cases.get(model_name, pascal_to_lower_camel_case(model_name))
+    s = re.sub(r'([A-Z0-9]{2,})([A-Z])([a-z])', r'\1_\2\3', model_name)
+    s = re.sub(r'([a-z])([A-Z])', r'\1_\2', s)
+    s = re.sub(r'_+', '_', s.lower()) # snake
+    s = ''.join([word.capitalize() for word in s.split("_")]) # upperCamelCase
+    return s[0].lower() + s[1:] # lowerCamelCase
 
 
 class GenerateDiffView(views.APIView):
@@ -733,7 +731,7 @@ class GenerateDiffView(views.APIView):
         original_entity_data = entity.get(entity_key)
 
         if original_entity_data is None:
-            raise ValidationError(f"No data found for {entity_key} in entity")
+            raise ValidationError(f"No data found for {entity_key} in entity got: {entity.keys()}")
 
         change_set = generate_changeset(original_entity_data, object_type)
 
