@@ -1,14 +1,13 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Timestamp: 2025-03-26 20:52:02Z
+# Timestamp: 2025-03-27 16:35:12Z
 
 from dataclasses import dataclass
 from typing import Type
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
-
 
 @dataclass
 class RefInfo:
@@ -755,3 +754,88 @@ def get_json_ref_info(object_type: str|Type[models.Model], json_field_name: str)
         content_type = ContentType.objects.get_for_model(object_type)
         object_type = content_type.app_label + '.' + content_type.model
     return _REF_INFO.get(object_type, {}).get(json_field_name)
+
+_OBJECT_TYPE_PRIMARY_VALUE_FIELD_MAP = {
+    'ipam.asn': 'asn',
+    'dcim.devicetype': 'model',
+    'circuits.circuit': 'cid',
+    'ipam.ipaddress': 'address',
+    'dcim.macaddress': 'mac_address',
+    'dcim.moduletype': 'model',
+    'ipam.prefix': 'prefix',
+    'dcim.racktype': 'model',
+    'circuits.virtualcircuit': 'cid',
+    'wireless.wirelesslan': 'ssid',
+    'ipam.asnrange': 'name',
+    'circuits.circuitgroup': 'name',
+    'circuits.circuittype': 'name',
+    'virtualization.cluster': 'name',
+    'virtualization.clustergroup': 'name',
+    'virtualization.clustertype': 'name',
+    'dcim.consoleport': 'name',
+    'dcim.consoleserverport': 'name',
+    'tenancy.contact': 'name',
+    'tenancy.contactgroup': 'name',
+    'tenancy.contactrole': 'name',
+    'dcim.device': 'name',
+    'dcim.devicebay': 'name',
+    'dcim.devicerole': 'name',
+    'ipam.fhrpgroup': 'name',
+    'dcim.frontport': 'name',
+    'vpn.ikepolicy': 'name',
+    'vpn.ikeproposal': 'name',
+    'vpn.ipsecpolicy': 'name',
+    'vpn.ipsecprofile': 'name',
+    'vpn.ipsecproposal': 'name',
+    'dcim.interface': 'name',
+    'dcim.inventoryitem': 'name',
+    'dcim.inventoryitemrole': 'name',
+    'vpn.l2vpn': 'name',
+    'dcim.location': 'name',
+    'dcim.manufacturer': 'name',
+    'dcim.modulebay': 'name',
+    'dcim.platform': 'name',
+    'dcim.powerfeed': 'name',
+    'dcim.poweroutlet': 'name',
+    'dcim.powerpanel': 'name',
+    'dcim.powerport': 'name',
+    'circuits.provider': 'name',
+    'circuits.provideraccount': 'name',
+    'circuits.providernetwork': 'name',
+    'ipam.rir': 'name',
+    'dcim.rack': 'name',
+    'dcim.rackrole': 'name',
+    'dcim.rearport': 'name',
+    'dcim.region': 'name',
+    'ipam.role': 'name',
+    'ipam.routetarget': 'name',
+    'ipam.service': 'name',
+    'dcim.site': 'name',
+    'dcim.sitegroup': 'name',
+    'extras.tag': 'name',
+    'tenancy.tenant': 'name',
+    'tenancy.tenantgroup': 'name',
+    'vpn.tunnel': 'name',
+    'vpn.tunnelgroup': 'name',
+    'ipam.vlan': 'name',
+    'ipam.vlangroup': 'name',
+    'ipam.vlantranslationpolicy': 'name',
+    'virtualization.vminterface': 'name',
+    'ipam.vrf': 'name',
+    'dcim.virtualchassis': 'name',
+    'circuits.virtualcircuittype': 'name',
+    'dcim.virtualdevicecontext': 'name',
+    'virtualization.virtualdisk': 'name',
+    'virtualization.virtualmachine': 'name',
+    'wireless.wirelesslangroup': 'name',
+}
+
+def get_primary_value(data: dict, object_type: str) -> str|None:
+    field = _OBJECT_TYPE_PRIMARY_VALUE_FIELD_MAP.get(object_type)
+    if field is None:
+        return None
+    return data.get(field)
+
+
+def get_primary_value_field(object_type: str, default=None) -> str:
+    return _OBJECT_TYPE_PRIMARY_VALUE_FIELD_MAP.get(object_type, default)

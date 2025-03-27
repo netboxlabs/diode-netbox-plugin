@@ -10,18 +10,13 @@ from uuid import uuid4
 from django.core.exceptions import ValidationError
 from django.utils.text import slugify
 
-from .plugin_utils import get_json_ref_info
+from .plugin_utils import get_json_ref_info, get_primary_value_field
 from .matcher import fingerprint, merge_data, find_existing_object
 
 
 logger = logging.getLogger("netbox.diode_data")
 
 _DEFAULT_SLUG_SOURCE_FIELD_NAME = "name"
-
-_OBJECT_TYPE_SLUG_FIELD_MAP = {
-    "dcim.devicetype": "model",
-    "dcim.racktype": "model",
-}
 
 @dataclass
 class UnresolvedReference:
@@ -147,7 +142,7 @@ def _set_defaults(entities: list[dict], supported_models: dict):
         model_fields = supported_models.get(entity['_object_type'])
         if model_fields is None:
             raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
-        
+
         for field_name, field_info in model_fields.get('fields', {}).items():
             if entity.get(field_name) is None and field_info.get("default") is not None:
                 entity[field_name] = field_info["default"]
@@ -157,7 +152,7 @@ def _set_slugs(entities: list[dict], supported_models: dict):
         model_fields = supported_models.get(entity['_object_type'])
         if model_fields is None:
             raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
-        
+
         for field_name, field_info in model_fields.get('fields', {}).items():
             if field_info["type"] == "SlugField" and entity.get(field_name) is None:
                 entity[field_name] = _generate_slug(entity['_object_type'], entity)
@@ -172,7 +167,7 @@ def _generate_slug(object_type, data):
 
 def get_field_to_slugify(object_type):
     """Get the field to use as the source for the slug."""
-    return _OBJECT_TYPE_SLUG_FIELD_MAP.get(object_type, _DEFAULT_SLUG_SOURCE_FIELD_NAME)
+    return get_primary_value_field(object_type, _DEFAULT_SLUG_SOURCE_FIELD_NAME)
 
 def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
     by_fp = {}
