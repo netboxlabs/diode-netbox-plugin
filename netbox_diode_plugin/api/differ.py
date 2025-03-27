@@ -37,8 +37,9 @@ class Change:
 
     change_type: ChangeType
     object_type: str
-    object_id: str
+    object_id: int | None
     object_primary_value: str
+    ref_id: str | None = field(default=None)
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     before: dict | None = field(default=None)
     data: dict | None = field(default=None)
@@ -51,6 +52,7 @@ class Change:
             "change_type": self.change_type.value,
             "object_type": self.object_type,
             "object_id": self.object_id,
+            "ref_id": self.ref_id,
             "object_primary_value": self.object_primary_value,
             "before": self.before,
             "data": self.data,
@@ -149,10 +151,12 @@ def diff_to_change(
     change = Change(
         change_type=change_type,
         object_type=object_type,
-        object_id=prechange_data.get("id") or postchange_data.get("id"),
+        object_id=prechange_data.get("id"),
         object_primary_value="__PLACEHOLDER__",  # TODO: get primary value
         new_refs=unresolved_references,
     )
+    if change.object_id is None:
+        change.ref_id = postchange_data.get("id")
 
     postchange_data_clean = clean_diff_data(postchange_data)
     change.data = postchange_data_clean
