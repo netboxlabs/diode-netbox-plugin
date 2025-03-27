@@ -191,7 +191,6 @@ def sort_dict_recursively(d):
     return d
 
 
-
 def generate_changeset(entity: dict, object_type: str) -> ChangeSet:
     """Generate a changeset for an entity."""
     change_set = ChangeSet()
