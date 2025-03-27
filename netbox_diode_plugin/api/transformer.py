@@ -271,7 +271,8 @@ def cleanup_unresolved_references(data: dict) -> list[str]:
     unresolved = set()
     for k, v in data.items():
         if isinstance(v, UnresolvedReference):
-            unresolved.add(k)
+            if k != 'id':
+                unresolved.add(k)
             data[k] = str(v)
         elif isinstance(v, (list, tuple)):
             items = []
