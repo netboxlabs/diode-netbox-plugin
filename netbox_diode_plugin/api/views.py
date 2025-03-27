@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - API Views."""
+import json
+import logging
 from typing import Any, Dict, Optional
 
 from django.apps import apps
@@ -24,7 +26,19 @@ from utilities.api import get_serializer_for_model
 
 from netbox_diode_plugin.api.permissions import IsDiodeReader, IsDiodeWriter
 from netbox_diode_plugin.api.serializers import ApplyChangeSetRequestSerializer, ObjectStateSerializer
+from netbox_diode_plugin.api.differ import generate_changeset
 
+logger = logging.getLogger("netbox.diode_data")
+
+# Try to import Branch model at module level
+Branch = None
+try:
+    if apps.is_installed("netbox_branching"):
+        from netbox_branching.models import Branch
+except ImportError:
+    logger.warning(
+        "netbox_branching plugin is installed but models could not be imported"
+    )
 
 def dynamic_import(name):
     """Dynamically import a class from an absolute path string."""
@@ -674,10 +688,18 @@ class ApplyChangeSetException(Exception):
 
     pass
 
-#####
 
-import logging
-logger = logging.getLogger("netbox.diode_data")
+def pascal_to_lower_camel_case(name):
+    """Convert PascalCase to lowerCamelCase."""
+    return name[0].lower() + name[1:]
+
+def get_entity_key(model_name):
+    """Get the entity key for a model name."""
+    # Use a dictionary for special cases instead of match-case
+    special_cases = {"VMInterface": "vminterface", "IPAddress": "ipAddress"}
+
+    # Return from special cases if present, otherwise convert to lowerCamelCase
+    return special_cases.get(model_name, pascal_to_lower_camel_case(model_name))
 
 
 class GenerateDiffView(views.APIView):
@@ -687,10 +709,43 @@ class GenerateDiffView(views.APIView):
 
     def post(self, request, *args, **kwargs):
         """Generate diff for entity."""
+        try:
+            return self._post(request, *args, **kwargs)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
 
+    def _post(self, request, *args, **kwargs):
         entity = request.data.get("entity")
         object_type = request.data.get("object_type")
 
-        logger.error(f"generate diff called with entity: {entity} and object_type: {object_type}")
+        if not entity:
+            raise ValidationError("Entity is required")
+        if not object_type:
+            raise ValidationError("Object type is required")
 
-        return Response({}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        app_label, model_name = object_type.split(".")
+        model_class = apps.get_model(app_label, model_name)
+
+        # Convert model name to lowerCamelCase for entity lookup
+        entity_key = get_entity_key(model_class.__name__)
+        original_entity_data = entity.get(entity_key)
+
+        if original_entity_data is None:
+            raise ValidationError(f"No data found for {entity_key} in entity")
+
+        change_set = generate_changeset(original_entity_data, object_type)
+
+        branch_id = request.headers.get("X-NetBox-Branch")
+
+        # If branch ID is provided and branching plugin is installed, get branch name
+        if branch_id and Branch is not None:
+            try:
+                branch = Branch.objects.get(id=branch_id)
+                change_set.branch = {"id": branch.id, "name": branch.name}
+            except Branch.DoesNotExist:
+                logger.warning(f"Branch with ID {branch_id} does not exist")
+
+        logger.info(f"change_set: {json.dumps(change_set.to_dict(), default=str)}")
+        return Response(change_set.to_dict(), status=status.HTTP_200_OK)
