@@ -187,7 +187,8 @@ def sort_dict_recursively(d):
     if isinstance(d, dict):
         return {k: sort_dict_recursively(v) for k, v in sorted(d.items())}
     if isinstance(d, list):
-        return sorted([sort_dict_recursively(item) for item in d])
+        # Convert all items to strings for comparison
+        return sorted([sort_dict_recursively(item) for item in d], key=str)
     return d
 
 
