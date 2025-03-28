@@ -5,11 +5,11 @@
 import logging
 from functools import cache, lru_cache
 from dataclasses import dataclass
-from typing import List, Optional, Type
+from typing import Type
 
 from core.models import ObjectType as NetBoxType
 from django.db import models
-from django.db.models import F
+from django.db.models import F, Value
 from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 
@@ -171,7 +171,7 @@ class ObjectMatchCriteria:
     def _build_expressions_queryset(self, data) -> models.QuerySet:
         """Builds a queryset for the constraint with the given data."""
         replacements = {
-            F(field): value
+            F(field): Value(value) if isinstance(value, (str, int, float, bool)) else value
             for field, value in data.items()
         }
 
@@ -180,7 +180,7 @@ class ObjectMatchCriteria:
             if hasattr(expr, "get_expression_for_validation"):
                 expr = expr.get_expression_for_validation()
 
-            refs = _get_refs(expr)
+            refs = [F(ref) for ref in _get_refs(expr)]
             for ref in refs:
                 if ref not in replacements:
                     logger.error(f"  * cannot build expr queryset for {self.name} (missing field {ref})")
