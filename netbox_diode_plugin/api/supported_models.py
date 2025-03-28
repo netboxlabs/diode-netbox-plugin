@@ -131,7 +131,7 @@ def get_model_fields(model_class) -> tuple[dict, list]:
     model_fields = {
         field.name: field
         for field in model_class._meta.get_fields()
-        if field.__class__.__name__ != "CounterCacheField"
+        if field.__class__.__name__ not in ["CounterCacheField", "GenericRelation"]
     }
 
     # Reorder fields to match serializer order
