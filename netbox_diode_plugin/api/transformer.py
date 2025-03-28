@@ -13,6 +13,7 @@ from uuid import uuid4
 from django.core.exceptions import ValidationError
 from django.utils.text import slugify
 
+from .common import UnresolvedReference
 from .plugin_utils import get_json_ref_info, get_primary_value_field
 from .matcher import fingerprint, merge_data, find_existing_object
 
@@ -20,28 +21,6 @@ from .matcher import fingerprint, merge_data, find_existing_object
 logger = logging.getLogger("netbox.diode_data")
 
 _DEFAULT_SLUG_SOURCE_FIELD_NAME = "name"
-
-@dataclass
-class UnresolvedReference:
-    """unresolved reference to an object."""
-
-    object_type: str
-    uuid: str
-
-    def __str__(self):
-        return f"new_object:{self.object_type}:{self.uuid}"
-
-    def __eq__(self, other):
-        if not isinstance(other, UnresolvedReference):
-            return False
-        return self.object_type == other.object_type and self.uuid == other.uuid
-
-    def __hash__(self):
-        return hash((self.object_type, self.uuid))
-
-    def __lt__(self, other):
-        return self.object_type < other.object_type or (self.object_type == other.object_type and self.uuid < other.uuid)
-
 
 @lru_cache(maxsize=128)
 def _camel_to_snake_case(name):

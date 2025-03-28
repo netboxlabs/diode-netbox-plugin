@@ -13,8 +13,9 @@ from django.db.models import F
 from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 
-logger = logging.getLogger(__name__)
+from .common import UnresolvedReference
 
+logger = logging.getLogger(__name__)
 
 #
 # TODO: add special cases for things that lack any unique constraints,
@@ -156,6 +157,9 @@ class ObjectMatchCriteria:
                 logger.error(f"  * cannot build fields queryset for {self.name} (missing field {field_name})")
                 return None  # cannot match, missing field data
             lookup_value = data.get(field_name)
+            if isinstance(lookup_value, UnresolvedReference):
+                logger.error(f"  * cannot build fields queryset for {self.name} ({field_name} is unresolved reference)")
+                return None  # cannot match, missing field data
             lookup_kwargs[field.name] = lookup_value
 
         # logger.error(f"      * query kwargs: {lookup_kwargs}")
@@ -180,6 +184,9 @@ class ObjectMatchCriteria:
             for ref in refs:
                 if ref not in replacements:
                     logger.error(f"  * cannot build expr queryset for {self.name} (missing field {ref})")
+                    return None  # cannot match, missing field data
+                if isinstance(replacements[ref], UnresolvedReference):
+                    logger.error(f"  * cannot build expr queryset for {self.name} ({ref} is unresolved reference)")
                     return None  # cannot match, missing field data
 
             rhs = expr.replace_expressions(replacements)
