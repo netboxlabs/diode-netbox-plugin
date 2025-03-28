@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass, field
 
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
 from .differ import Change, ChangeSet, ChangeType
@@ -82,6 +83,17 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
             if isinstance(tags, list) and isinstance(tags[0], models.Model):
                 tags = [tag.pk for tag in tags]
             tags = tags_model_class.objects.filter(id__in=tags)
+
+        # resolve contenttype fields
+        for key, value in data.items():
+            field_type = fk_fields.get(key)
+            if field_type and field_type == ContentType:
+                data[key] = ContentType.objects.get(app_label=value.split(".")[0], model=value.split(".")[1])
+                # If the field name ends with _type, extract the base field name for the ID field
+                content_type_id_field = f"{key[:-5]}_id"
+                content_type_id_value = data[content_type_id_field]
+                if isinstance(content_type_id_value, str):
+                    data[content_type_id_field] = int(content_type_id_value)
         
         # get model fields matching data keys if foreign key
         # TODO: consider use of existing model serializers accepting PKs
