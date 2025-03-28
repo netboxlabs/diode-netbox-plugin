@@ -51,47 +51,93 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
     """Apply a change set."""
     created = {}
 
-    for change in change_set.changes:
-        change_type = change.change_type
-        object_type = change.object_type
-        data = change.data
-        new_refs = change.new_refs
+    def pre_apply(model_class: models.Model, change: Change) -> tuple[dict, list]:
+        """Pre-apply the data."""
 
-        app_label, model_name = object_type.split(".")
-        model_class = apps.get_model(app_label, model_name)
+        data = change.data.copy()
 
+        # get foreign key fields with model
         fk_fields = {
             field.name: field.related_model
             for field in model_class._meta.get_fields()
             if field.is_relation
         }
-
-        for ref_field in new_refs:
+        
+        # resolve foreign key references
+        for ref_field in change.new_refs:
+            if isinstance(data[ref_field], (list, tuple)):
+                ref_list = []
+                for ref in data[ref_field]:
+                    if isinstance(ref, str):
+                        ref_list.append(created[ref])
+                    elif isinstance(ref, models.Model):
+                        ref_list.append(ref)
+                data[ref_field] = ref_list
+            else:
                 data[ref_field] = created[data[ref_field]]
-
+        
+        tags = data.pop("tags", None)
+        if tags:
+            tags_model_class = fk_fields.get("tags")
+            if isinstance(tags, list) and isinstance(tags[0], models.Model):
+                tags = [tag.pk for tag in tags]
+            tags = tags_model_class.objects.filter(id__in=tags)
+        
         # get model fields matching data keys if foreign key
+        # TODO: consider use of existing model serializers accepting PKs
         for key, value in data.items():
             if fk_model := fk_fields.get(key):
                 if isinstance(value, int):
+                    # ensure the value is an integer
                     data[key] = fk_model.objects.get(id=value)
+                elif isinstance(value, list) and len(value) > 0 and isinstance(value[0], models.Model):
+                    data[key] = [ref.pk for ref in value]
                 elif isinstance(value, models.Model):
                     data[key] = value
 
+        return data, tags
+    
+    def post_apply(instance: models.Model, tags: list[models.Model]):
+        """Post-apply the data."""
+
+        # set tags
+        if tags and hasattr(instance, "tags"):
+            instance.tags.set(tags)
+
+    for change in change_set.changes:
+        change_type = change.change_type
+        object_type = change.object_type
+
+        app_label, model_name = object_type.split(".")
+        model_class = apps.get_model(app_label, model_name)
+
+        data, tags = pre_apply(model_class, change)
+        instance = None
+
         if change_type == ChangeType.CREATE.value:
-            new_object = model_class.objects.create(**data)
-            created[change.ref_id] = new_object
+            instance = model_class.objects.create(**data)
+            created[change.ref_id] = instance
 
         elif change_type == ChangeType.UPDATE.value:
-            object_id = change.object_id
-            if object_id is None:
-                raise ApplyChangeSetException("Object ID is required for update")
+            if object_id := change.object_id:
+                model_class.objects.filter(id=object_id).update(**data)
+                instance = model_class.objects.get(id=object_id)
 
-            model_class.objects.filter(id=object_id).update(**data)
+            # # MACAddress case (create and update in a same change set)
+            # elif instance := created[change.ref_id]:
+            #     instance.update(**data)
+            #     if tags:
+            #         instance.tags.set(tags)
+            else:
+                raise ApplyChangeSetException("Object ID or ref_id is required for update")
+
         elif change_type == ChangeType.NOOP.value:
             pass
 
         else:
             raise ApplyChangeSetException(f"Unknown change type: {change.type}")
+        
+        post_apply(instance, tags)
 
     return ApplyChangeSetResult(
         id=change_set.id,
