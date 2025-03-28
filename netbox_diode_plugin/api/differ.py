@@ -96,6 +96,9 @@ def prechange_data_from_instance(instance) -> dict:
         if not hasattr(instance, field_name):
             continue
 
+        if field_info["type"] == "ForeignKey" and field_info.get("is_many_to_one_rel", False):
+            continue
+
         value = getattr(instance, field_name)
         if hasattr(value, "all"):  # Handle many-to-many and many-to-one relationships
             # For any relationship that has an 'all' method, get all related objects' primary keys
