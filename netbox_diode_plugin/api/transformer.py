@@ -2,21 +2,20 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - API - Object resolution for diffing."""
 
-from collections import defaultdict
 import copy
-from dataclasses import dataclass
-from functools import lru_cache
 import json
 import logging
 import re
+from collections import defaultdict
+from functools import lru_cache
 from uuid import uuid4
+
 from django.core.exceptions import ValidationError
 from django.utils.text import slugify
 
 from .common import UnresolvedReference
+from .matcher import find_existing_object, fingerprint, merge_data
 from .plugin_utils import get_json_ref_info, get_primary_value_field
-from .matcher import fingerprint, merge_data, find_existing_object
-
 
 logger = logging.getLogger("netbox.diode_data")
 

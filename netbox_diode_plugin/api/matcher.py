@@ -3,8 +3,8 @@
 """Diode NetBox Plugin - API - Object matching utilities."""
 
 import logging
-from functools import cache, lru_cache
 from dataclasses import dataclass
+from functools import cache, lru_cache
 from typing import Type
 
 from core.models import ObjectType as NetBoxType
@@ -44,6 +44,7 @@ class ObjectMatchCriteria:
     name: str | None = None
 
     def __hash__(self):
+        """Hash the object match criteria."""
         return hash((self.fields, self.expressions, self.condition, self.model_class.__name__, self.name))
 
     def has_required_fields(self, data) -> bool:
