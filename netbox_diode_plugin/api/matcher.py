@@ -151,10 +151,11 @@ class ObjectMatchCriteria:
         lookup_kwargs = {}
         for field_name in self.fields:
             field = self.model_class._meta.get_field(field_name)
-            attribute = field.attname
-            if attribute not in data:
+            # attribute = field.attname (we just use field name, since not using the model instances...)
+            if field_name not in data:
+                logger.error(f"  * cannot build fields queryset for {self.name} (missing field {field_name})")
                 return None  # cannot match, missing field data
-            lookup_value = data.get(field.attname)
+            lookup_value = data.get(field_name)
             lookup_kwargs[field.name] = lookup_value
 
         # logger.error(f"      * query kwargs: {lookup_kwargs}")
@@ -178,6 +179,7 @@ class ObjectMatchCriteria:
             refs = _get_refs(expr)
             for ref in refs:
                 if ref not in replacements:
+                    logger.error(f"  * cannot build expr queryset for {self.name} (missing field {ref})")
                     return None  # cannot match, missing field data
 
             rhs = expr.replace_expressions(replacements)
@@ -333,25 +335,25 @@ def find_existing_object(data: dict, object_type: str):
 
     Returns the object if found, otherwise None.
     """
-    logger.debug(f"resolving {data}")
+    logger.error(f"resolving {data}")
     model_class = get_object_type_model(object_type)
     for matcher in get_model_matchers(model_class):
         if not matcher.has_required_fields(data):
-            logger.debug(f"  * skipped matcher {matcher.name} (missing fields)")
+            logger.error(f"  * skipped matcher {matcher.name} (missing fields)")
             continue
         q = matcher.build_queryset(data)
         if q is None:
-            logger.debug(f"  * skipped matcher {matcher.name} (no queryset)")
+            logger.error(f"  * skipped matcher {matcher.name} (no queryset)")
             continue
         try:
-            logger.debug(f"  * trying query {q.query}")
+            logger.error(f"  * trying query {q.query}")
             existing = q.get()
-            logger.debug(f"      -> Found object {existing} via {matcher.name}")
+            logger.error(f"      -> Found object {existing} via {matcher.name}")
             return existing
         except model_class.DoesNotExist:
-            logger.debug(f"      -> No object found for matcher {matcher.name}")
+            logger.error(f"      -> No object found for matcher {matcher.name}")
             continue
-        logger.debug("  * No matchers found an existing object")
+    logger.error("  * No matchers found an existing object")
     return None
 
 @lru_cache(maxsize=256)

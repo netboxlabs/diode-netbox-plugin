@@ -236,6 +236,7 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
     for data in entities:
         object_type = data['_object_type']
         data = copy.deepcopy(data)
+        _update_resolved_refs(data, new_refs)
         existing = find_existing_object(data, object_type)
         if existing is not None:
             logger.error(f"existing {data} -> {existing}")
@@ -247,7 +248,6 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
             data['id'] = existing.id
             data['_instance'] = existing
             new_refs[data['_uuid']] = existing.id
-            _update_resolved_refs(data, new_refs)
             resolved.append(data)
         else:
             data['id'] = UnresolvedReference(object_type, data['_uuid'])
