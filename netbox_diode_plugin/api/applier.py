@@ -35,11 +35,13 @@ class ApplyChangeSetException(Exception):
     """ApplyChangeSetException is raised when an error occurs while applying a change set."""
 
     def __init__(self, message, errors=None):
+        """Initialize the exception."""
         super().__init__(message)
         self.message = message
         self.errors = errors or {}
 
     def __str__(self):
+        """Return the string representation of the exception."""
         if self.errors:
             return f"{self.message}: {self.errors}"
         return self.message
@@ -47,7 +49,6 @@ class ApplyChangeSetException(Exception):
 
 def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
     """Apply a change set."""
-
     created = {}
 
     for change in change_set.changes:
@@ -58,7 +59,7 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
 
         app_label, model_name = object_type.split(".")
         model_class = apps.get_model(app_label, model_name)
-        
+
         fk_fields = {
             field.name: field.related_model
             for field in model_class._meta.get_fields()
@@ -79,16 +80,16 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
         if change_type == ChangeType.CREATE.value:
             new_object = model_class.objects.create(**data)
             created[change.ref_id] = new_object
-        
+
         elif change_type == ChangeType.UPDATE.value:
             object_id = change.object_id
             if object_id is None:
-                raise ApplyChangeSetException(f"Object ID is required for update")
+                raise ApplyChangeSetException("Object ID is required for update")
 
             model_class.objects.filter(id=object_id).update(**data)
         elif change_type == ChangeType.NOOP.value:
             pass
-        
+
         else:
             raise ApplyChangeSetException(f"Unknown change type: {change.type}")
 
