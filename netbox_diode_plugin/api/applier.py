@@ -94,6 +94,8 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
                 content_type_id_value = data[content_type_id_field]
                 if isinstance(content_type_id_value, str):
                     data[content_type_id_field] = int(content_type_id_value)
+                elif isinstance(content_type_id_value, models.Model):
+                    data[content_type_id_field] = content_type_id_value.pk
         
         # get model fields matching data keys if foreign key
         # TODO: consider use of existing model serializers accepting PKs
