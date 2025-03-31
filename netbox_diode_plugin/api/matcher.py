@@ -2,12 +2,15 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - API - Object matching utilities."""
 
+import copy
 import logging
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from typing import Type
 
 from core.models import ObjectType as NetBoxType
+from django.contrib.contenttypes.fields import ContentType
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models import F, Value
 from django.db.models.lookups import Exact
@@ -18,10 +21,23 @@ from .common import UnresolvedReference
 logger = logging.getLogger(__name__)
 
 #
-# TODO: add special cases for things that lack any unique constraints,
-# but may have logical pre-existing matches ... eg an ip address in
-# a certain context ... etc ? possibly mac address also ?
+# these matchers are not driven by netbox unique constraints,
+# but are logical criteria that may be used to match objects.
+# These should represent the likely intent of a user when
+# matching existing objects.
 #
+_LOGICAL_MATCHERS = {
+    "dcim.macaddress": lambda: [
+        ObjectMatchCriteria(
+            # consider a matching mac address within the same parent object
+            # to be the same object although not technically required to be.
+            fields=("mac_address", "assigned_object_type", "assigned_object_id"),
+            name="logical_mac_address_within_parent",
+            model_class=get_object_type_model("dcim.macaddress"),
+        ),
+    ],
+}
+
 
 @dataclass
 class ObjectMatchCriteria:
@@ -150,10 +166,10 @@ class ObjectMatchCriteria:
 
     def _build_fields_queryset(self, data) -> models.QuerySet:
         """Builds a queryset for a simple set-of-fields constraint."""
+        data = self._prepare_data(data)
         lookup_kwargs = {}
         for field_name in self.fields:
             field = self.model_class._meta.get_field(field_name)
-            # attribute = field.attname (we just use field name, since not using the model instances...)
             if field_name not in data:
                 logger.error(f"  * cannot build fields queryset for {self.name} (missing field {field_name})")
                 return None  # cannot match, missing field data
@@ -171,6 +187,7 @@ class ObjectMatchCriteria:
 
     def _build_expressions_queryset(self, data) -> models.QuerySet:
         """Builds a queryset for the constraint with the given data."""
+        data = self._prepare_data(data)
         replacements = {
             F(field): Value(value) if isinstance(value, (str, int, float, bool)) else value
             for field, value in data.items()
@@ -199,10 +216,32 @@ class ObjectMatchCriteria:
             qs = qs.filter(self.condition)
         return qs
 
+    def _prepare_data(self, data: dict) -> dict:
+        prepared = {}
+        logger.error(f"preparing data: {data}")
+        for field_name, value in data.items():
+            try:
+                field = self.model_class._meta.get_field(field_name)
+                logger.error(f"field: {field} {field.is_relation} {field.related_model} {getattr(field, 'related_model')}")
+                # special handling for object type -> content type id
+                if field.is_relation and hasattr(field, "related_model") and field.related_model == ContentType:
+                    logger.error("yes.")
+                    prepared[field_name] = content_type_id(value)
+                else:
+                    logger.error("no.")
+                    prepared[field_name] = value
+                logger.error(f"field: {field_name} -> {value}")
+
+            except FieldDoesNotExist:
+                continue
+        logger.error(f"prepared data: {data} -> {prepared}")
+        return prepared
+
 @lru_cache(maxsize=256)
 def get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
     """Extract unique constraints from a Django model."""
-    constraints = []
+    object_type = get_object_type(model_class)
+    matchers = _LOGICAL_MATCHERS.get(object_type, lambda: [])()
 
     # collect single fields that are unique
     for field in model_class._meta.fields:
@@ -211,7 +250,7 @@ def get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
             continue
 
         if field.unique:
-            constraints.append(
+            matchers.append(
                 ObjectMatchCriteria(
                     model_class=model_class,
                     fields=(field.name,),
@@ -224,7 +263,7 @@ def get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
         if not _is_supported_constraint(constraint, model_class):
             continue
         if len(constraint.fields) > 0:
-            constraints.append(
+            matchers.append(
                 ObjectMatchCriteria(
                     model_class=model_class,
                     fields=tuple(constraint.fields),
@@ -233,7 +272,7 @@ def get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
                 )
             )
         elif len(constraint.expressions) > 0:
-            constraints.append(
+            matchers.append(
                 ObjectMatchCriteria(
                     model_class=model_class,
                     expressions=tuple(constraint.expressions),
@@ -248,7 +287,8 @@ def get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
             # (this shouldn't happen / enforced by django)
             continue
 
-    return constraints
+    return matchers
+
 
 def _is_supported_constraint(constraint, model_class) -> bool:
     if not isinstance(constraint, models.UniqueConstraint):
@@ -353,14 +393,12 @@ def find_existing_object(data: dict, object_type: str):
         if q is None:
             logger.error(f"  * skipped matcher {matcher.name} (no queryset)")
             continue
-        try:
-            logger.error(f"  * trying query {q.query}")
-            existing = q.get()
+        logger.error(f"  * trying query {q.query}")
+        existing = q.order_by('pk').first()
+        if existing is not None:
             logger.error(f"      -> Found object {existing} via {matcher.name}")
             return existing
-        except model_class.DoesNotExist:
-            logger.error(f"      -> No object found for matcher {matcher.name}")
-            continue
+        logger.error(f"      -> No object found for matcher {matcher.name}")
     logger.error("  * No matchers found an existing object")
     return None
 
@@ -370,6 +408,19 @@ def get_object_type_model(object_type: str) -> Type[models.Model]:
     app_label, model_name = object_type.split(".")
     object_content_type = NetBoxType.objects.get_by_natural_key(app_label, model_name)
     return object_content_type.model_class()
+
+@lru_cache(maxsize=256)
+def get_object_type(model_class) -> str:
+    """Get the object type for a given model class."""
+    content_type = ContentType.objects.get_for_model(model_class)
+    return content_type.app_label + '.' + content_type.model
+
+@lru_cache(maxsize=256)
+def content_type_id(object_type: str) -> int:
+    """Get the content type id for a given object type."""
+    app_label, model_name = object_type.split(".")
+    object_content_type = NetBoxType.objects.get_by_natural_key(app_label, model_name)
+    return object_content_type.id
 
 def merge_data(a: dict, b: dict) -> dict:
     """

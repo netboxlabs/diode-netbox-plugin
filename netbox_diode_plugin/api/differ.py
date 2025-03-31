@@ -145,43 +145,35 @@ def diff_to_change(
     unresolved_references: list[str],
 ) -> Change:
     """Convert a diff to a change."""
-    change_type = ChangeType.UPDATE if prechange_data.get("id") else ChangeType.CREATE
+    change_type = ChangeType.UPDATE if len(prechange_data) > 0 else ChangeType.CREATE
     if change_type == ChangeType.UPDATE and not len(changed_attrs) > 0:
         change_type = ChangeType.NOOP
 
-    primary_value = get_primary_value(postchange_data, object_type)
+    primary_value = get_primary_value(prechange_data | postchange_data, object_type)
     if primary_value is None:
         primary_value = "(unnamed)"
 
     prior_id = prechange_data.get("id")
+    ref_id = None
+    if prior_id is None:
+        ref_id = postchange_data.pop("id", None)
+
     change = Change(
         change_type=change_type,
         object_type=object_type,
         object_id=prior_id if isinstance(prior_id, int) else None,
+        ref_id=ref_id,
         object_primary_value=primary_value,
         new_refs=unresolved_references,
     )
-    if change.object_id is None:
-        change.ref_id = postchange_data.get("id")
-        _ = postchange_data.pop("id", None)
-
-    postchange_data_clean = clean_diff_data(postchange_data)
 
     if change_type == ChangeType.UPDATE:
         # remove null values
         prechange_data_clean = clean_diff_data(prechange_data)
-
-        merged_data = copy.deepcopy(prechange_data_clean)
-
-        merged_data.update({
-            attr: postchange_data_clean[attr]
-            for attr in changed_attrs
-            if attr in postchange_data_clean
-        })
         change.before = sort_dict_recursively(prechange_data_clean)
-        change.data = sort_dict_recursively(merged_data)
-    else:
-        change.data = sort_dict_recursively(postchange_data_clean)
+
+    postchange_data_clean = clean_diff_data(postchange_data)
+    change.data = sort_dict_recursively(postchange_data_clean)
 
     return change
 

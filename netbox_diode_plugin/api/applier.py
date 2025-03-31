@@ -63,7 +63,7 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
             for field in model_class._meta.get_fields()
             if field.is_relation
         }
-        
+
         # resolve foreign key references
         for ref_field in change.new_refs:
             if isinstance(data[ref_field], (list, tuple)):
@@ -76,7 +76,7 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
                 data[ref_field] = ref_list
             else:
                 data[ref_field] = created[data[ref_field]]
-        
+
         tags = data.pop("tags", None)
         if tags:
             tags_model_class = fk_fields.get("tags")
@@ -96,7 +96,7 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
                     data[content_type_id_field] = int(content_type_id_value)
                 elif isinstance(content_type_id_value, models.Model):
                     data[content_type_id_field] = content_type_id_value.pk
-        
+
         # get model fields matching data keys if foreign key
         # TODO: consider use of existing model serializers accepting PKs
         for key, value in data.items():
@@ -110,10 +110,9 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
                     data[key] = value
 
         return data, tags
-    
+
     def post_apply(instance: models.Model, tags: list[models.Model]):
         """Post-apply the data."""
-
         # set tags
         if tags and hasattr(instance, "tags"):
             instance.tags.set(tags)
@@ -136,21 +135,20 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
             if object_id := change.object_id:
                 model_class.objects.filter(id=object_id).update(**data)
                 instance = model_class.objects.get(id=object_id)
-
-            # # MACAddress case (create and update in a same change set)
-            # elif instance := created[change.ref_id]:
-            #     instance.update(**data)
-            #     if tags:
-            #         instance.tags.set(tags)
+            # create and update in a same change set
+            elif change.ref_id and (instance := created[change.ref_id]):
+                for attr, value in data.items():
+                    setattr(instance, attr, value)
+                instance.save()
             else:
-                raise ApplyChangeSetException("Object ID or ref_id is required for update")
+                raise ApplyChangeSetException("Object ID or Ref ID is required for update")
 
         elif change_type == ChangeType.NOOP.value:
             pass
 
         else:
             raise ApplyChangeSetException(f"Unknown change type: {change.type}")
-        
+
         post_apply(instance, tags)
 
     return ApplyChangeSetResult(

@@ -77,8 +77,8 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     logger.error(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
     _set_defaults(resolved, supported_models)
     logger.error(f"_set_defaults: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
-    output = _move_if_unresolved(resolved)
-    logger.error(f"_move_if_unresolved: {json.dumps(output, default=lambda o: str(o), indent=4)}")
+    output = _handle_post_creates(resolved)
+    logger.error(f"_merge_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}")
 
     _check_unresolved_refs(output)
     return output
@@ -94,7 +94,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None, ex
     existing = existing or {}
     entities = [transformed]
 
-    move_if_unresolved = defaultdict(list)
+    post_create = {}
 
     for key, value in proto_json.items():
         ref_info = get_json_ref_info(object_type, key)
@@ -103,43 +103,53 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None, ex
             continue
 
         nested_context = _nested_context(object_type, uuid, ref_info.field_name)
-
-        # nested reference
         field_name = ref_info.field_name
-
-        # if this is potentially a circular reference, we need to mark this for
-        # later checking.
         is_circular = _is_circular_reference(object_type, field_name)
 
         if ref_info.is_generic:
             transformed[field_name + "_type"] = ref_info.object_type
             field_name = field_name + "_id"
 
+        nested_refs = []
+        ref_value = None
         if isinstance(value, list):
-            ref_values = []
+            ref_value = []
             for item in value:
-                nested_refs = _transform_proto_json_1(item, ref_info.object_type, nested_context)
-                ref = nested_refs[-1]
-                if is_circular:
-                    move_if_unresolved[field_name].append(ref['_uuid'])
-                ref_values.append(UnresolvedReference(
+                nested = _transform_proto_json_1(item, ref_info.object_type, nested_context)
+                nested_refs += nested
+                ref = nested[-1]
+                ref_value.append(UnresolvedReference(
                     object_type=ref_info.object_type,
                     uuid=ref['_uuid'],
                 ))
-                entities = nested_refs + entities
-            transformed[field_name] = ref_values
         else:
             nested_refs = _transform_proto_json_1(value, ref_info.object_type, nested_context)
             ref = nested_refs[-1]
-            if is_circular:
-                move_if_unresolved[field_name].append(ref['_uuid'])
-            transformed[field_name] = UnresolvedReference(
+            ref_value = UnresolvedReference(
                 object_type=ref_info.object_type,
                 uuid=ref['_uuid'],
             )
+        if is_circular:
+            post_create[field_name] = ref_value
+            entities = entities + nested_refs
+        else:
+            transformed[field_name] = ref_value
             entities = nested_refs + entities
-    if len(move_if_unresolved) > 0:
-        transformed['_move_if_unresolved'] = move_if_unresolved
+
+    # if there are fields that must be deferred until after the object is created,
+    # add a new entity with the post-create data. eg a child object that references
+    # this object and is also referenced by this object such as primary mac address
+    # on an interface.
+    # if this object already exists, two steps are not needed, and this will be
+    # simplified in a later pass.
+    if len(post_create) > 0:
+        post_create_uuid = str(uuid4())
+        post_create['_uuid'] = post_create_uuid
+        post_create['_instance'] = uuid
+        post_create['_object_type'] = object_type
+        transformed['_post_create'] = post_create_uuid
+        entities.append(post_create)
+
     return entities
 
 def _set_defaults(entities: list[dict], supported_models: dict):
@@ -211,10 +221,12 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
     seen = {}
     new_refs = {}
     resolved = []
+
     for data in entities:
         object_type = data['_object_type']
         data = copy.deepcopy(data)
         _update_resolved_refs(data, new_refs)
+
         existing = find_existing_object(data, object_type)
         if existing is not None:
             logger.error(f"existing {data} -> {existing}")
@@ -267,36 +279,30 @@ def cleanup_unresolved_references(data: dict) -> list[str]:
         # TODO maps
     return sorted(unresolved)
 
-def _move_if_unresolved(entities: list[dict]) -> list[str]:
-    min_index = {}
+def _handle_post_creates(entities: list[dict]) -> list[str]:
+    """Merges any unnecessary post-create steps for existing objects."""
     by_uuid = {x['_uuid']: x for x in entities}
-
-    cur = 1
+    out = []
     for entity in entities:
-        min_index[entity['_uuid']] = cur
-        cur += 1
-
-        moves = entity.pop('_move_if_unresolved', None)
-        if moves is None or entity.get('_instance') is not None:
+        post_create = entity.pop('_post_create', None)
+        if post_create is None:
+            out.append(entity)
             continue
 
-        logger.debug(f"  * {entity} needs circular reference moves: {moves}")
-        entity2 = entity.copy()
-        entity2['_uuid'] = str(uuid4())
-        by_uuid[entity2['_uuid']] = entity2
-        for field_name, uuids in moves.items():
-            entity.pop(field_name, None)
-            for uuid in uuids:
-                min_index[uuid] = cur
-                cur += 1
-
-        entity2['_instance'] = entity['_uuid']
-        min_index[entity2['_uuid']] = cur
-        cur += 1
-
-    in_order = sorted((min_index[x], x) for x in min_index)
-    return [by_uuid[x[1]] for x in in_order]
-
+        post_create = by_uuid[post_create]
+        if entity.get('_instance') is not None:
+            # this entity has a post-create, but it has already been
+            # created. in this case we can just merge this entity into
+            # the post-create entity and skip it without worrying about
+            # references to it.
+            post_create.update(entity)
+        else:
+            # this entity will be created.
+            # in this case we need to fix up the identifier in the post-create
+            # to refer to the created object.
+            post_create['id'] = entity['id']
+            out.append(entity)
+    return out
 
 def _check_unresolved_refs(entities: list[dict]) -> list[str]:
     seen = set()
