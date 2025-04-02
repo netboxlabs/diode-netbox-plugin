@@ -1,9 +1,22 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs Inc
 """Diode NetBox Plugin - API - Common types and utilities."""
 
-from dataclasses import dataclass
+from collections import defaultdict
+import logging
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
 
+from django.apps import apps
+from django.contrib.contenttypes.fields import GenericRelation, GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
+from rest_framework import status
+
+logger = logging.getLogger("netbox.diode_data")
+
+NON_FIELD_ERRORS = "__all__"
 
 @dataclass
 class UnresolvedReference:
@@ -29,3 +42,143 @@ class UnresolvedReference:
     def __lt__(self, other):
         """Less than operator."""
         return self.object_type < other.object_type or (self.object_type == other.object_type and self.uuid < other.uuid)
+
+
+class ChangeType(Enum):
+    """Change type enum."""
+
+    CREATE = "create"
+    UPDATE = "update"
+    NOOP = "noop"
+
+
+@dataclass
+class Change:
+    """A change to a model instance."""
+
+    change_type: ChangeType
+    object_type: str
+    object_id: int | None = field(default=None)
+    object_primary_value: str | None = field(default=None)
+    ref_id: str | None = field(default=None)
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    before: dict | None = field(default=None)
+    data: dict | None = field(default=None)
+    new_refs: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """Convert the change to a dictionary."""
+        return {
+            "id": self.id,
+            "change_type": self.change_type.value,
+            "object_type": self.object_type,
+            "object_id": self.object_id,
+            "ref_id": self.ref_id,
+            "object_primary_value": self.object_primary_value,
+            "before": self.before,
+            "data": self.data,
+            "new_refs": self.new_refs,
+        }
+
+
+@dataclass
+class ChangeSet:
+    """A set of changes to a model instance."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    changes: list[Change] = field(default_factory=list)
+    branch: dict[str, str] | None = field(default=None)  # {"id": str, "name": str}
+
+    def to_dict(self) -> dict:
+        """Convert the change set to a dictionary."""
+        return {
+            "id": self.id,
+            "changes": [change.to_dict() for change in self.changes],
+            "branch": self.branch,
+        }
+
+    def validate(self) -> dict[str, list[str]]:
+        """Validate basics of the change set data."""
+        errors = defaultdict(dict)
+
+        for change in self.changes:
+            model = apps.get_model(change.object_type)
+
+            change_data = change.data.copy()
+            if change.before:
+                change_data.update(change.before)
+
+            # check that there is some value for every required
+            # reference field, but don't validate the actual reference.
+            excluded_relation_fields = []
+            rel_errors = defaultdict(list)
+            for f in model._meta.get_fields():
+                if isinstance(f, (GenericRelation, GenericForeignKey)):
+                    excluded_relation_fields.append(f.name)
+                    continue
+                if not f.is_relation:
+                    continue
+                field_name = f.name
+                excluded_relation_fields.append(field_name)
+
+                if hasattr(f, "related_model") and f.related_model == ContentType:
+                    change_data.pop(field_name, None)
+                    base_field = field_name[:-5]
+                    excluded_relation_fields.append(base_field + "_id")
+                    value = change_data.pop(base_field + "_id", None)
+                else:
+                    value = change_data.pop(field_name, None)
+
+                if not f.null and not f.blank and not f.many_to_many:
+                    # this field is a required relation...
+                    if value is None:
+                        rel_errors[f.name].append(f"Field {f.name} is required")
+            if rel_errors:
+                errors[change.object_type] = rel_errors
+
+            try:
+                instance = model(**change_data)
+                instance.clean_fields(exclude=excluded_relation_fields)
+            except ValidationError as e:
+                errors[change.object_type].update(e.error_dict)
+
+        return errors or None
+
+
+@dataclass
+class ChangeSetResult:
+    """A result of applying a change set."""
+
+    id: str | None = field(default_factory=lambda: str(uuid.uuid4()))
+    change_set: ChangeSet | None = field(default=None)
+    errors: dict | None = field(default=None)
+
+    def to_dict(self) -> dict:
+        """Convert the result to a dictionary."""
+        if self.change_set:
+            return self.change_set.to_dict()
+
+        return {
+            "id": self.id,
+            "errors": self.errors,
+        }
+
+    def get_status_code(self) -> int:
+        """Get the status code for the result."""
+        return status.HTTP_200_OK if not self.errors else status.HTTP_400_BAD_REQUEST
+
+
+class ChangeSetException(Exception):
+    """ChangeSetException is raised when an error occurs while generating or applying a change set."""
+
+    def __init__(self, message, errors=None):
+        """Initialize the exception."""
+        super().__init__(message)
+        self.message = message
+        self.errors = errors or {}
+
+    def __str__(self):
+        """Return the string representation of the exception."""
+        if self.errors:
+            return f"{self.message}: {self.errors}"
+        return self.message

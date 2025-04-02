@@ -120,7 +120,7 @@ class ObjectMatchCriteria:
         values = []
         for field in sorted_fields:
             value = data[field]
-            if isinstance(value, (dict, UnresolvedReference)):
+            if isinstance(value, dict):
                 logger.warning(f"unexpected value type for fingerprinting: {value}")
                 return None
             if field in insensitive:
@@ -232,13 +232,11 @@ class ObjectMatchCriteria:
                 if field.is_relation and hasattr(field, "related_model") and field.related_model == ContentType:
                     prepared[field_name] = content_type_id(value)
                 else:
-                    logger.error("no.")
                     prepared[field_name] = value
-                logger.error(f"field: {field_name} -> {value}")
 
             except FieldDoesNotExist:
                 continue
-        logger.error(f"prepared data: {data} -> {prepared}")
+        # logger.error(f"prepared data: {data} -> {prepared}")
         return prepared
 
 @lru_cache(maxsize=256)
