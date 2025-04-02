@@ -29,6 +29,8 @@ from virtualization.models import (
 
 User = get_user_model()
 
+def _get_error(response, object_name, field):
+    return response.json().get("errors", {}).get(object_name, {}).get(field, [])
 
 class BaseApplyChangeSet(APITestCase):
     """Base ApplyChangeSet test case."""
@@ -232,9 +234,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             ],
         }
 
-        response = self.send_request(payload)
-
-        self.assertEqual(response.json().get("success"), True)
+        _ = self.send_request(payload)
 
     def test_change_type_update_return_200(self):
         """Test update change_type with successful."""
@@ -261,13 +261,12 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             ],
         }
 
-        response = self.client.post(
+        _ = self.client.post(
             self.url, payload, format="json", **self.user_header
         )
 
         site_updated = Site.objects.get(id=20)
 
-        self.assertEqual(response.json().get("success"), True)
         self.assertEqual(site_updated.name, "Site A")
 
     def test_change_type_create_with_error_return_400(self):
@@ -297,13 +296,11 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         }
 
         response = self.send_request(payload, status_code=status.HTTP_400_BAD_REQUEST)
-
         site_created = Site.objects.filter(name="Site A")
 
-        self.assertEqual(response.json().get("success"), False)
         self.assertIn(
             'Expected a list of items but got type "int".',
-            response.json().get("errors", {}).get("changes[0].asns", []),
+            _get_error(response, "changes[0]", "asns"),
         )
         self.assertFalse(site_created.exists())
 
@@ -335,11 +332,9 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         response = self.send_request(payload, status_code=status.HTTP_400_BAD_REQUEST)
 
         site_updated = Site.objects.get(id=20)
-
-        self.assertEqual(response.json().get("success"), False)
         self.assertIn(
             'Expected a list of items but got type "int".',
-            response.json().get("errors", {}).get("changes[0].asns", []),
+            _get_error(response, "changes[0]", "asns")
         )
         self.assertEqual(site_updated.name, "Site 2")
 
@@ -385,9 +380,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             ],
         }
 
-        response = self.send_request(payload)
-
-        self.assertEqual(response.json().get("success"), True)
+        _ = self.send_request(payload)
 
     def test_change_type_update_with_multiples_objects_return_200(self):
         """Test update change type with two objects."""
@@ -429,12 +422,11 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             ],
         }
 
-        response = self.send_request(payload)
+        _ = self.send_request(payload)
 
         site_updated = Site.objects.get(id=20)
         device_updated = Device.objects.get(id=10)
 
-        self.assertEqual(response.json().get("success"), True)
         self.assertEqual(site_updated.name, "Site A")
         self.assertEqual(device_updated.name, "Test Device 3")
 
@@ -484,10 +476,9 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         site_created = Site.objects.filter(name="Site Z")
         device_created = Device.objects.filter(name="Test Device 4")
 
-        self.assertEqual(response.json().get("success"), False)
         self.assertIn(
             "Related object not found using the provided numeric ID: 3",
-            response.json().get("errors", {}).get("changes[1].device_type", []),
+            _get_error(response, "changes[1]", "device_type"),
         )
         self.assertFalse(site_created.exists())
         self.assertFalse(device_created.exists())
@@ -555,11 +546,9 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         site_created = Site.objects.filter(name="Site Z")
         device_created = Device.objects.filter(name="Test Device 4")
 
-        self.assertEqual(response.json().get("success"), False)
-
         self.assertIn(
             "Related object not found using the provided numeric ID: 3",
-            response.json().get("errors", {}).get("changes[1].device_type", []),
+            _get_error(response, "changes[1]", "device_type"),
         )
 
         self.assertFalse(site_created.exists())
@@ -598,7 +587,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
 
         self.assertIn(
             "dcim.site with id 30 does not exist",
-            response.json().get("errors", {}).get("changes[0].object_id", []),
+            _get_error(response, "changes[0]", "object_id"),
         )
         self.assertEqual(site_updated.name, "Site 2")
 
@@ -630,9 +619,9 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         response = self.send_request(payload, status_code=status.HTTP_400_BAD_REQUEST)
 
         self.assertIsNone(response.json().get("errors", {}).get("change_id", None))
-        self.assertEqual(
-            response.json().get("errors", {}).get("id", []),
-            ["Change set ID is required"],
+        self.assertIn(
+            "Change set ID is required",
+            _get_error(response, "changeset", "id"),
         )
 
     def test_change_type_field_not_provided_return_400(
@@ -666,7 +655,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
 
         self.assertIn(
             "Unsupported change type ''",
-            response.json().get("errors", {}).get("changes[0].change_type", []),
+            _get_error(response, "changes[0]", "change_type"),
         )
 
     def test_change_set_id_field_and_change_set_not_provided_return_400(self):
@@ -680,7 +669,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
 
         self.assertIn(
             "Change set ID is required",
-            response.json().get("errors", {}).get("id", []),
+            _get_error(response, "changeset", "id"),
         )
 
     def test_change_type_and_object_type_provided_return_400(
@@ -731,7 +720,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
 
         self.assertIn(
             "Unsupported change type 'None'",
-            response.json().get("errors", {}).get("changes[0].change_type", []),
+            _get_error(response, "changes[0]", "change_type"),
         )
         # self.assertEqual(
         #     response.json().get("errors")[0].get("change_type"),
@@ -772,9 +761,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
                 },
             ],
         }
-        response = self.send_request(payload)
-
-        self.assertEqual(response.json().get("success"), True)
+        _ = self.send_request(payload)
 
     # def test_create_ip_address_return_400(self):
     #     """Test create ip_address with missing interface name."""
@@ -953,11 +940,9 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             ],
         }
 
-        response = self.send_request(payload)
-
+        _ = self.send_request(payload)
         device_updated = Device.objects.get(id=10)
 
-        self.assertEqual(response.json().get("success"), True)
         self.assertEqual(device_updated.name, self.devices[0].name)
         self.assertEqual(device_updated.primary_ip4, self.ip_addresses[0])
 
@@ -981,9 +966,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
                 },
             ],
         }
-        response = self.send_request(payload)
-
-        self.assertEqual(response.json().get("success"), True)
+        _ = self.send_request(payload)
         self.assertEqual(Prefix.objects.get(prefix="192.168.0.0/24").scope, self.sites[0])
 
     def test_create_prefix_with_unknown_site_fails(self):
@@ -1007,11 +990,9 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             ],
         }
         response = self.send_request(payload, status_code=status.HTTP_400_BAD_REQUEST)
-
-        self.assertEqual(response.json().get("success"), False)
         self.assertIn(
             'Please select a site.',
-            response.json().get("errors", {}).get("changes[0].scope", []),
+            _get_error(response, "changes[0]", "scope"),
         )
         self.assertFalse(Prefix.objects.filter(prefix="192.168.0.0/24").exists())
 
@@ -1038,9 +1019,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
                 },
             ],
         }
-        response = self.send_request(payload)
-
-        self.assertEqual(response.json().get("success"), True)
+        _ = self.send_request(payload)
         self.assertEqual(Cluster.objects.get(name="Cluster 3").scope, self.sites[0])
 
     def test_create_virtualmachine_with_cluster_site_stored_as_scope(self):
@@ -1074,7 +1053,5 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
                 },
             ],
         }
-        response = self.send_request(payload)
-
-        self.assertEqual(response.json().get("success"), True)
+        _ = self.send_request(payload)
         self.assertEqual(VirtualMachine.objects.get(name="VM foobar", site_id=self.sites[0].id).cluster.scope, self.sites[0])

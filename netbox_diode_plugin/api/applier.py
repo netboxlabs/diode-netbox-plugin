@@ -4,7 +4,6 @@
 
 
 import logging
-from dataclasses import dataclass, field
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
@@ -12,47 +11,14 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from rest_framework.exceptions import ValidationError as ValidationError
 
-from .differ import Change, ChangeSet, ChangeType
+from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType
 from .plugin_utils import get_object_type_model, legal_fields
 from .supported_models import get_serializer_for_model
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class ApplyChangeSetResult:
-    """A result of applying a change set."""
-
-    id: str
-    success: bool
-    errors: dict | None = field(default=None)
-
-    def to_dict(self) -> dict:
-        """Convert the result to a dictionary."""
-        return {
-            "id": self.id,
-            "success": self.success,
-            "errors": self.errors,
-        }
-
-
-class ApplyChangeSetException(Exception):
-    """ApplyChangeSetException is raised when an error occurs while applying a change set."""
-
-    def __init__(self, message, errors=None):
-        """Initialize the exception."""
-        super().__init__(message)
-        self.message = message
-        self.errors = errors or {}
-
-    def __str__(self):
-        """Return the string representation of the exception."""
-        if self.errors:
-            return f"{self.message}: {self.errors}"
-        return self.message
-
-
-def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
+def apply_changeset(change_set: ChangeSet) -> ChangeSetResult:
     """Apply a change set."""
     _validate_change_set(change_set)
 
@@ -71,14 +37,12 @@ def apply_changeset(change_set: ChangeSet) -> ApplyChangeSetResult:
         except ValidationError as e:
             raise _err_from_validation_error(e, f"changes[{i}]")
         except ObjectDoesNotExist:
-            raise _err(f"{object_type} with id {change.object_id} does not exist", f"changes[{i}].object_id")
+            raise _err(f"{object_type} with id {change.object_id} does not exist", f"changes[{i}]", "object_id")
         # ConstraintViolationError ?
         # ...
 
-    return ApplyChangeSetResult(
+    return ChangeSetResult(
         id=change_set.id,
-        success=True,
-        errors=None,
     )
 
 def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict):
@@ -129,27 +93,30 @@ def _pre_apply(model_class: models.Model, change: Change, created: dict):
 
 def _validate_change_set(change_set: ChangeSet):
     if not change_set.id:
-        raise _err("Change set ID is required", "id")
+        raise _err("Change set ID is required", "changeset","id")
     if not change_set.changes:
-        raise _err("Changes are required", "changes")
+        raise _err("Changes are required", "changeset", "changes")
 
     for i, change in enumerate(change_set.changes):
         if change.object_id is None and change.ref_id is None:
-            raise _err("Object ID or Ref ID must be provided", f"changes[{i}]")
+            raise _err("Object ID or Ref ID must be provided", f"changes[{i}]", NON_FIELD_ERRORS)
         if change.change_type not in ChangeType:
-            raise _err(f"Unsupported change type '{change.change_type}'", f"changes[{i}].change_type")
+            raise _err(f"Unsupported change type '{change.change_type}'", f"changes[{i}]", "change_type")
 
-def _err(message, field):
-    return ApplyChangeSetException(message, errors={field: [message]})
+def _err(message, object_name, field):
+    return ChangeSetException(message, errors={object_name: {field: [message]}})
 
-def _err_from_validation_error(e, prefix):
+def _err_from_validation_error(e, object_name):
     errors = {}
     if e.detail:
         if isinstance(e.detail, dict):
-            for k, v in e.detail.items():
-                errors[f"{prefix}.{k}"] = v
+            errors[object_name] = e.detail
         elif isinstance(e.detail, (list, tuple)):
-            errors[prefix] = e.detail
+            errors[object_name] = {
+                NON_FIELD_ERRORS: e.detail
+            }
         else:
-            errors[prefix] = [e.detail]
-    return ApplyChangeSetException("validation error", errors=errors)
+            errors[object_name] = {
+                NON_FIELD_ERRORS: [e.detail]
+            }
+    return ChangeSetException("validation error", errors=errors)

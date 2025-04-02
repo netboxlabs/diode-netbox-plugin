@@ -1,18 +1,15 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs Inc
 """Diode NetBox Plugin - API - Differ."""
 
 import copy
-import json
 import logging
-import uuid
-from dataclasses import dataclass, field
-from enum import Enum
 
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from utilities.data import shallow_compare_dict
 
+from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType
 from .plugin_utils import get_primary_value, legal_fields
 from .supported_models import extract_supported_models
 from .transformer import cleanup_unresolved_references, transform_proto_json
@@ -21,58 +18,6 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_MODELS = extract_supported_models()
 
-class ChangeType(Enum):
-    """Change type enum."""
-
-    CREATE = "create"
-    UPDATE = "update"
-    NOOP = "noop"
-
-
-@dataclass
-class Change:
-    """A change to a model instance."""
-
-    change_type: ChangeType
-    object_type: str
-    object_id: int | None = field(default=None)
-    object_primary_value: str | None = field(default=None)
-    ref_id: str | None = field(default=None)
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    before: dict | None = field(default=None)
-    data: dict | None = field(default=None)
-    new_refs: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        """Convert the change to a dictionary."""
-        return {
-            "id": self.id,
-            "change_type": self.change_type.value,
-            "object_type": self.object_type,
-            "object_id": self.object_id,
-            "ref_id": self.ref_id,
-            "object_primary_value": self.object_primary_value,
-            "before": self.before,
-            "data": self.data,
-            "new_refs": self.new_refs,
-        }
-
-
-@dataclass
-class ChangeSet:
-    """A set of changes to a model instance."""
-
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    changes: list[Change] = field(default_factory=list)
-    branch: dict[str, str] | None = field(default=None)  # {"id": str, "name": str}
-
-    def to_dict(self) -> dict:
-        """Convert the change set to a dictionary."""
-        return {
-            "id": self.id,
-            "changes": [change.to_dict() for change in self.changes],
-            "branch": self.branch,
-        }
 
 def prechange_data_from_instance(instance) -> dict: # noqa: C901
     """Convert model instance data to a dictionary format for comparison."""
@@ -193,7 +138,7 @@ def sort_dict_recursively(d):
     return d
 
 
-def generate_changeset(entity: dict, object_type: str) -> ChangeSet:
+def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
     """Generate a changeset for an entity."""
     change_set = ChangeSet()
 
@@ -227,5 +172,11 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSet:
             new_refs,
         )
         change_set.changes.append(change)
-    logger.error(f"change_set: {json.dumps(change_set.to_dict(), default=str, indent=4)}")
-    return change_set
+
+    if errors := change_set.validate():
+        raise ChangeSetException("Invalid change set", errors)
+
+    return ChangeSetResult(
+        id=change_set.id,
+        change_set=change_set,
+    )
