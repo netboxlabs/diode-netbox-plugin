@@ -15,11 +15,9 @@ from django.utils.text import slugify
 
 from .common import UnresolvedReference
 from .matcher import find_existing_object, fingerprint, merge_data
-from .plugin_utils import get_json_ref_info, get_primary_value_field
+from .plugin_utils import get_json_ref_info, get_primary_value
 
 logger = logging.getLogger("netbox.diode_data")
-
-_DEFAULT_SLUG_SOURCE_FIELD_NAME = "name"
 
 @lru_cache(maxsize=128)
 def _camel_to_snake_case(name):
@@ -174,15 +172,10 @@ def _set_slugs(entities: list[dict], supported_models: dict):
 
 def _generate_slug(object_type, data):
     """Generate a slug for a model instance."""
-    source_field = get_field_to_slugify(object_type)
-    if source_field in data and data[source_field]:
-        return slugify(str(data[source_field]))
-
+    source_value = get_primary_value(data, object_type)
+    if source_value is not None:
+        return slugify(str(source_value))
     return None
-
-def get_field_to_slugify(object_type):
-    """Get the field to use as the source for the slug."""
-    return get_primary_value_field(object_type, _DEFAULT_SLUG_SOURCE_FIELD_NAME)
 
 def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
     by_fp = {}

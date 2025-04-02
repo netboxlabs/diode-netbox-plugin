@@ -17,7 +17,7 @@ from netbox_diode_plugin.api.applier import (
     ApplyChangeSetResult,
     apply_changeset,
 )
-from netbox_diode_plugin.api.differ import Change, ChangeSet, generate_changeset
+from netbox_diode_plugin.api.differ import Change, ChangeSet, ChangeType, generate_changeset
 from netbox_diode_plugin.api.permissions import IsDiodeWriter
 
 logger = logging.getLogger("netbox.diode_data")
@@ -111,15 +111,23 @@ class ApplyChangeSetView(views.APIView):
     def _post(self, request, *args, **kwargs):
         data = request.data.copy()
 
+        changes = []
         if 'changes' in data:
-            data['changes'] = [Change(**change) for change in data['changes']]
-        change_set = ChangeSet(**data)
-
-        if not change_set.id:
-            raise ValidationError("Change set ID is required")
-        if not change_set.changes:
-            raise ValidationError("Changes are required")
-
+            changes = [
+                Change(
+                    change_type=change.get('change_type'),
+                    object_type=change.get('object_type'),
+                    object_id=change.get('object_id'),
+                    ref_id=change.get('ref_id'),
+                    data=change.get('data'),
+                    before=change.get('before'),
+                    new_refs=change.get('new_refs', []),
+                ) for change in data['changes']
+            ]
+        change_set = ChangeSet(
+            id=data.get('id'),
+            changes=changes,
+        )
         try:
             with transaction.atomic():
                 result = apply_changeset(change_set)
@@ -130,6 +138,7 @@ class ApplyChangeSetView(views.APIView):
                 success=False,
                 errors=e.errors,
             )
+            return Response(result.to_dict(), status=status.HTTP_400_BAD_REQUEST)
 
         return Response(result.to_dict(), status=status.HTTP_200_OK)
 

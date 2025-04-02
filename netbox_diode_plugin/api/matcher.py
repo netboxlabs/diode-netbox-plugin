@@ -17,6 +17,7 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 
 from .common import UnresolvedReference
+from .plugin_utils import get_object_type, get_object_type_model, content_type_id
 
 logger = logging.getLogger(__name__)
 
@@ -401,26 +402,6 @@ def find_existing_object(data: dict, object_type: str):
         logger.error(f"      -> No object found for matcher {matcher.name}")
     logger.error("  * No matchers found an existing object")
     return None
-
-@lru_cache(maxsize=256)
-def get_object_type_model(object_type: str) -> Type[models.Model]:
-    """Get the model class for a given object type."""
-    app_label, model_name = object_type.split(".")
-    object_content_type = NetBoxType.objects.get_by_natural_key(app_label, model_name)
-    return object_content_type.model_class()
-
-@lru_cache(maxsize=256)
-def get_object_type(model_class) -> str:
-    """Get the object type for a given model class."""
-    content_type = ContentType.objects.get_for_model(model_class)
-    return content_type.app_label + '.' + content_type.model
-
-@lru_cache(maxsize=256)
-def content_type_id(object_type: str) -> int:
-    """Get the content type id for a given object type."""
-    app_label, model_name = object_type.split(".")
-    object_content_type = NetBoxType.objects.get_by_natural_key(app_label, model_name)
-    return object_content_type.id
 
 def merge_data(a: dict, b: dict) -> dict:
     """
