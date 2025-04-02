@@ -9,11 +9,10 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from utilities.data import shallow_compare_dict
 
+from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType
 from .plugin_utils import get_primary_value, legal_fields
 from .supported_models import extract_supported_models
 from .transformer import cleanup_unresolved_references, transform_proto_json
-from .plugin_utils import get_primary_value
-from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType
 
 logger = logging.getLogger(__name__)
 

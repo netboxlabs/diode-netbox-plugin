@@ -11,7 +11,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from rest_framework.exceptions import ValidationError as ValidationError
 
-from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType
+from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType
 from .plugin_utils import get_object_type_model, legal_fields
 from .supported_models import get_serializer_for_model
 
@@ -37,13 +37,12 @@ def apply_changeset(change_set: ChangeSet) -> ChangeSetResult:
         except ValidationError as e:
             raise _err_from_validation_error(e, f"changes[{i}]")
         except ObjectDoesNotExist:
-            raise _err(f"{object_type} with id {change.object_id} does not exist", f"changes[{i}].object_id")
+            raise _err(f"{object_type} with id {change.object_id} does not exist", f"changes[{i}]", "object_id")
         # ConstraintViolationError ?
         # ...
 
     return ChangeSetResult(
         id=change_set.id,
-        success=True,
     )
 
 def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict):
@@ -94,13 +93,13 @@ def _pre_apply(model_class: models.Model, change: Change, created: dict):
 
 def _validate_change_set(change_set: ChangeSet):
     if not change_set.id:
-        raise _err("Change set ID is required", "id")
+        raise _err("Change set ID is required", "changeset","id")
     if not change_set.changes:
-        raise _err("Changes are required", "changes")
+        raise _err("Changes are required", "changeset", "changes")
 
     for i, change in enumerate(change_set.changes):
         if change.object_id is None and change.ref_id is None:
-            raise _err("Object ID or Ref ID must be provided", f"changes[{i}]", "non_field_errors")
+            raise _err("Object ID or Ref ID must be provided", f"changes[{i}]", NON_FIELD_ERRORS)
         if change.change_type not in ChangeType:
             raise _err(f"Unsupported change type '{change.change_type}'", f"changes[{i}]", "change_type")
 
@@ -114,10 +113,10 @@ def _err_from_validation_error(e, object_name):
             errors[object_name] = e.detail
         elif isinstance(e.detail, (list, tuple)):
             errors[object_name] = {
-                "non_field_errors": e.detail
+                NON_FIELD_ERRORS: e.detail
             }
         else:
             errors[object_name] = {
-                "non_field_errors": [e.detail]
+                NON_FIELD_ERRORS: [e.detail]
             }
     return ChangeSetException("validation error", errors=errors)

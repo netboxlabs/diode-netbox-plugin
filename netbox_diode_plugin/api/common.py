@@ -2,16 +2,21 @@
 # Copyright 2025 NetBox Labs Inc
 """Diode NetBox Plugin - API - Common types and utilities."""
 
+from collections import defaultdict
 import logging
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
 from django.apps import apps
+from django.contrib.contenttypes.fields import GenericRelation, GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from rest_framework import status
 
 logger = logging.getLogger("netbox.diode_data")
+
+NON_FIELD_ERRORS = "__all__"
 
 @dataclass
 class UnresolvedReference:
@@ -83,7 +88,6 @@ class ChangeSet:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     changes: list[Change] = field(default_factory=list)
     branch: dict[str, str] | None = field(default=None)  # {"id": str, "name": str}
-    _refs: dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert the change set to a dictionary."""
@@ -93,55 +97,52 @@ class ChangeSet:
             "branch": self.branch,
         }
 
-    def _update_refs(self, model, data):
-        for k, v in data.items():
-            field = model._meta.get_field(k) if hasattr(model._meta, 'get_field') else None
-
-            if field and field.is_relation:
-                field_model = field.related_model
-                if field.many_to_one:
-                    if isinstance(v, (int, str)) and v in self._refs:
-                        data[k] = field_model(**self._refs[v])
-                elif field.many_to_many:
-                    if isinstance(v, list):
-                        data[k] = [field_model(**self._refs[item]) for item in v]
-
     def validate(self) -> dict[str, list[str]]:
-        """Validate the change set data."""
-        errors = {}
+        """Validate basics of the change set data."""
+        errors = defaultdict(dict)
 
         for change in self.changes:
-            object_id = change.ref_id or change.object_id
-
             model = apps.get_model(change.object_type)
 
             change_data = change.data.copy()
+            if change.before:
+                change_data.update(change.before)
 
-            if object_id and object_id not in self._refs:
-                self._refs[object_id] = change_data
+            # check that there is some value for every required
+            # reference field, but don't validate the actual reference.
+            excluded_relation_fields = []
+            rel_errors = defaultdict(list)
+            for f in model._meta.get_fields():
+                if isinstance(f, (GenericRelation, GenericForeignKey)):
+                    excluded_relation_fields.append(f.name)
+                    continue
+                if not f.is_relation:
+                    continue
+                field_name = f.name
+                excluded_relation_fields.append(field_name)
 
-            self._update_refs(model, change_data)
+                if hasattr(f, "related_model") and f.related_model == ContentType:
+                    change_data.pop(field_name, None)
+                    base_field = field_name[:-5]
+                    excluded_relation_fields.append(base_field + "_id")
+                    value = change_data.pop(base_field + "_id", None)
+                else:
+                    value = change_data.pop(field_name, None)
+
+                if not f.null and not f.blank and not f.many_to_many:
+                    # this field is a required relation...
+                    if value is None:
+                        rel_errors[f.name].append(f"Field {f.name} is required")
+            if rel_errors:
+                errors[change.object_type] = rel_errors
 
             try:
                 instance = model(**change_data)
-
-                # Get all required relation fields (non-null, non-blank, non-m2m)
-                required_relation_fields = [
-                    field.name for field in model._meta.get_fields()
-                    if field.is_relation and not field.null and not field.blank and not field.many_to_many
-                ]
-
-                # Create a list of relation fields that have values and should be excluded from validation
-                excluded_relation_fields = [
-                    field.name for field in instance._meta.fields
-                    if field.name in required_relation_fields and getattr(instance, field.name, None) is not None
-                ]
-
                 instance.clean_fields(exclude=excluded_relation_fields)
             except ValidationError as e:
-                errors[change.object_type] = e.error_dict
+                errors[change.object_type].update(e.error_dict)
 
-        return errors
+        return errors or None
 
 
 @dataclass
@@ -154,15 +155,17 @@ class ChangeSetResult:
 
     def to_dict(self) -> dict:
         """Convert the result to a dictionary."""
+        if self.change_set:
+            return self.change_set.to_dict()
+
         return {
             "id": self.id,
             "errors": self.errors,
-            "change_set": self.change_set.to_dict() if self.change_set else None,
         }
 
     def get_status_code(self) -> int:
         """Get the status code for the result."""
-        return status.HTTP_200_OK
+        return status.HTTP_200_OK if not self.errors else status.HTTP_400_BAD_REQUEST
 
 
 class ChangeSetException(Exception):

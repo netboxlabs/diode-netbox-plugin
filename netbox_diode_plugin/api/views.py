@@ -79,7 +79,6 @@ class GenerateDiffView(views.APIView):
         except ChangeSetException as e:
             logger.error(f"Error generating change set: {e}")
             result = ChangeSetResult(
-                success=False,
                 errors=e.errors,
             )
             return Response(result.to_dict(), status=result.get_status_code())
@@ -139,7 +138,6 @@ class ApplyChangeSetView(views.APIView):
             logger.error(f"Error applying change set: {e}")
             result = ChangeSetResult(
                 id=change_set.id,
-                success=False,
                 errors=e.errors,
             )
 

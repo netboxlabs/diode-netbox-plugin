@@ -2,11 +2,15 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Tests."""
 
+import logging
+
 from dcim.models import Interface, Site
 from django.contrib.auth import get_user_model
 from rest_framework import status
 from users.models import Token
 from utilities.testing import APITestCase
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -39,8 +43,6 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         }
 
         _, response = self.diff_and_apply(payload)
-        self.assertEqual(response.json().get("success"), True)
-
         new_site = Site.objects.get(name="Generate Diff and Apply Site")
         self.assertEqual(new_site.slug, "generate-diff-and-apply-site")
 
@@ -76,8 +78,6 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         }
 
         _, response = self.diff_and_apply(payload)
-        self.assertEqual(response.json().get("success"), True)
-
         new_interface = Interface.objects.get(name="Interface 1x")
         self.assertEqual(new_interface.primary_mac_address.mac_address, "00:00:00:00:00:01")
 
