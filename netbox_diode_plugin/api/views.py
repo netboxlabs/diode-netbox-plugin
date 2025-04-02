@@ -7,17 +7,14 @@ import re
 
 from django.apps import apps
 from django.db import transaction
-from rest_framework import status, views
+from rest_framework import views
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from netbox_diode_plugin.api.applier import (
-    ApplyChangeSetException,
-    ApplyChangeSetResult,
-    apply_changeset,
-)
-from netbox_diode_plugin.api.differ import Change, ChangeSet, ChangeType, generate_changeset
+from netbox_diode_plugin.api.applier import apply_changeset
+from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeSetException, ChangeSetResult
+from netbox_diode_plugin.api.differ import generate_changeset
 from netbox_diode_plugin.api.permissions import IsDiodeWriter
 
 logger = logging.getLogger("netbox.diode_data")
@@ -77,7 +74,15 @@ class GenerateDiffView(views.APIView):
                 f"No data found for {entity_key} in entity got: {entity.keys()}"
             )
 
-        change_set = generate_changeset(original_entity_data, object_type)
+        try:
+            result = generate_changeset(original_entity_data, object_type)
+        except ChangeSetException as e:
+            logger.error(f"Error generating change set: {e}")
+            result = ChangeSetResult(
+                success=False,
+                errors=e.errors,
+            )
+            return Response(result.to_dict(), status=result.get_status_code())
 
         branch_id = request.headers.get("X-NetBox-Branch")
 
@@ -85,12 +90,11 @@ class GenerateDiffView(views.APIView):
         if branch_id and Branch is not None:
             try:
                 branch = Branch.objects.get(id=branch_id)
-                change_set.branch = {"id": branch.id, "name": branch.name}
+                result.branch = {"id": branch.id, "name": branch.name}
             except Branch.DoesNotExist:
                 logger.warning(f"Branch with ID {branch_id} does not exist")
 
-        logger.info(f"change_set: {json.dumps(change_set.to_dict(), default=str)}")
-        return Response(change_set.to_dict(), status=status.HTTP_200_OK)
+        return Response(result.to_dict(), status=result.get_status_code())
 
 
 class ApplyChangeSetView(views.APIView):
@@ -131,25 +135,12 @@ class ApplyChangeSetView(views.APIView):
         try:
             with transaction.atomic():
                 result = apply_changeset(change_set)
-        except ApplyChangeSetException as e:
+        except ChangeSetException as e:
             logger.error(f"Error applying change set: {e}")
-            result = ApplyChangeSetResult(
+            result = ChangeSetResult(
                 id=change_set.id,
                 success=False,
                 errors=e.errors,
             )
-            return Response(result.to_dict(), status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(result.to_dict(), status=status.HTTP_200_OK)
-
-    @staticmethod
-    def _get_error_response(change_set_id, errors):
-        """Get the error response."""
-        return Response(
-            {
-                "change_set_id": change_set_id,
-                "result": "failed",
-                "errors": errors,
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        return Response(result.to_dict(), status=result.get_status_code())
