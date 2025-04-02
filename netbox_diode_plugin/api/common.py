@@ -149,7 +149,6 @@ class ChangeSetResult:
     """A result of applying a change set."""
 
     id: str | None = field(default_factory=lambda: str(uuid.uuid4()))
-    success: bool | None = field(default=False)
     change_set: ChangeSet | None = field(default=None)
     errors: dict | None = field(default=None)
 
@@ -157,14 +156,13 @@ class ChangeSetResult:
         """Convert the result to a dictionary."""
         return {
             "id": self.id,
-            "success": self.success,
             "errors": self.errors,
             "change_set": self.change_set.to_dict() if self.change_set else None,
         }
 
     def get_status_code(self) -> int:
         """Get the status code for the result."""
-        return status.HTTP_200_OK if self.success else status.HTTP_400_BAD_REQUEST
+        return status.HTTP_200_OK
 
 
 class ChangeSetException(Exception):

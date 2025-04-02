@@ -179,6 +179,5 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
 
     return ChangeSetResult(
         id=change_set.id,
-        success=True,
         change_set=change_set,
     )
