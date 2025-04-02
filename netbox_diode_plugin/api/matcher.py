@@ -120,6 +120,9 @@ class ObjectMatchCriteria:
         values = []
         for field in sorted_fields:
             value = data[field]
+            if isinstance(value, (dict, UnresolvedReference)):
+                logger.warning(f"unexpected value type for fingerprinting: {value}")
+                return None
             if field in insensitive:
                 value = value.lower()
             values.append(value)
@@ -178,6 +181,9 @@ class ObjectMatchCriteria:
             if isinstance(lookup_value, UnresolvedReference):
                 logger.error(f"  * cannot build fields queryset for {self.name} ({field_name} is unresolved reference)")
                 return None  # cannot match, missing field data
+            if isinstance(lookup_value, dict):
+                logger.error(f"  * cannot build fields queryset for {self.name} ({field_name} is dict)")
+                return None  # cannot match, missing field data
             lookup_kwargs[field.name] = lookup_value
 
         # logger.error(f"      * query kwargs: {lookup_kwargs}")
@@ -219,14 +225,11 @@ class ObjectMatchCriteria:
 
     def _prepare_data(self, data: dict) -> dict:
         prepared = {}
-        logger.error(f"preparing data: {data}")
         for field_name, value in data.items():
             try:
                 field = self.model_class._meta.get_field(field_name)
-                logger.error(f"field: {field} {field.is_relation} {field.related_model} {getattr(field, 'related_model')}")
                 # special handling for object type -> content type id
                 if field.is_relation and hasattr(field, "related_model") and field.related_model == ContentType:
-                    logger.error("yes.")
                     prepared[field_name] = content_type_id(value)
                 else:
                     logger.error("no.")
@@ -344,7 +347,8 @@ def _fingerprint_all(data: dict) -> str:
         values.append(k)
         if isinstance(v, (list, tuple)):
             values.extend(sorted(v))
-        # TODO: handle dicts
+        if isinstance(v, dict):
+            values.append(_fingerprint_all(v))
         else:
             values.append(v)
     # logger.error(f"_fingerprint_all: {data} -> values: {tuple(values)}")
