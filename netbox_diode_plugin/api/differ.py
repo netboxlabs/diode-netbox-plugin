@@ -13,7 +13,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from utilities.data import shallow_compare_dict
 
-from .plugin_utils import get_primary_value
+from .plugin_utils import get_primary_value, legal_fields
 from .supported_models import extract_supported_models
 from .transformer import cleanup_unresolved_references, transform_proto_json
 
@@ -74,7 +74,7 @@ class ChangeSet:
             "branch": self.branch,
         }
 
-def prechange_data_from_instance(instance) -> dict:
+def prechange_data_from_instance(instance) -> dict: # noqa: C901
     """Convert model instance data to a dictionary format for comparison."""
     prechange_data = {}
 
@@ -92,7 +92,13 @@ def prechange_data_from_instance(instance) -> dict:
     if not fields:
         raise ValidationError(f"Model {model_class.__name__} has no fields")
 
+    diode_fields = legal_fields(model_class)
+
     for field_name, field_info in fields.items():
+        # permit only diode fields and the primary key
+        if field_name not in diode_fields and field_name != "id":
+            continue
+
         if not hasattr(instance, field_name):
             continue
 
