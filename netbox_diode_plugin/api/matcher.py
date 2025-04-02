@@ -17,7 +17,7 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 
 from .common import UnresolvedReference
-from .plugin_utils import get_object_type, get_object_type_model, content_type_id
+from .plugin_utils import content_type_id, get_object_type, get_object_type_model
 
 logger = logging.getLogger(__name__)
 

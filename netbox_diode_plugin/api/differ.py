@@ -13,9 +13,9 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from utilities.data import shallow_compare_dict
 
-from .supported_models import extract_supported_models
-from .transformer import transform_proto_json, cleanup_unresolved_references
 from .plugin_utils import get_primary_value
+from .supported_models import extract_supported_models
+from .transformer import cleanup_unresolved_references, transform_proto_json
 
 logger = logging.getLogger(__name__)
 
