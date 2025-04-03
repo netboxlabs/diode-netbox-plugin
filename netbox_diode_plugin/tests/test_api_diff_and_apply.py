@@ -4,8 +4,9 @@
 
 import logging
 
-from dcim.models import Interface, Site
+from dcim.models import Device, Interface, Site
 from django.contrib.auth import get_user_model
+from ipam.models import IPAddress
 from rest_framework import status
 from users.models import Token
 from utilities.testing import APITestCase
@@ -81,6 +82,45 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         new_interface = Interface.objects.get(name="Interface 1x")
         self.assertEqual(new_interface.primary_mac_address.mac_address, "00:00:00:00:00:01")
 
+    def test_generate_diff_and_apply_create_device_with_primary_ip4(self):
+        """Test generate diff and apply create device with primary ip4."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.ipaddress",
+            "entity": {
+                "ipAddress": {
+                    "address": "192.168.1.1",
+                    "assignedObjectInterface": {
+                        "name": "Interface 2x",
+                        "type": "1000base-t",
+                        "device": {
+                            "name": "Device 2x",
+                            "role": {
+                                "name": "Role ABC",
+                            },
+                            "site": {
+                                "name": "Site ABC",
+                            },
+                            "deviceType": {
+                                "manufacturer": {
+                                    "name": "Manufacturer A",
+                                },
+                                "model": "Device Type A",
+                            },
+                            "primaryIp4": {
+                                "address": "192.168.1.1",
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_ipaddress = IPAddress.objects.get(address="192.168.1.1")
+        self.assertEqual(new_ipaddress.assigned_object.name, "Interface 2x")
+        device = Device.objects.get(name="Device 2x")
+        self.assertEqual(device.primary_ip4.pk, new_ipaddress.pk)
 
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
