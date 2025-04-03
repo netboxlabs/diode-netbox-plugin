@@ -118,13 +118,15 @@ def diff_to_change(
         new_refs=unresolved_references,
     )
 
-    if change_type == ChangeType.UPDATE:
-        # remove null values
+    if change_type != ChangeType.NOOP:
+        postchange_data_clean = clean_diff_data(postchange_data)
+        change.data = sort_dict_recursively(postchange_data_clean)
+    else:
+        change.data = {}
+
+    if change_type == ChangeType.UPDATE or change_type == ChangeType.NOOP:
         prechange_data_clean = clean_diff_data(prechange_data)
         change.before = sort_dict_recursively(prechange_data_clean)
-
-    postchange_data_clean = clean_diff_data(postchange_data)
-    change.data = sort_dict_recursively(postchange_data_clean)
 
     return change
 
@@ -171,8 +173,17 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
             changed_attrs,
             new_refs,
         )
+
         change_set.changes.append(change)
 
+    has_any_changes = False
+    for change in change_set.changes:
+        if change.change_type != ChangeType.NOOP:
+            has_any_changes = True
+            break
+
+    if not has_any_changes:
+        change_set.changes = []
     if errors := change_set.validate():
         raise ChangeSetException("Invalid change set", errors)
 
