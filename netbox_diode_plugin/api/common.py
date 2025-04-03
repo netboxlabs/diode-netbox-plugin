@@ -2,16 +2,17 @@
 # Copyright 2025 NetBox Labs Inc
 """Diode NetBox Plugin - API - Common types and utilities."""
 
-from collections import defaultdict
 import logging
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 
 from django.apps import apps
-from django.contrib.contenttypes.fields import GenericRelation, GenericForeignKey
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
+from django.db import models
 from rest_framework import status
 
 logger = logging.getLogger("netbox.diode_data")
@@ -108,31 +109,7 @@ class ChangeSet:
             if change.before:
                 change_data.update(change.before)
 
-            # check that there is some value for every required
-            # reference field, but don't validate the actual reference.
-            excluded_relation_fields = []
-            rel_errors = defaultdict(list)
-            for f in model._meta.get_fields():
-                if isinstance(f, (GenericRelation, GenericForeignKey)):
-                    excluded_relation_fields.append(f.name)
-                    continue
-                if not f.is_relation:
-                    continue
-                field_name = f.name
-                excluded_relation_fields.append(field_name)
-
-                if hasattr(f, "related_model") and f.related_model == ContentType:
-                    change_data.pop(field_name, None)
-                    base_field = field_name[:-5]
-                    excluded_relation_fields.append(base_field + "_id")
-                    value = change_data.pop(base_field + "_id", None)
-                else:
-                    value = change_data.pop(field_name, None)
-
-                if not f.null and not f.blank and not f.many_to_many:
-                    # this field is a required relation...
-                    if value is None:
-                        rel_errors[f.name].append(f"Field {f.name} is required")
+            excluded_relation_fields, rel_errors = self._validate_relations(change_data, model)
             if rel_errors:
                 errors[change.object_type] = rel_errors
 
@@ -143,6 +120,36 @@ class ChangeSet:
                 errors[change.object_type].update(e.error_dict)
 
         return errors or None
+
+    def _validate_relations(self, change_data: dict, model: models.Model) -> tuple[list[str], dict]:
+        # check that there is some value for every required
+        # reference field, but don't validate the actual reference.
+        # the fields are removed from the change_data so that other
+        # fields can be validated by instantiating the model.
+        excluded_relation_fields = []
+        rel_errors = defaultdict(list)
+        for f in model._meta.get_fields():
+            if isinstance(f, (GenericRelation, GenericForeignKey)):
+                excluded_relation_fields.append(f.name)
+                continue
+            if not f.is_relation:
+                continue
+            field_name = f.name
+            excluded_relation_fields.append(field_name)
+
+            if hasattr(f, "related_model") and f.related_model == ContentType:
+                change_data.pop(field_name, None)
+                base_field = field_name[:-5]
+                excluded_relation_fields.append(base_field + "_id")
+                value = change_data.pop(base_field + "_id", None)
+            else:
+                value = change_data.pop(field_name, None)
+
+            if not f.null and not f.blank and not f.many_to_many:
+                # this field is a required relation...
+                if value is None:
+                    rel_errors[f.name].append(f"Field {f.name} is required")
+        return excluded_relation_fields, rel_errors
 
 
 @dataclass

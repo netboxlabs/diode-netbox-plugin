@@ -9,6 +9,7 @@ from functools import cache, lru_cache
 from typing import Type
 
 from core.models import ObjectType as NetBoxType
+from django.conf import settings
 from django.contrib.contenttypes.fields import ContentType
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
@@ -30,11 +31,44 @@ logger = logging.getLogger(__name__)
 _LOGICAL_MATCHERS = {
     "dcim.macaddress": lambda: [
         ObjectMatchCriteria(
-            # consider a matching mac address within the same parent object
-            # to be the same object although not technically required to be.
             fields=("mac_address", "assigned_object_type", "assigned_object_id"),
             name="logical_mac_address_within_parent",
             model_class=get_object_type_model("dcim.macaddress"),
+            condition=Q(assigned_object_id__isnull=False),
+        ),
+        ObjectMatchCriteria(
+            fields=("mac_address", "assigned_object_type", "assigned_object_id"),
+            name="logical_mac_address_within_parent",
+            model_class=get_object_type_model("dcim.macaddress"),
+            condition=Q(assigned_object_id__isnull=True),
+        ),
+    ],
+    "ipam.ipaddress": lambda: [
+        ObjectMatchCriteria(
+            fields=("address", ),
+            name="logical_ip_address_global_no_vrf",
+            model_class=get_object_type_model("ipam.ipaddress"),
+            condition=Q(vrf__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("address", "assigned_object_type", "assigned_object_id"),
+            name="logical_ip_address_within_vrf",
+            model_class=get_object_type_model("ipam.ipaddress"),
+            condition=Q(vrf__isnull=False)
+        ),
+    ],
+    "ipam.prefix": lambda: [
+         ObjectMatchCriteria(
+            fields=("prefix",),
+            name="logical_prefix_global_no_vrf",
+            model_class=get_object_type_model("ipam.prefix"),
+            condition=Q(vrf__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("prefix", "vrf_id"),
+            name="logical_prefix_within_vrf",
+            model_class=get_object_type_model("ipam.prefix"),
+            condition=Q(vrf__isnull=False),
         ),
     ],
 }
@@ -404,22 +438,3 @@ def find_existing_object(data: dict, object_type: str):
         logger.error(f"      -> No object found for matcher {matcher.name}")
     logger.error("  * No matchers found an existing object")
     return None
-
-def merge_data(a: dict, b: dict) -> dict:
-    """
-    Merges two structures.
-
-    If there are any conflicts, an error is raised.
-    Ignores conflicts in fields that start with an underscore,
-    preferring a's value.
-    """
-    if a is None or b is None:
-        raise ValueError("Cannot merge None values")
-    merged = a.copy()
-    for k, v in b.items():
-        if k.startswith("_"):
-            continue
-        if k in merged and merged[k] != v:
-            raise ValueError(f"Conflict merging {a} and {b} on {k}: {merged[k]} and {v}")
-        merged[k] = v
-    return merged
