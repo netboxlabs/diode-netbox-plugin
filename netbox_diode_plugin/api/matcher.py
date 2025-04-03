@@ -379,7 +379,7 @@ def _fingerprint_all(data: dict) -> str:
         values.append(k)
         if isinstance(v, (list, tuple)):
             values.extend(sorted(v))
-        if isinstance(v, dict):
+        elif isinstance(v, dict):
             values.append(_fingerprint_all(v))
         else:
             values.append(v)
