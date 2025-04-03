@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - Tests."""
 
 import logging
+from uuid import uuid4
 
 from dcim.models import Device, Interface, Site
 from django.contrib.auth import get_user_model
@@ -29,46 +30,89 @@ class GenerateDiffAndApplyTestCase(APITestCase):
 
         self.add_permissions("netbox_diode_plugin.add_diode")
 
-    def test_generate_diff_and_apply_create_site(self):
-        """Test generate diff and apply create site."""
-        """Test generate diff create site."""
-        payload = {
-            "timestamp": 1,
-            "object_type": "dcim.site",
-            "entity": {
-                "site": {
-                    "name": "Generate Diff and Apply Site",
-                    "slug": "generate-diff-and-apply-site",
-                },
-            }
-        }
-
-        _, response = self.diff_and_apply(payload)
-        new_site = Site.objects.get(name="Generate Diff and Apply Site")
-        self.assertEqual(new_site.slug, "generate-diff-and-apply-site")
-
-    def test_generate_diff_and_apply_create_interface_with_primay_mac_address(self):
-        """Test generate diff and apply create interface with primary mac address."""
+    def test_generate_diff_and_apply_create_interface_with_tags(self):
+        """Test generate diff and apply create interface with tags."""
+        interface_uuid = str(uuid4())
         payload = {
             "timestamp": 1,
             "object_type": "dcim.interface",
             "entity": {
                 "interface": {
-                    "name": "Interface 1x",
+                    "name": f"Interface {interface_uuid}",
+                    "mtu": "1500",
+                    "mode": "access",
+                    "tags": [
+                        {"name": "tag 1"}
+                    ],
                     "type": "1000base-t",
                     "device": {
-                        "name": "Device 1x",
+                        "name": f"Device {uuid4()}",
+                        "deviceType": {
+                            "model": f"Device Type {uuid4()}",
+                            "manufacturer": {
+                                "name": f"Manufacturer {uuid4()}"
+                            }
+                        },
                         "role": {
-                            "Name": "Role ABC",
+                            "name": f"Role {uuid4()}"
                         },
                         "site": {
-                            "Name": "Site ABC",
+                            "name": f"Site {uuid4()}"
+                        }
+                    },
+                    "enabled": True,
+                    "description": "Physical interface"
+                }
+            }
+        }
+        _, response = self.diff_and_apply(payload)
+        new_interface = Interface.objects.get(name=f"Interface {interface_uuid}")
+        self.assertEqual(new_interface.tags.count(), 1)
+        self.assertEqual(new_interface.tags.first().name, "tag 1")
+
+
+    def test_generate_diff_and_apply_create_site(self):
+        """Test generate diff and apply create site."""
+        """Test generate diff create site."""
+        site_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "name": f"Site {site_uuid}",
+                    "slug": f"site-{site_uuid}",
+                },
+            }
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_site = Site.objects.get(name=f"Site {site_uuid}")
+        self.assertEqual(new_site.slug, f"site-{site_uuid}")
+
+    def test_generate_diff_and_apply_create_interface_with_primay_mac_address(self):
+        """Test generate diff and apply create interface with primary mac address."""
+        interface_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.interface",
+            "entity": {
+                "interface": {
+                    "name": f"Interface {interface_uuid}",
+                    "type": "1000base-t",
+                    "device": {
+                        "name": f"Device {uuid4()}",
+                        "role": {
+                            "Name": f"Role {uuid4()}",
+                        },
+                        "site": {
+                            "Name": f"Site {uuid4()}",
                         },
                         "deviceType": {
                             "manufacturer": {
-                                "Name": "Manufacturer A",
+                                "Name": f"Manufacturer {uuid4()}",
                             },
-                            "model": "Device Type A",
+                            "model": f"Device Type {uuid4()}",
                         },
                     },
                     "primaryMacAddress": {
@@ -79,36 +123,39 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         }
 
         _, response = self.diff_and_apply(payload)
-        new_interface = Interface.objects.get(name="Interface 1x")
+        new_interface = Interface.objects.get(name=f"Interface {interface_uuid}")
         self.assertEqual(new_interface.primary_mac_address.mac_address, "00:00:00:00:00:01")
 
     def test_generate_diff_and_apply_create_device_with_primary_ip4(self):
         """Test generate diff and apply create device with primary ip4."""
+        device_uuid = str(uuid4())
+        interface_uuid = str(uuid4())
+        addr = "192.168.1.1"
         payload = {
             "timestamp": 1,
             "object_type": "ipam.ipaddress",
             "entity": {
                 "ipAddress": {
-                    "address": "192.168.1.1",
+                    "address": addr,
                     "assignedObjectInterface": {
-                        "name": "Interface 2x",
+                        "name": f"Interface {interface_uuid}",
                         "type": "1000base-t",
                         "device": {
-                            "name": "Device 2x",
+                            "name": f"Device {device_uuid}",
                             "role": {
-                                "name": "Role ABC",
+                                "name": f"Role {uuid4()}",
                             },
                             "site": {
-                                "name": "Site ABC",
+                                "name": f"Site {uuid4()}",
                             },
                             "deviceType": {
                                 "manufacturer": {
-                                    "name": "Manufacturer A",
+                                    "name": f"Manufacturer {uuid4()}",
                                 },
-                                "model": "Device Type A",
+                                "model": f"Device Type {uuid4()}",
                             },
                             "primaryIp4": {
-                                "address": "192.168.1.1",
+                                "address": addr,
                             },
                         },
                     },
@@ -117,9 +164,9 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         }
 
         _, response = self.diff_and_apply(payload)
-        new_ipaddress = IPAddress.objects.get(address="192.168.1.1")
-        self.assertEqual(new_ipaddress.assigned_object.name, "Interface 2x")
-        device = Device.objects.get(name="Device 2x")
+        new_ipaddress = IPAddress.objects.get(address=addr)
+        self.assertEqual(new_ipaddress.assigned_object.name, f"Interface {interface_uuid}")
+        device = Device.objects.get(name=f"Device {device_uuid}")
         self.assertEqual(device.primary_ip4.pk, new_ipaddress.pk)
 
     def diff_and_apply(self, payload):
