@@ -14,10 +14,12 @@ from django.contrib.contenttypes.fields import ContentType
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models import F, Value
+from django.db.models.fields import SlugField
 from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
+from extras.models.customfields import CustomField
 
-from .common import UnresolvedReference
+from .common import AutoSlug, UnresolvedReference
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model
 
 logger = logging.getLogger(__name__)
@@ -73,7 +75,6 @@ _LOGICAL_MATCHERS = {
     ],
 }
 
-
 @dataclass
 class ObjectMatchCriteria:
     """
@@ -100,10 +101,10 @@ class ObjectMatchCriteria:
 
     def has_required_fields(self, data) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
-        return all(field in data for field in self.get_refs())
+        return all(field in data for field in self._get_refs())
 
     @cache
-    def get_refs(self) -> set[str]:
+    def _get_refs(self) -> set[str]:
         """Returns a set of all field names referenced by the constraint."""
         refs = set()
         if self.fields:
@@ -114,7 +115,7 @@ class ObjectMatchCriteria:
         return frozenset(refs)
 
     @cache
-    def get_insensitive_refs(self) -> set[str]:
+    def _get_insensitive_refs(self) -> set[str]:
         """
         Returns a set of all field names that should be compared in a case insensitive manner.
 
@@ -149,8 +150,8 @@ class ObjectMatchCriteria:
                 return None
 
         # sort the fields by name
-        sorted_fields = sorted(self.get_refs())
-        insensitive = self.get_insensitive_refs()
+        sorted_fields = sorted(self._get_refs())
+        insensitive = self._get_insensitive_refs()
         values = []
         for field in sorted_fields:
             value = data[field]
@@ -162,7 +163,7 @@ class ObjectMatchCriteria:
             values.append(value)
         # logger.debug(f"fingerprint {self}: {data} -> values: {tuple(values)}")
 
-        return hash(tuple(values))
+        return hash((self.model_class.__name__, self.name, tuple(values)))
 
     def _check_condition(self, data) -> bool:
         if self.condition is None:
@@ -273,9 +274,112 @@ class ObjectMatchCriteria:
         # logger.error(f"prepared data: {data} -> {prepared}")
         return prepared
 
-@lru_cache(maxsize=256)
-def get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
+@dataclass
+class CustomFieldMatcher:
+    """A matcher for a unique custom field."""
+
+    name: str
+    custom_field: str
+    model_class: Type[models.Model]
+
+    def fingerprint(self, data: dict) -> str|None:
+        """Fingerprint the custom field value."""
+        if not self.has_required_fields(data):
+            return None
+
+        value = data.get("custom_fields", {}).get(self.custom_field)
+        if value is None:
+            return None
+
+        return hash((self.model_class.__name__, self.name, value))
+
+    def build_queryset(self, data: dict) -> models.QuerySet:
+        """Build a queryset for the custom field."""
+        if not self.has_required_fields(data):
+            return None
+
+        value = data.get("custom_fields", {}).get(self.custom_field)
+        if value is None:
+            return None
+
+        return self.model_class.objects.filter(**{f'custom_field_data__{self.custom_field}': value})
+
+    def has_required_fields(self, data: dict) -> bool:
+        """Returns True if the data given contains a value for all fields referenced by the constraint."""
+        return self.custom_field in data.get("custom_fields", {})
+
+@dataclass
+class AutoSlugMatcher:
+    """A special matcher that tries to match on auto generated slugs."""
+
+    name: str
+    slug_field: str
+    model_class: Type[models.Model]
+
+    def fingerprint(self, data: dict) -> str|None:
+        """Fingerprint the custom field value."""
+        if not self.has_required_fields(data):
+            return None
+
+        slug = data.get('_auto_slug', None)
+        if slug is None:
+            return None
+
+        return hash((self.model_class.__name__, self.name, slug.value))
+
+    def build_queryset(self, data: dict) -> models.QuerySet:
+        """Build a queryset for the custom field."""
+        if not self.has_required_fields(data):
+            return None
+
+        slug = data.get('_auto_slug', None)
+        if slug is None:
+            return None
+
+        return self.model_class.objects.filter(**{f'{self.slug_field}': str(slug.value)})
+
+    def has_required_fields(self, data: dict) -> bool:
+        """Returns True if the data given contains a value for all fields referenced by the constraint."""
+        return '_auto_slug' in data
+
+
+def get_model_matchers(model_class) -> list:
     """Extract unique constraints from a Django model."""
+    matchers = []
+    matchers += _get_model_matchers(model_class)
+
+    # TODO(ltucker): this should also be cacheable, but we need a signal to invalidate
+    if hasattr(model_class, "get_custom_fields"):
+        unique_custom_fields = CustomField.objects.get_for_model(model_class).filter(unique=True)
+        if unique_custom_fields:
+            for cf in unique_custom_fields:
+                matchers.append(
+                    CustomFieldMatcher(
+                        model_class=model_class,
+                        custom_field=cf.name,
+                        name=f"unique_custom_field_{cf.name}",
+                    )
+                )
+    matchers += _get_autoslug_matchers(model_class)
+    return matchers
+
+@lru_cache(maxsize=256)
+def _get_autoslug_matchers(model_class) -> list:
+    matchers = []
+    for field in model_class._meta.fields:
+        if isinstance(field, SlugField):
+            matchers.append(
+                AutoSlugMatcher(
+                    model_class=model_class,
+                    slug_field=field.name,
+                    name=f"unique_autoslug_{field.name}",
+                )
+            )
+            break
+    return matchers
+
+@lru_cache(maxsize=256)
+def _get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
     object_type = get_object_type(model_class)
     matchers = _LOGICAL_MATCHERS.get(object_type, lambda: [])()
 

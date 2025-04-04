@@ -13,6 +13,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelatio
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
+from extras.models import CustomField
 from rest_framework import status
 
 logger = logging.getLogger("netbox.diode_data")
@@ -114,12 +115,40 @@ class ChangeSet:
                 errors[change.object_type] = rel_errors
 
             try:
+                custom_fields = change_data.pop('custom_fields', None)
+                if custom_fields:
+                    self._validate_custom_fields(custom_fields, model)
+
                 instance = model(**change_data)
                 instance.clean_fields(exclude=excluded_relation_fields)
             except ValidationError as e:
-                errors[change.object_type].update(e.error_dict)
+                errors[change.object_type].update(_error_dict(e))
 
         return errors or None
+
+    def _validate_custom_fields(self, data: dict, model: models.Model) -> None:
+        custom_fields = {
+            cf.name: cf for cf in CustomField.objects.get_for_model(model)
+        }
+
+        unknown_errors = []
+        for field_name, value in data.items():
+            if field_name not in custom_fields:
+                unknown_errors.append(f"Unknown field name '{field_name}' in custom field data.")
+                continue
+        if unknown_errors:
+            raise ValidationError({
+                "custom_fields": unknown_errors
+            })
+
+        req_errors = []
+        for field_name, cf in custom_fields.items():
+            if cf.required and field_name not in data:
+                req_errors.append(f"Custom field '{field_name}' is required.")
+        if req_errors:
+            raise ValidationError({
+                "custom_fields": req_errors
+            })
 
     def _validate_relations(self, change_data: dict, model: models.Model) -> tuple[list[str], dict]:
         # check that there is some value for every required
@@ -191,3 +220,18 @@ class ChangeSetException(Exception):
         if self.errors:
             return f"{self.message}: {self.errors}"
         return self.message
+
+def _error_dict(e: ValidationError) -> dict:
+    """Convert a ValidationError to a dictionary."""
+    if hasattr(e, "error_dict"):
+        return e.error_dict
+    return {
+        "__all__": e.error_list
+    }
+
+@dataclass
+class AutoSlug:
+    """A class that marks an auto-generated slug."""
+
+    field_name: str
+    value: str

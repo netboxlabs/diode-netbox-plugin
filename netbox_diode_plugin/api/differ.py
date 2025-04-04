@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - API - Differ."""
 
 import copy
+import datetime
 import logging
 
 from django.contrib.contenttypes.models import ContentType
@@ -12,7 +13,7 @@ from utilities.data import shallow_compare_dict
 from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType
 from .plugin_utils import get_primary_value, legal_fields
 from .supported_models import extract_supported_models
-from .transformer import cleanup_unresolved_references, transform_proto_json
+from .transformer import cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,29 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         else:
             prechange_data[field_name] = value
 
+    if hasattr(instance, "get_custom_fields"):
+        custom_field_values = instance.get_custom_fields()
+        cfmap = {}
+        for cf, value in custom_field_values.items():
+            if isinstance(value, (datetime.datetime, datetime.date)):
+                cfmap[cf.name] = value
+            else:
+                cfmap[cf.name] = cf.serialize(value)
+        prechange_data["custom_fields"] = cfmap
+
     return prechange_data
+
+
+def _harmonize_formats(prechange_data: dict, postchange_data: dict):
+    for k, v in prechange_data.items():
+        if isinstance(v, datetime.datetime):
+            prechange_data[k] = v.strftime("%Y-%m-%dT%H:%M:%SZ")
+        elif isinstance(v, datetime.date):
+            prechange_data[k] = v.strftime("%Y-%m-%d")
+        elif isinstance(v, int) and k in postchange_data:
+            postchange_data[k] = int(postchange_data[k])
+        elif isinstance(v, dict):
+            _harmonize_formats(v, postchange_data.get(k, {}))
 
 
 def clean_diff_data(data: dict, exclude_empty_values: bool = True) -> dict:
@@ -80,8 +103,10 @@ def clean_diff_data(data: dict, exclude_empty_values: bool = True) -> dict:
                 continue
             if isinstance(v, list) and len(v) == 0:
                 continue
-            if isinstance(v, dict) and len(v) == 0:
-                continue
+            if isinstance(v, dict):
+                if len(v) == 0:
+                    continue
+                v = clean_diff_data(v, exclude_empty_values)
             if isinstance(v, str) and v == "":
                 continue
         result[k] = v
@@ -100,7 +125,7 @@ def diff_to_change(
     if change_type == ChangeType.UPDATE and not len(changed_attrs) > 0:
         change_type = ChangeType.NOOP
 
-    primary_value = get_primary_value(prechange_data | postchange_data, object_type)
+    primary_value = str(get_primary_value(prechange_data | postchange_data, object_type))
     if primary_value is None:
         primary_value = "(unnamed)"
 
@@ -111,6 +136,8 @@ def diff_to_change(
 
     change = Change(
         change_type=change_type,
+        before=_tidy(prechange_data),
+        data={},
         object_type=object_type,
         object_id=prior_id if isinstance(prior_id, int) else None,
         ref_id=ref_id,
@@ -119,16 +146,12 @@ def diff_to_change(
     )
 
     if change_type != ChangeType.NOOP:
-        postchange_data_clean = clean_diff_data(postchange_data)
-        change.data = sort_dict_recursively(postchange_data_clean)
-    else:
-        change.data = {}
-
-    if change_type == ChangeType.UPDATE or change_type == ChangeType.NOOP:
-        prechange_data_clean = clean_diff_data(prechange_data)
-        change.before = sort_dict_recursively(prechange_data_clean)
+        change.data = _tidy(postchange_data)
 
     return change
+
+def _tidy(data: dict) -> dict:
+    return sort_dict_recursively(clean_diff_data(data))
 
 def sort_dict_recursively(d):
     """Recursively sorts a dictionary by keys."""
@@ -161,10 +184,15 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
             # prior state is a model instance
             else:
                 prechange_data = prechange_data_from_instance(instance)
-
+                # merge the prior state that we don't want to overwrite with the new state
+                # this is also important for custom fields because they do not appear to
+                # respsect paritial update serialization.
+                entity = _partially_merge(prechange_data, entity, instance)
+                _harmonize_formats(prechange_data, entity)
             changed_data = shallow_compare_dict(
                 prechange_data, entity,
             )
+            logger.error(f"Changed data: {changed_data} from {prechange_data} {entity}")
             changed_attrs = sorted(changed_data.keys())
         change = diff_to_change(
             object_type,
@@ -187,7 +215,28 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
     if errors := change_set.validate():
         raise ChangeSetException("Invalid change set", errors)
 
-    return ChangeSetResult(
+
+    cs = ChangeSetResult(
         id=change_set.id,
         change_set=change_set,
     )
+    # logger.error(f"Change set: {cs.to_dict()}")
+    return cs
+
+def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> dict:
+    """Merge lists and custom_fields rather than replacing the full value..."""
+    result = {}
+    for key, value in postchange_data.items():
+        # TODO: partially merge lists like tags? all lists?
+        result[key] = value
+
+    # these are fully merged in from the prechange state because
+    # they don't respect partial update serialization.
+    if "custom_fields" in postchange_data:
+        for key, value in prechange_data.get("custom_fields", {}).items():
+            if value is not None and key not in postchange_data["custom_fields"]:
+                result["custom_fields"][key] = value
+        set_custom_field_defaults(result, instance)
+    # logger.error(f"Prechange data: {prechange_data} Postchange data: {postchange_data} => Result: {result}")
+
+    return result
