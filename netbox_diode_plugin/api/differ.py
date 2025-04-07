@@ -1,0 +1,193 @@
+#!/usr/bin/env python
+# Copyright 2025 NetBox Labs Inc
+"""Diode NetBox Plugin - API - Differ."""
+
+import copy
+import logging
+
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
+from utilities.data import shallow_compare_dict
+
+from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType
+from .plugin_utils import get_primary_value, legal_fields
+from .supported_models import extract_supported_models
+from .transformer import cleanup_unresolved_references, transform_proto_json
+
+logger = logging.getLogger(__name__)
+
+SUPPORTED_MODELS = extract_supported_models()
+
+
+def prechange_data_from_instance(instance) -> dict: # noqa: C901
+    """Convert model instance data to a dictionary format for comparison."""
+    prechange_data = {}
+
+    if instance is None:
+        return prechange_data
+
+    model_class = instance.__class__
+    object_type = f"{model_class._meta.app_label}.{model_class._meta.model_name}"
+
+    model = SUPPORTED_MODELS.get(object_type)
+    if not model:
+        raise ValidationError(f"Model {model_class.__name__} is not supported")
+
+    fields = model.get("fields", {})
+    if not fields:
+        raise ValidationError(f"Model {model_class.__name__} has no fields")
+
+    diode_fields = legal_fields(model_class)
+
+    for field_name, field_info in fields.items():
+        # permit only diode fields and the primary key
+        if field_name not in diode_fields and field_name != "id":
+            continue
+
+        if not hasattr(instance, field_name):
+            continue
+
+        if field_info["type"] == "ForeignKey" and field_info.get("is_many_to_one_rel", False):
+            continue
+
+        value = getattr(instance, field_name)
+        if hasattr(value, "all"):  # Handle many-to-many and many-to-one relationships
+            # For any relationship that has an 'all' method, get all related objects' primary keys
+            prechange_data[field_name] = (
+                [item.pk for item in value.all()] if value is not None else []
+            )
+        elif hasattr(
+            value, "pk"
+        ):  # Handle regular related fields (ForeignKey, OneToOne)
+            # Handle ContentType fields
+            if isinstance(value, ContentType):
+                prechange_data[field_name] = f"{value.app_label}.{value.model}"
+            else:
+                # For regular related fields, get the primary key
+                prechange_data[field_name] = value.pk if value is not None else None
+        else:
+            prechange_data[field_name] = value
+
+    return prechange_data
+
+
+def clean_diff_data(data: dict, exclude_empty_values: bool = True) -> dict:
+    """Clean diff data by removing null values."""
+    result = {}
+    for k, v in data.items():
+        if exclude_empty_values:
+            if v is None:
+                continue
+            if isinstance(v, list) and len(v) == 0:
+                continue
+            if isinstance(v, dict) and len(v) == 0:
+                continue
+            if isinstance(v, str) and v == "":
+                continue
+        result[k] = v
+    return result
+
+
+def diff_to_change(
+    object_type: str,
+    prechange_data: dict,
+    postchange_data: dict,
+    changed_attrs: list[str],
+    unresolved_references: list[str],
+) -> Change:
+    """Convert a diff to a change."""
+    change_type = ChangeType.UPDATE if len(prechange_data) > 0 else ChangeType.CREATE
+    if change_type == ChangeType.UPDATE and not len(changed_attrs) > 0:
+        change_type = ChangeType.NOOP
+
+    primary_value = get_primary_value(prechange_data | postchange_data, object_type)
+    if primary_value is None:
+        primary_value = "(unnamed)"
+
+    prior_id = prechange_data.get("id")
+    ref_id = None
+    if prior_id is None:
+        ref_id = postchange_data.pop("id", None)
+
+    change = Change(
+        change_type=change_type,
+        object_type=object_type,
+        object_id=prior_id if isinstance(prior_id, int) else None,
+        ref_id=ref_id,
+        object_primary_value=primary_value,
+        new_refs=unresolved_references,
+    )
+
+    if change_type != ChangeType.NOOP:
+        postchange_data_clean = clean_diff_data(postchange_data)
+        change.data = sort_dict_recursively(postchange_data_clean)
+    else:
+        change.data = {}
+
+    if change_type == ChangeType.UPDATE or change_type == ChangeType.NOOP:
+        prechange_data_clean = clean_diff_data(prechange_data)
+        change.before = sort_dict_recursively(prechange_data_clean)
+
+    return change
+
+def sort_dict_recursively(d):
+    """Recursively sorts a dictionary by keys."""
+    if isinstance(d, dict):
+        return {k: sort_dict_recursively(v) for k, v in sorted(d.items())}
+    if isinstance(d, list):
+        # Convert all items to strings for comparison
+        return sorted([sort_dict_recursively(item) for item in d], key=str)
+    return d
+
+
+def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
+    """Generate a changeset for an entity."""
+    change_set = ChangeSet()
+
+    entities = transform_proto_json(entity, object_type, SUPPORTED_MODELS)
+    by_uuid = {x['_uuid']: x for x in entities}
+    for entity in entities:
+        prechange_data = {}
+        changed_attrs = []
+        new_refs = cleanup_unresolved_references(entity)
+        object_type = entity.pop("_object_type")
+        _ = entity.pop("_uuid")
+        instance = entity.pop("_instance", None)
+
+        if instance:
+            # the prior state is another new object...
+            if isinstance(instance, str):
+                prechange_data = copy.deepcopy(by_uuid[instance])
+            # prior state is a model instance
+            else:
+                prechange_data = prechange_data_from_instance(instance)
+
+            changed_data = shallow_compare_dict(
+                prechange_data, entity,
+            )
+            changed_attrs = sorted(changed_data.keys())
+        change = diff_to_change(
+            object_type,
+            prechange_data,
+            entity,
+            changed_attrs,
+            new_refs,
+        )
+
+        change_set.changes.append(change)
+
+    has_any_changes = False
+    for change in change_set.changes:
+        if change.change_type != ChangeType.NOOP:
+            has_any_changes = True
+            break
+
+    if not has_any_changes:
+        change_set.changes = []
+    if errors := change_set.validate():
+        raise ChangeSetException("Invalid change set", errors)
+
+    return ChangeSetResult(
+        id=change_set.id,
+        change_set=change_set,
+    )

@@ -1,0 +1,396 @@
+#!/usr/bin/env python
+# Copyright 2024 NetBox Labs Inc
+"""Diode NetBox Plugin - API - Object resolution for diffing."""
+
+import copy
+import json
+import logging
+import re
+from collections import defaultdict
+from functools import lru_cache
+from uuid import uuid4
+
+import graphlib
+from django.core.exceptions import ValidationError
+from django.utils.text import slugify
+
+from .common import ChangeSetException, UnresolvedReference
+from .matcher import find_existing_object, fingerprint
+from .plugin_utils import get_json_ref_info, get_primary_value
+
+logger = logging.getLogger("netbox.diode_data")
+
+@lru_cache(maxsize=128)
+def _camel_to_snake_case(name):
+    """Convert camelCase string to snake_case."""
+    name = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub("([a-z0-9])([A-Z])", r"\1_\2", name).lower()
+
+
+# these are implied values pushed down to referenced objects.
+_NESTED_CONTEXT = {
+    "dcim.interface": {
+        # interface.primary_mac_address -> mac_address.assigned_object = interface
+        "primary_mac_address": lambda object_type, uuid: {
+            "assigned_object_type": object_type,
+            "assigned_object_id": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+    },
+    "virtualization.vminterface": {
+        # interface.primary_mac_address -> mac_address.assigned_object = vinterface
+        "primary_mac_address": lambda object_type, uuid: {
+            "assigned_object_type": object_type,
+            "assigned_object_id": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+    },
+}
+
+def _no_context(object_type, uuid):
+    return None
+
+def _nested_context(object_type, uuid, field_name):
+    return _NESTED_CONTEXT.get(object_type, {}).get(field_name, _no_context)(object_type, uuid)
+
+_IS_CIRCULAR_REFERENCE = {
+    "dcim.interface": frozenset(["primary_mac_address"]),
+    "virtualization.vminterface": frozenset(["primary_mac_address"]),
+    "dcim.device": frozenset(["primary_ip4", "primary_ip6"]),
+    "dcim.virtualdevicecontext": frozenset(["primary_ip4", "primary_ip6"]),
+    "virtualization.virtualmachine": frozenset(["primary_ip4", "primary_ip6"]),
+}
+
+def _is_circular_reference(object_type, field_name):
+    return field_name in _IS_CIRCULAR_REFERENCE.get(object_type, frozenset())
+
+def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]:
+    """
+    Transform keys of proto json dict to flattened dictionaries with model field keys.
+
+    This also handles placing `_type` fields for generic references,
+    a certain form of deduplication and resolution of existing objects.
+    """
+    entities = _transform_proto_json_1(proto_json, object_type)
+    logger.error(f"_transform_proto_json_1 entities: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+    entities = _topo_sort(entities)
+    logger.error(f"_topo_sort: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+    deduplicated = _fingerprint_dedupe(entities)
+    logger.error(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    deduplicated = _topo_sort(deduplicated)
+    logger.error(f"_topo_sort: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    _set_slugs(deduplicated, supported_models)
+    logger.error(f"_set_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    resolved = _resolve_existing_references(deduplicated)
+    logger.error(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    _set_defaults(resolved, supported_models)
+    logger.error(f"_set_defaults: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+
+    # handle post-create steps
+    output = _handle_post_creates(resolved)
+    logger.error(f"_handle_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}")
+
+    _check_unresolved_refs(output)
+    for entity in output:
+        entity.pop('_refs', None)
+
+    return output
+
+def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) -> list[dict]: # noqa: C901
+    uuid = str(uuid4())
+    node = {
+        "_object_type": object_type,
+        "_uuid": uuid,
+        "_refs": set(),
+    }
+
+    # context pushed down from parent nodes
+    if context is not None:
+        for k, v in context.items():
+            node[k] = v
+            if isinstance(v, UnresolvedReference):
+                node['_refs'].add(v.uuid)
+
+    nodes = [node]
+    post_create = None
+
+    for key, value in proto_json.items():
+        ref_info = get_json_ref_info(object_type, key)
+        if ref_info is None:
+            node[_camel_to_snake_case(key)] = copy.deepcopy(value)
+            continue
+
+        nested_context = _nested_context(object_type, uuid, ref_info.field_name)
+        field_name = ref_info.field_name
+        is_circular = _is_circular_reference(object_type, field_name)
+
+        if ref_info.is_generic:
+            node[field_name + "_type"] = ref_info.object_type
+            field_name = field_name + "_id"
+
+        refs = []
+        ref_value = None
+        if isinstance(value, list):
+            ref_value = []
+            for item in value:
+                nested = _transform_proto_json_1(item, ref_info.object_type, nested_context)
+                nodes += nested
+                ref_uuid = nested[0]['_uuid']
+                ref_value.append(UnresolvedReference(
+                    object_type=ref_info.object_type,
+                    uuid=ref_uuid,
+                ))
+                refs.append(ref_uuid)
+        else:
+            nested = _transform_proto_json_1(value, ref_info.object_type, nested_context)
+            nodes += nested
+            ref_uuid = nested[0]['_uuid']
+            ref_value = UnresolvedReference(
+                object_type=ref_info.object_type,
+                uuid=ref_uuid,
+            )
+            refs.append(ref_uuid)
+
+        if is_circular:
+            if post_create is None:
+                post_create = {
+                    "_uuid": str(uuid4()),
+                    "_object_type": object_type,
+                    "_refs": set(),
+                    "_instance": node['_uuid'],
+                    "_is_post_create": True,
+                }
+            post_create[field_name] = ref_value
+            post_create['_refs'].update(refs)
+            post_create['_refs'].add(node['_uuid'])
+            continue
+
+        node[field_name] = ref_value
+        node['_refs'].update(refs)
+
+    if post_create:
+        nodes.append(post_create)
+
+    return nodes
+
+
+def _topo_sort(entities: list[dict]) -> list[dict]:
+    """Topologically sort entities by reference."""
+    by_uuid = {e['_uuid']: e for e in entities}
+    graph = defaultdict(set)
+    for entity in entities:
+        graph[entity['_uuid']] = entity['_refs'].copy()
+
+    try:
+        ts = graphlib.TopologicalSorter(graph)
+        order = tuple(ts.static_order())
+        return [by_uuid[uuid] for uuid in order]
+    except graphlib.CycleError as e:
+        # TODO the cycle error references the cycle here ...
+        raise ChangeSetException(f"Circular reference in entities: {e}", errors={
+            "__all__": {
+                "message": "Unable to resolve circular reference in entities",
+            }
+        })
+
+
+def _set_defaults(entities: list[dict], supported_models: dict):
+    for entity in entities:
+        model_fields = supported_models.get(entity['_object_type'])
+        if model_fields is None:
+            raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
+
+        for field_name, field_info in model_fields.get('fields', {}).items():
+            if entity.get(field_name) is None and field_info.get("default") is not None:
+                entity[field_name] = field_info["default"]
+
+def _set_slugs(entities: list[dict], supported_models: dict):
+    for entity in entities:
+        model_fields = supported_models.get(entity['_object_type'])
+        if model_fields is None:
+            raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
+
+        for field_name, field_info in model_fields.get('fields', {}).items():
+            if field_info["type"] == "SlugField" and entity.get(field_name) is None:
+                entity[field_name] = _generate_slug(entity['_object_type'], entity)
+
+def _generate_slug(object_type, data):
+    """Generate a slug for a model instance."""
+    source_value = get_primary_value(data, object_type)
+    if source_value is not None:
+        return slugify(str(source_value))
+    return None
+
+def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
+    """
+    Deduplicates/merges entities by fingerprint.
+
+    *list must be in topo order by reference already*
+    """
+    by_fp = {}
+    deduplicated = []
+    new_refs = {} # uuid -> uuid
+
+    for entity in entities:
+        if entity.get('_is_post_create'):
+            fp = entity['_uuid']
+            existing = None
+        else:
+            fp = fingerprint(entity, entity['_object_type'])
+            existing = by_fp.get(fp)
+
+        if existing is None:
+            logger.debug("  * entity is new.")
+            new_entity = copy.deepcopy(entity)
+            _update_unresolved_refs(new_entity, new_refs)
+            by_fp[fp] = new_entity
+            deduplicated.append(fp)
+        else:
+            logger.debug("  * entity already exists.")
+            new_refs[entity['_uuid']] = existing['_uuid']
+            merged = _merge_nodes(existing, entity)
+            _update_unresolved_refs(merged, new_refs)
+            by_fp[fp] = merged
+
+    return [by_fp[fp] for fp in deduplicated]
+
+def _merge_nodes(a: dict, b: dict) -> dict:
+    """
+    Merges two nodes.
+
+    If there are any conflicts, an error is raised.
+    Ignores conflicts in fields that start with an underscore,
+    preferring a's value.
+    """
+    merged = copy.deepcopy(a)
+    merged['_refs'] = a['_refs'] | b['_refs']
+
+    for k, v in b.items():
+        if k.startswith("_"):
+            continue
+        if k in merged and merged[k] != v:
+            raise ValueError(f"Conflict merging {a} and {b} on {k}: {merged[k]} and {v}")
+        merged[k] = v
+    return merged
+
+
+def _update_unresolved_refs(entity, new_refs):
+    if entity.get('_is_post_create'):
+        instance_uuid = entity['_instance']
+        entity['_instance'] = new_refs.get(instance_uuid, instance_uuid)
+
+    entity['_refs'] = {new_refs.get(r,r) for r in entity['_refs']}
+
+    for k, v in entity.items():
+        if isinstance(v, UnresolvedReference) and v.uuid in new_refs:
+            v.uuid = new_refs[v.uuid]
+        elif isinstance(v, (list, tuple)):
+            for item in v:
+                if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
+                    item.uuid = new_refs[item.uuid]
+        # TODO maps ...
+
+def _resolve_existing_references(entities: list[dict]) -> list[dict]:
+    seen = {}
+    new_refs = {}
+    resolved = []
+
+    for data in entities:
+        object_type = data['_object_type']
+        data = copy.deepcopy(data)
+        _update_resolved_refs(data, new_refs)
+
+        existing = find_existing_object(data, object_type)
+        if existing is not None:
+            logger.error(f"existing {data} -> {existing}")
+            fp = (object_type, existing.id)
+            if fp in seen:
+                logger.warning(f"objects resolved to the same existing id after deduplication: {seen[fp]} and {data}")
+            else:
+                seen[fp] = data
+            data['id'] = existing.id
+            data['_instance'] = existing
+            new_refs[data['_uuid']] = existing.id
+            resolved.append(data)
+        else:
+            data['id'] = UnresolvedReference(object_type, data['_uuid'])
+            _update_resolved_refs(data, new_refs)
+            resolved.append(data)
+    return resolved
+
+def _update_resolved_refs(data, new_refs):
+    for k, v in data.items():
+        if isinstance(v, UnresolvedReference) and v.uuid in new_refs:
+            data[k] = new_refs[v.uuid]
+        elif isinstance(v, (list, tuple)):
+            new_items = []
+            for item in v:
+                if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
+                    new_items.append(new_refs[item.uuid])
+                else:
+                    new_items.append(item)
+            data[k] = new_items
+        # TODO maps ...
+
+def cleanup_unresolved_references(data: dict) -> list[str]:
+    """Find and stringify unresolved references in fields."""
+    unresolved = set()
+    for k, v in data.items():
+        if isinstance(v, UnresolvedReference):
+            if k != 'id':
+                unresolved.add(k)
+            data[k] = str(v)
+        elif isinstance(v, (list, tuple)):
+            items = []
+            for item in v:
+                if isinstance(item, UnresolvedReference):
+                    unresolved.add(k)
+                    items.append(str(item))
+                else:
+                    items.append(item)
+            data[k] = items
+        # TODO maps
+    return sorted(unresolved)
+
+def _handle_post_creates(entities: list[dict]) -> list[str]:
+    """Merges any unnecessary post-create steps for existing objects."""
+    by_uuid = {e['_uuid']: (i, e) for i, e in enumerate(entities)}
+    out = []
+    for entity in entities:
+        is_post_create = entity.pop('_is_post_create', False)
+        if not is_post_create:
+            out.append(entity)
+            continue
+
+        instance = entity.get('_instance')
+        prior_index, prior_entity = by_uuid[instance]
+
+        # a post create can be merged whenever the entities it relies on
+        # already exist (were resolved) or there are no dependencies between
+        # the object being updated and the post-create.
+        can_merge = all(
+            by_uuid[r][1].get('_instance') is not None
+            for r in entity['_refs']
+        ) or sorted(by_uuid[r][0] for r in entity['_refs'])[-1] == prior_index
+
+        if can_merge:
+            prior_entity.update([x for x in entity.items() if not x[0].startswith('_')])
+        else:
+            entity['id'] = prior_entity['id']
+            out.append(entity)
+
+    return out
+
+def _check_unresolved_refs(entities: list[dict]) -> list[str]:
+    seen = set()
+    for e in entities:
+        seen.add((e['_object_type'], e['_uuid']))
+        for k, v in e.items():
+            if isinstance(v, UnresolvedReference):
+                if (v.object_type, v.uuid) not in seen:
+                    raise ChangeSetException(
+                        f"Unresolved reference {v} in {e} does not refer to a prior created object (circular reference?)",
+                        errors={
+                            e['_object_type']: {
+                                k: ["unable to resolve reference"],
+                            }
+                        }
+                    )
