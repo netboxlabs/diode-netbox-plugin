@@ -162,13 +162,15 @@ class ChangeSetResult:
 
     def to_dict(self) -> dict:
         """Convert the result to a dictionary."""
-        if self.change_set:
-            return self.change_set.to_dict()
-
-        return {
+        result = {
             "id": self.id,
             "errors": self.errors,
         }
+
+        if self.change_set:
+            result["change_set"] = self.change_set.to_dict()
+
+        return result
 
     def get_status_code(self) -> int:
         """Get the status code for the result."""

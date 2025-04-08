@@ -49,7 +49,7 @@ class GenerateDiffTestCase(APITestCase):
 
         response = self.send_request(payload)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        cs = response.json()
+        cs = response.json().get("change_set", {})
         self.assertIsNotNone(cs.get("id"))
         changes = cs.get("changes", [])
         self.assertEqual(len(changes), 1)
@@ -80,7 +80,7 @@ class GenerateDiffTestCase(APITestCase):
 
         response = self.send_request(payload)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        cs = response.json()
+        cs = response.json().get("change_set", {})
         self.assertIsNotNone(cs.get("id"))
         changes = cs.get("changes", [])
         self.assertEqual(len(changes), 1)
