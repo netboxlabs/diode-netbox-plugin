@@ -48,7 +48,6 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
 def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict, request):
     serializer_class = get_serializer_for_model(model_class)
     change_type = change.change_type
-    logger.error(f"applying {data}")
     if change_type == ChangeType.CREATE.value:
         serializer = serializer_class(data=data, context={"request": request})
         serializer.is_valid(raise_exception=True)

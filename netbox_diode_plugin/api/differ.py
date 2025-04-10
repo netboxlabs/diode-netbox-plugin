@@ -192,7 +192,6 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
             changed_data = shallow_compare_dict(
                 prechange_data, entity,
             )
-            logger.error(f"Changed data: {changed_data} from {prechange_data} {entity}")
             changed_attrs = sorted(changed_data.keys())
         change = diff_to_change(
             object_type,
@@ -220,7 +219,6 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
         id=change_set.id,
         change_set=change_set,
     )
-    # logger.error(f"Change set: {cs.to_dict()}")
     return cs
 
 def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> dict:
@@ -237,6 +235,4 @@ def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> d
             if value is not None and key not in postchange_data["custom_fields"]:
                 result["custom_fields"][key] = value
         set_custom_field_defaults(result, instance)
-    # logger.error(f"Prechange data: {prechange_data} Postchange data: {postchange_data} => Result: {result}")
-
     return result

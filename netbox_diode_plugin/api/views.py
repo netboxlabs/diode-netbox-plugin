@@ -93,8 +93,6 @@ class GenerateDiffView(views.APIView):
             except Branch.DoesNotExist:
                 logger.warning(f"Branch with ID {branch_id} does not exist")
 
-        logger.error(f"generate diff => {result.to_dict()}")
-
         return Response(result.to_dict(), status=result.get_status_code())
 
 

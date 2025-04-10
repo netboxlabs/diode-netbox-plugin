@@ -161,7 +161,6 @@ class ObjectMatchCriteria:
             if field in insensitive:
                 value = value.lower()
             values.append(value)
-        # logger.debug(f"fingerprint {self}: {data} -> values: {tuple(values)}")
 
         return hash((self.model_class.__name__, self.name, tuple(values)))
 
@@ -171,15 +170,15 @@ class ObjectMatchCriteria:
         # TODO: handle evaluating complex conditions,
         # there are only simple ones currently
         if self.condition.connector != Q.AND:
-            logger.error(f"Unhandled condition {self.condition}")
+            logger.warning(f"Unhandled condition {self.condition}")
             return False
 
         if len(self.condition.children) != 1:
-            logger.error(f"Unhandled condition {self.condition}")
+            logger.warning(f"Unhandled condition {self.condition}")
             return False
 
         if len(self.condition.children[0]) != 2:
-            logger.error(f"Unhandled condition {self.condition}")
+            logger.warning(f"Unhandled condition {self.condition}")
             return False
 
         k, v = self.condition.children[0]
@@ -210,18 +209,17 @@ class ObjectMatchCriteria:
         for field_name in self.fields:
             field = self.model_class._meta.get_field(field_name)
             if field_name not in data:
-                logger.error(f"  * cannot build fields queryset for {self.name} (missing field {field_name})")
+                logger.debug(f"  * cannot build fields queryset for {self.name} (missing field {field_name})")
                 return None  # cannot match, missing field data
             lookup_value = data.get(field_name)
             if isinstance(lookup_value, UnresolvedReference):
-                logger.error(f"  * cannot build fields queryset for {self.name} ({field_name} is unresolved reference)")
+                logger.debug(f"  * cannot build fields queryset for {self.name} ({field_name} is unresolved reference)")
                 return None  # cannot match, missing field data
             if isinstance(lookup_value, dict):
-                logger.error(f"  * cannot build fields queryset for {self.name} ({field_name} is dict)")
+                logger.debug(f"  * cannot build fields queryset for {self.name} ({field_name} is dict)")
                 return None  # cannot match, missing field data
             lookup_kwargs[field.name] = lookup_value
 
-        # logger.error(f"      * query kwargs: {lookup_kwargs}")
         qs = self.model_class.objects.filter(**lookup_kwargs)
         if self.condition:
             qs = qs.filter(self.condition)
@@ -243,10 +241,10 @@ class ObjectMatchCriteria:
             refs = [F(ref) for ref in _get_refs(expr)]
             for ref in refs:
                 if ref not in replacements:
-                    logger.error(f"  * cannot build expr queryset for {self.name} (missing field {ref})")
+                    logger.debug(f"  * cannot build expr queryset for {self.name} (missing field {ref})")
                     return None  # cannot match, missing field data
                 if isinstance(replacements[ref], UnresolvedReference):
-                    logger.error(f"  * cannot build expr queryset for {self.name} ({ref} is unresolved reference)")
+                    logger.debug(f"  * cannot build expr queryset for {self.name} ({ref} is unresolved reference)")
                     return None  # cannot match, missing field data
 
             rhs = expr.replace_expressions(replacements)
@@ -271,7 +269,6 @@ class ObjectMatchCriteria:
 
             except FieldDoesNotExist:
                 continue
-        # logger.error(f"prepared data: {data} -> {prepared}")
         return prepared
 
 @dataclass
@@ -421,7 +418,7 @@ def _get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
                 )
             )
         else:
-            logger.error(
+            logger.debug(
                 f"Constraint {constraint.name} on {model_class.__name__} had no fields or expressions (skipped)"
             )
             # (this shouldn't happen / enforced by django)
@@ -487,7 +484,6 @@ def _fingerprint_all(data: dict) -> str:
             values.append(_fingerprint_all(v))
         else:
             values.append(v)
-    # logger.error(f"_fingerprint_all: {data} -> values: {tuple(values)}")
 
     return hash(tuple(values))
 
@@ -524,21 +520,21 @@ def find_existing_object(data: dict, object_type: str):
 
     Returns the object if found, otherwise None.
     """
-    logger.error(f"resolving {data}")
+    logger.debug(f"resolving {data}")
     model_class = get_object_type_model(object_type)
     for matcher in get_model_matchers(model_class):
         if not matcher.has_required_fields(data):
-            logger.error(f"  * skipped matcher {matcher.name} (missing fields)")
+            logger.debug(f"  * skipped matcher {matcher.name} (missing fields)")
             continue
         q = matcher.build_queryset(data)
         if q is None:
-            logger.error(f"  * skipped matcher {matcher.name} (no queryset)")
+            logger.debug(f"  * skipped matcher {matcher.name} (no queryset)")
             continue
-        logger.error(f"  * trying query {q.query}")
+        logger.debug(f"  * trying query {q.query}")
         existing = q.order_by('pk').first()
         if existing is not None:
-            logger.error(f"      -> Found object {existing} via {matcher.name}")
+            logger.debug(f"      -> Found object {existing} via {matcher.name}")
             return existing
-        logger.error(f"      -> No object found for matcher {matcher.name}")
-    logger.error("  * No matchers found an existing object")
+        logger.debug(f"      -> No object found for matcher {matcher.name}")
+    logger.debug("  * No matchers found an existing object")
     return None

@@ -72,23 +72,23 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     a certain form of deduplication and resolution of existing objects.
     """
     entities = _transform_proto_json_1(proto_json, object_type)
-    logger.error(f"_transform_proto_json_1 entities: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_transform_proto_json_1 entities: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
     entities = _topo_sort(entities)
-    logger.error(f"_topo_sort: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_topo_sort: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
     deduplicated = _fingerprint_dedupe(entities)
-    logger.error(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
     deduplicated = _topo_sort(deduplicated)
-    logger.error(f"_topo_sort: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_topo_sort: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
     _set_auto_slugs(deduplicated, supported_models)
-    logger.error(f"_set_auto_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_set_auto_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
     resolved = _resolve_existing_references(deduplicated)
-    logger.error(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
     _set_defaults(resolved, supported_models)
-    logger.error(f"_set_defaults: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_set_defaults: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
 
     # handle post-create steps
     output = _handle_post_creates(resolved)
-    logger.error(f"_handle_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_handle_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}")
 
     _check_unresolved_refs(output)
     for entity in output:
@@ -340,7 +340,7 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
 
         existing = find_existing_object(data, object_type)
         if existing is not None:
-            logger.error(f"existing {data} -> {existing}")
+            logger.debug(f"existing {data} -> {existing}")
             fp = (object_type, existing.id)
             if fp in seen:
                 logger.warning(f"objects resolved to the same existing id after deduplication: {seen[fp]} and {data}")
