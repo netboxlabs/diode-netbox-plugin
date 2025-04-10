@@ -452,7 +452,10 @@ def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict,
                 out[key] = value
             elif value_type == "date":
                 # truncate to YYYY-MM-DD
-                out[key] = datetime.datetime.fromisoformat(value).strftime("%Y-%m-%d")
+                try:
+                    out[key] = datetime.datetime.fromisoformat(value).strftime("%Y-%m-%d")
+                except Exception:
+                    out[key] = value
             elif value_type == "integer":
                 out[key] = int(value)
             elif value_type == "json":

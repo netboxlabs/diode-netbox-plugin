@@ -10,7 +10,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from utilities.data import shallow_compare_dict
 
-from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType
+from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, UnresolvedReference
 from .plugin_utils import get_primary_value, legal_fields
 from .supported_models import extract_supported_models
 from .transformer import cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
@@ -84,12 +84,20 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
 
 def _harmonize_formats(prechange_data: dict, postchange_data: dict):
     for k, v in prechange_data.items():
+        if k.startswith('_'):
+            continue
         if isinstance(v, datetime.datetime):
             prechange_data[k] = v.strftime("%Y-%m-%dT%H:%M:%SZ")
         elif isinstance(v, datetime.date):
             prechange_data[k] = v.strftime("%Y-%m-%d")
         elif isinstance(v, int) and k in postchange_data:
-            postchange_data[k] = int(postchange_data[k])
+            val = postchange_data[k]
+            if isinstance(val, UnresolvedReference):
+                continue
+            try:
+                postchange_data[k] = int(val)
+            except Exception:
+                continue
         elif isinstance(v, dict):
             _harmonize_formats(v, postchange_data.get(k, {}))
 
