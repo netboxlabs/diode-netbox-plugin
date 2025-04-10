@@ -61,6 +61,7 @@ def extract_supported_models() -> dict[str, dict]:
             extracted_models[object_type] = {
                 "fields": fields,
                 "prerequisites": prerequisites,
+                "model": model,
             }
             for related_model in related_models:
                 related_object_type = f"{related_model._meta.app_label}.{related_model._meta.model_name}"

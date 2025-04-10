@@ -2,11 +2,15 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Tests."""
 
+import datetime
 import logging
 from uuid import uuid4
 
+from core.models import ObjectType
 from dcim.models import Device, Interface, Site
 from django.contrib.auth import get_user_model
+from extras.models import CustomField
+from extras.models.customfields import CustomFieldTypeChoices
 from ipam.models import IPAddress
 from rest_framework import status
 from users.models import Token
@@ -29,6 +33,44 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.user_header = {"HTTP_AUTHORIZATION": f"Token {self.user_token.key}"}
 
         self.add_permissions("netbox_diode_plugin.add_diode")
+
+        self.object_type = ObjectType.objects.get_for_model(Site)
+
+        self.uuid_field = CustomField.objects.create(
+            name='myuuid',
+            type=CustomFieldTypeChoices.TYPE_TEXT,
+            required=False,
+            unique=True,
+        )
+        self.uuid_field.object_types.set([self.object_type])
+        self.uuid_field.save()
+
+        self.json_field = CustomField.objects.create(
+            name='some_json',
+            type=CustomFieldTypeChoices.TYPE_JSON,
+            required=False,
+            unique=False,
+        )
+        self.json_field.object_types.set([self.object_type])
+        self.json_field.save()
+
+        self.datetime_field = CustomField.objects.create(
+            name='mydatetime',
+            type=CustomFieldTypeChoices.TYPE_DATETIME,
+            required=False,
+            unique=False,
+        )
+        self.datetime_field.object_types.set([self.object_type])
+        self.datetime_field.save()
+
+        self.date_field = CustomField.objects.create(
+            name='mydate',
+            type=CustomFieldTypeChoices.TYPE_DATE,
+            required=False,
+            unique=False,
+        )
+        self.date_field.object_types.set([self.object_type])
+        self.date_field.save()
 
     def test_generate_diff_and_apply_create_interface_with_tags(self):
         """Test generate diff and apply create interface with tags."""
@@ -71,7 +113,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_interface.tags.first().name, "tag 1")
 
 
-    def test_generate_diff_and_apply_create_site(self):
+    def test_generate_diff_and_apply_create_site_autoslug(self):
         """Test generate diff and apply create site."""
         """Test generate diff create site."""
         site_uuid = str(uuid4())
@@ -81,7 +123,6 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             "entity": {
                 "site": {
                     "name": f"Site {site_uuid}",
-                    "slug": f"site-{site_uuid}",
                 },
             }
         }
@@ -168,6 +209,118 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_ipaddress.assigned_object.name, f"Interface {interface_uuid}")
         device = Device.objects.get(name=f"Device {device_uuid}")
         self.assertEqual(device.primary_ip4.pk, new_ipaddress.pk)
+
+    def test_generate_diff_and_apply_create_and_update_site_with_custom_field(self):
+        """Test generate diff and apply create and update site with custom field."""
+        site_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "name": "A New Custom Site",
+                    "slug": "a-new-custom-site",
+                    "customFields": {
+                        "myuuid": {
+                            "text": site_uuid,
+                        },
+                        "some_json": {
+                            "json": '{"some_key": 9876543210}',
+                        },
+                    },
+                },
+            }
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_site = Site.objects.get(name="A New Custom Site")
+        self.assertEqual(new_site.custom_field_data[self.uuid_field.name], site_uuid)
+        self.assertEqual(new_site.custom_field_data[self.json_field.name], {"some_key": 9876543210})
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "comments": "An updated comment",
+                    "customFields": {
+                        "myuuid": {
+                            "text": site_uuid,
+                        },
+                        "some_json": {
+                            "json": '{"some_key": 1234567890}',
+                        },
+                        "mydatetime": {
+                            "datetime": "2026-01-01T09:00:00Z",
+                        },
+                        "mydate": {
+                            "date": "2026-01-01T00:00:00Z",
+                        },
+                    },
+                },
+            }
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_site = Site.objects.get(name="A New Custom Site")
+        self.assertEqual(new_site.cf[self.uuid_field.name], site_uuid)
+        self.assertEqual(new_site.cf[self.json_field.name], {"some_key": 1234567890})
+        self.assertEqual(new_site.cf[self.datetime_field.name], datetime.datetime(2026, 1, 1, 9, 0, 0, tzinfo=datetime.timezone.utc))
+        self.assertEqual(new_site.cf[self.date_field.name], datetime.date(2026, 1, 1))
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "customFields": {
+                        "myuuid": {
+                            "text": site_uuid,
+                        },
+                        "mydatetime": {
+                            "datetime": "2026-01-01T10:00:00Z",
+                        },
+                        "mydate": {
+                            "date": "2026-01-02T00:00:00Z",
+                        },
+                    },
+                },
+            }
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_site = Site.objects.get(name="A New Custom Site")
+        self.assertEqual(new_site.cf[self.uuid_field.name], site_uuid)
+        self.assertEqual(new_site.cf[self.json_field.name], {"some_key": 1234567890})
+        self.assertEqual(new_site.cf[self.datetime_field.name], datetime.datetime(2026, 1, 1, 10, 0, 0, tzinfo=datetime.timezone.utc))
+        self.assertEqual(new_site.cf[self.date_field.name], datetime.date(2026, 1, 2))
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "customFields": {
+                        "myuuid": {
+                            "text": site_uuid,
+                        },
+                        "mydatetime": {
+                            "datetime": "2026-01-01T10:00:00Z",
+                        },
+                        "mydate": {
+                            "date": "2026-01-02T00:00:00Z",
+                        },
+                    },
+                },
+            }
+        }
+        response1 = self.client.post(
+            self.diff_url, data=payload, format="json", **self.user_header
+        )
+        self.assertEqual(response1.status_code, status.HTTP_200_OK)
+        diff = response1.json().get("change_set", {})
+        self.assertEqual(diff.get("changes", []), [])
+
 
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""

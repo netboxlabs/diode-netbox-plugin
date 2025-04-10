@@ -133,7 +133,7 @@ class ApplyChangeSetView(views.APIView):
         )
         try:
             with transaction.atomic():
-                result = apply_changeset(change_set)
+                result = apply_changeset(change_set, request)
         except ChangeSetException as e:
             logger.error(f"Error applying change set: {e}")
             result = ChangeSetResult(

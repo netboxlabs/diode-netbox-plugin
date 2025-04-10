@@ -18,7 +18,7 @@ from .supported_models import get_serializer_for_model
 logger = logging.getLogger(__name__)
 
 
-def apply_changeset(change_set: ChangeSet) -> ChangeSetResult:
+def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     """Apply a change set."""
     _validate_change_set(change_set)
 
@@ -33,7 +33,7 @@ def apply_changeset(change_set: ChangeSet) -> ChangeSetResult:
         try:
             model_class = get_object_type_model(object_type)
             data = _pre_apply(model_class, change, created)
-            _apply_change(data, model_class, change, created)
+            _apply_change(data, model_class, change, created, request)
         except ValidationError as e:
             raise _err_from_validation_error(e, f"changes[{i}]")
         except ObjectDoesNotExist:
@@ -45,11 +45,11 @@ def apply_changeset(change_set: ChangeSet) -> ChangeSetResult:
         id=change_set.id,
     )
 
-def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict):
+def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict, request):
     serializer_class = get_serializer_for_model(model_class)
     change_type = change.change_type
     if change_type == ChangeType.CREATE.value:
-        serializer = serializer_class(data=data)
+        serializer = serializer_class(data=data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         instance = serializer.save()
         created[change.ref_id] = instance
@@ -57,30 +57,46 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
     elif change_type == ChangeType.UPDATE.value:
         if object_id := change.object_id:
             instance = model_class.objects.get(id=object_id)
-            serializer = serializer_class(instance, data=data, partial=True)
+            serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             serializer.save()
         # create and update in a same change set
         elif change.ref_id and (instance := created[change.ref_id]):
-            serializer = serializer_class(instance, data=data, partial=True)
+            serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             serializer.save()
+
+def _set_path(data, path, value):
+    path = path.split(".")
+    key = path.pop(0)
+    while len(path) > 0:
+        data = data[key]
+        key = path.pop(0)
+    data[key] = value
+
+def _get_path(data, path):
+    path = path.split(".")
+    v = data
+    for p in path:
+        v = v[p]
+    return v
 
 def _pre_apply(model_class: models.Model, change: Change, created: dict):
     data = change.data.copy()
 
     # resolve foreign key references to new objects
     for ref_field in change.new_refs:
-        if isinstance(data[ref_field], (list, tuple)):
+        v = _get_path(data, ref_field)
+        if isinstance(v, (list, tuple)):
             ref_list = []
-            for ref in data[ref_field]:
+            for ref in v:
                 if isinstance(ref, str):
                     ref_list.append(created[ref].pk)
                 elif isinstance(ref, int):
                     ref_list.append(ref)
-            data[ref_field] = ref_list
+            _set_path(data, ref_field, ref_list)
         else:
-            data[ref_field] = created[data[ref_field]].pk
+            _set_path(data, ref_field, created[v].pk)
 
     # ignore? fields that are not in the data model (error?)
     allowed_fields = legal_fields(model_class)

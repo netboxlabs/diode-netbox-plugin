@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - API - Object resolution for diffing."""
 
 import copy
+import datetime
 import json
 import logging
 import re
@@ -13,10 +14,11 @@ from uuid import uuid4
 import graphlib
 from django.core.exceptions import ValidationError
 from django.utils.text import slugify
+from extras.models.customfields import CustomField
 
-from .common import ChangeSetException, UnresolvedReference
+from .common import AutoSlug, ChangeSetException, UnresolvedReference
 from .matcher import find_existing_object, fingerprint
-from .plugin_utils import get_json_ref_info, get_primary_value
+from .plugin_utils import CUSTOM_FIELD_OBJECT_REFERENCE_TYPE, get_json_ref_info, get_primary_value
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -70,23 +72,23 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     a certain form of deduplication and resolution of existing objects.
     """
     entities = _transform_proto_json_1(proto_json, object_type)
-    logger.error(f"_transform_proto_json_1 entities: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_transform_proto_json_1 entities: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
     entities = _topo_sort(entities)
-    logger.error(f"_topo_sort: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_topo_sort: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
     deduplicated = _fingerprint_dedupe(entities)
-    logger.error(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
     deduplicated = _topo_sort(deduplicated)
-    logger.error(f"_topo_sort: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
-    _set_slugs(deduplicated, supported_models)
-    logger.error(f"_set_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_topo_sort: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    _set_auto_slugs(deduplicated, supported_models)
+    logger.debug(f"_set_auto_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
     resolved = _resolve_existing_references(deduplicated)
-    logger.error(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
     _set_defaults(resolved, supported_models)
-    logger.error(f"_set_defaults: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_set_defaults: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
 
     # handle post-create steps
     output = _handle_post_creates(resolved)
-    logger.error(f"_handle_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}")
+    logger.debug(f"_handle_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}")
 
     _check_unresolved_refs(output)
     for entity in output:
@@ -111,6 +113,14 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
 
     nodes = [node]
     post_create = None
+
+    # special handling for custom fields
+    custom_fields = dict.pop(proto_json, "customFields", {})
+    if custom_fields:
+        custom_fields, custom_fields_refs, nested = _prepare_custom_fields(object_type, custom_fields)
+        node['custom_fields'] = custom_fields
+        node['_refs'].update(custom_fields_refs)
+        nodes += nested
 
     for key, value in proto_json.items():
         ref_info = get_json_ref_info(object_type, key)
@@ -171,7 +181,6 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
 
     return nodes
 
-
 def _topo_sort(entities: list[dict]) -> list[dict]:
     """Topologically sort entities by reference."""
     by_uuid = {e['_uuid']: e for e in entities}
@@ -198,11 +207,33 @@ def _set_defaults(entities: list[dict], supported_models: dict):
         if model_fields is None:
             raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
 
+        auto_slug = entity.pop("_auto_slug", None)
+        if entity.get("_instance"):
+            continue
+
+        if auto_slug:
+            if auto_slug.field_name not in entity:
+                entity[auto_slug.field_name] = auto_slug.value
+
         for field_name, field_info in model_fields.get('fields', {}).items():
             if entity.get(field_name) is None and field_info.get("default") is not None:
                 entity[field_name] = field_info["default"]
+        set_custom_field_defaults(entity, model_fields['model'])
 
-def _set_slugs(entities: list[dict], supported_models: dict):
+
+def set_custom_field_defaults(entity: dict, model):
+    """Set default values for custom fields in an entity."""
+    custom_fields = CustomField.objects.get_for_model(model)
+    if custom_fields:
+        custom_field_data = entity.get('custom_fields')
+        if custom_field_data is None:
+            custom_field_data = {}
+            entity['custom_fields'] = custom_field_data
+        for cf in custom_fields:
+            if cf.name not in custom_field_data or custom_field_data[cf.name] is None:
+                custom_field_data[cf.name] = cf.default
+
+def _set_auto_slugs(entities: list[dict], supported_models: dict):
     for entity in entities:
         model_fields = supported_models.get(entity['_object_type'])
         if model_fields is None:
@@ -210,7 +241,11 @@ def _set_slugs(entities: list[dict], supported_models: dict):
 
         for field_name, field_info in model_fields.get('fields', {}).items():
             if field_info["type"] == "SlugField" and entity.get(field_name) is None:
-                entity[field_name] = _generate_slug(entity['_object_type'], entity)
+                slug = _generate_slug(entity['_object_type'], entity)
+                if slug is not None:
+                    # this is provisionally set but will not be used
+                    # if the entity is identified by other means...
+                    entity['_auto_slug'] = AutoSlug(field_name=field_name, value=slug)
 
 def _generate_slug(object_type, data):
     """Generate a slug for a model instance."""
@@ -278,15 +313,20 @@ def _update_unresolved_refs(entity, new_refs):
         entity['_instance'] = new_refs.get(instance_uuid, instance_uuid)
 
     entity['_refs'] = {new_refs.get(r,r) for r in entity['_refs']}
+    _update_dict_refs(entity, new_refs)
 
-    for k, v in entity.items():
+
+def _update_dict_refs(data, new_refs):
+    for k, v in data.items():
         if isinstance(v, UnresolvedReference) and v.uuid in new_refs:
-            v.uuid = new_refs[v.uuid]
+            data[k] = new_refs[v.uuid]
         elif isinstance(v, (list, tuple)):
             for item in v:
                 if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
                     item.uuid = new_refs[item.uuid]
-        # TODO maps ...
+        elif isinstance(v, dict):
+            _update_dict_refs(v, new_refs)
+
 
 def _resolve_existing_references(entities: list[dict]) -> list[dict]:
     seen = {}
@@ -300,7 +340,7 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
 
         existing = find_existing_object(data, object_type)
         if existing is not None:
-            logger.error(f"existing {data} -> {existing}")
+            logger.debug(f"existing {data} -> {existing}")
             fp = (object_type, existing.id)
             if fp in seen:
                 logger.warning(f"objects resolved to the same existing id after deduplication: {seen[fp]} and {data}")
@@ -328,7 +368,8 @@ def _update_resolved_refs(data, new_refs):
                 else:
                     new_items.append(item)
             data[k] = new_items
-        # TODO maps ...
+        elif isinstance(v, dict):
+            _update_resolved_refs(v, new_refs)
 
 def cleanup_unresolved_references(data: dict) -> list[str]:
     """Find and stringify unresolved references in fields."""
@@ -347,7 +388,9 @@ def cleanup_unresolved_references(data: dict) -> list[str]:
                 else:
                     items.append(item)
             data[k] = items
-        # TODO maps
+        elif isinstance(v, dict):
+            for uu in cleanup_unresolved_references(v):
+                unresolved.add(f"{k}.{uu}")
     return sorted(unresolved)
 
 def _handle_post_creates(entities: list[dict]) -> list[str]:
@@ -394,3 +437,84 @@ def _check_unresolved_refs(entities: list[dict]) -> list[str]:
                             }
                         }
                     )
+
+
+def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict, set, list]:
+    """Prepare custom fields for transformation."""
+    out = {}
+    refs = set()
+    nodes = []
+    for key, value in custom_fields.items():
+        keyname = key
+        try:
+            value_type, value = _pop_custom_field_type_and_value(value)
+            if value_type in ("text", "longText", "decimal", "boolean", "datetime", "selection", "url", "multipleSelection"):
+                out[key] = value
+            elif value_type == "date":
+                # truncate to YYYY-MM-DD
+                out[key] = datetime.datetime.fromisoformat(value).strftime("%Y-%m-%d")
+            elif value_type == "integer":
+                out[key] = int(value)
+            elif value_type == "json":
+                out[key] = _prepare_custom_json(value)
+            elif value_type == "object":
+                nested = _prepare_custom_ref(value)
+                ref = nested[0]
+                refs.add(ref['_uuid'])
+                nodes += nested
+                out[key] = UnresolvedReference(
+                    object_type=ref['_object_type'],
+                    uuid=ref['_uuid'],
+                )
+            elif value_type == "multipleObjects":
+                vals = []
+                for i, item in enumerate(value):
+                    keyname = f"{key}[{i}]"
+                    nested = _prepare_custom_ref(value)
+                    ref = nested[0]
+                    refs.add(ref['_uuid'])
+                    nodes += nested
+                    vals.append(UnresolvedReference(
+                        object_type=ref['_object_type'],
+                        uuid=ref['_uuid'],
+                    ))
+                out[key] = vals
+            else:
+                raise ValueError(f"Custom field {keyname} has unknown type: {value_type}")
+        except ValueError as e:
+            raise ChangeSetException(
+                f"Custom field {keyname} is invalid: {value}",
+                errors={
+                    object_type: {keyname: [str(e)]},
+                }
+            )
+    return out, refs, nodes
+
+
+def _prepare_custom_json(data: dict) -> dict:
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError:
+        raise ValueError("failed to parse as JSON")
+
+
+def _pop_custom_field_type_and_value(data: dict):
+    if not isinstance(data, dict) or len(data) != 1:
+        raise ValueError("custom field value must be a dictionary with a single key")
+    value_type, value = data.popitem()
+    return value_type, value
+
+
+def _prepare_custom_ref(data: dict) -> list[dict]:
+    if not isinstance(data, dict) or len(data) != 1:
+        raise ValueError("must be a dictionary with a single key")
+
+    field_name, value = data.popitem()
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a dictionary")
+    ref_info = get_json_ref_info(CUSTOM_FIELD_OBJECT_REFERENCE_TYPE, field_name)
+    if ref_info is None:
+        raise ValueError(f"{field_name} is not a supported custom field reference type")
+
+    object_type = ref_info.object_type
+    return _transform_proto_json_1(value, object_type)
