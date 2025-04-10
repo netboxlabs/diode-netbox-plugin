@@ -251,7 +251,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                             "json": '{"some_key": 1234567890}',
                         },
                         "mydatetime": {
-                            "timestamp": "2026-01-01T09:00:00Z",
+                            "datetime": "2026-01-01T09:00:00Z",
                         },
                         "mydate": {
                             "date": "2026-01-01T00:00:00Z",
@@ -278,7 +278,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                             "text": site_uuid,
                         },
                         "mydatetime": {
-                            "timestamp": "2026-01-01T10:00:00Z",
+                            "datetime": "2026-01-01T10:00:00Z",
                         },
                         "mydate": {
                             "date": "2026-01-02T00:00:00Z",
@@ -305,7 +305,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                             "text": site_uuid,
                         },
                         "mydatetime": {
-                            "timestamp": "2026-01-01T10:00:00Z",
+                            "datetime": "2026-01-01T10:00:00Z",
                         },
                         "mydate": {
                             "date": "2026-01-02T00:00:00Z",
