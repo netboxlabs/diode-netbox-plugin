@@ -300,7 +300,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
 
         self.assertIn(
             'Expected a list of items but got type "int".',
-            _get_error(response, "changes[0]", "asns"),
+            _get_error(response, "dcim.site", "asns"),
         )
         self.assertFalse(site_created.exists())
 
@@ -334,7 +334,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         site_updated = Site.objects.get(id=20)
         self.assertIn(
             'Expected a list of items but got type "int".',
-            _get_error(response, "changes[0]", "asns")
+            _get_error(response, "dcim.site", "asns")
         )
         self.assertEqual(site_updated.name, "Site 2")
 
@@ -478,7 +478,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
 
         self.assertIn(
             "Related object not found using the provided numeric ID: 3",
-            _get_error(response, "changes[1]", "device_type"),
+            _get_error(response, "dcim.device", "device_type"),
         )
         self.assertFalse(site_created.exists())
         self.assertFalse(device_created.exists())
@@ -548,7 +548,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
 
         self.assertIn(
             "Related object not found using the provided numeric ID: 3",
-            _get_error(response, "changes[1]", "device_type"),
+            _get_error(response, "dcim.device", "device_type"),
         )
 
         self.assertFalse(site_created.exists())
@@ -587,7 +587,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
 
         self.assertIn(
             "dcim.site with id 30 does not exist",
-            _get_error(response, "changes[0]", "object_id"),
+            _get_error(response, "dcim.site", "object_id"),
         )
         self.assertEqual(site_updated.name, "Site 2")
 
@@ -655,7 +655,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
 
         self.assertIn(
             "Unsupported change type ''",
-            _get_error(response, "changes[0]", "change_type"),
+            _get_error(response, "dcim.site", "change_type"),
         )
 
     def test_change_set_id_field_and_change_set_not_provided_return_400(self):
@@ -720,7 +720,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
 
         self.assertIn(
             "Unsupported change type 'None'",
-            _get_error(response, "changes[0]", "change_type"),
+            _get_error(response, "__all__", "change_type"),
         )
         # self.assertEqual(
         #     response.json().get("errors")[0].get("change_type"),
@@ -992,7 +992,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         response = self.send_request(payload, status_code=status.HTTP_400_BAD_REQUEST)
         self.assertIn(
             'Please select a site.',
-            _get_error(response, "changes[0]", "scope"),
+            _get_error(response, "ipam.prefix", "scope"),
         )
         self.assertFalse(Prefix.objects.filter(prefix="192.168.0.0/24").exists())
 

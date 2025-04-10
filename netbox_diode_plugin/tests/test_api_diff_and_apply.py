@@ -113,6 +113,64 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_interface.tags.first().name, "tag 1")
 
 
+    def test_generate_diff_and_apply_create_and_update_device_role(self):
+        """Test generate diff and apply create and update device role."""
+        device_uuid = str(uuid4())
+        role_1_uuid = str(uuid4())
+        role_2_uuid = str(uuid4())
+        site_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": f"Device {device_uuid}",
+                    "deviceType": {
+                        "model": f"Device Type {uuid4()}",
+                        "manufacturer": {
+                            "name": f"Manufacturer {uuid4()}"
+                        }
+                    },
+                    "role": {
+                        "name": f"Role {role_1_uuid}"
+                    },
+                    "site": {
+                        "name": f"Site {site_uuid}"
+                    }
+                },
+            }
+        }
+        _, response = self.diff_and_apply(payload)
+        new_device = Device.objects.get(name=f"Device {device_uuid}")
+        self.assertEqual(new_device.site.name, f"Site {site_uuid}")
+        self.assertEqual(new_device.role.name, f"Role {role_1_uuid}")
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": f"Device {device_uuid}",
+                    "deviceType": {
+                        "model": f"Device Type {uuid4()}",
+                        "manufacturer": {
+                            "name": f"Manufacturer {uuid4()}"
+                        }
+                    },
+                    "role": {
+                        "name": f"Role {role_2_uuid}"
+                    },
+                    "site": {
+                        "name": f"Site {site_uuid}"
+                    }
+                },
+            }
+        }
+        _, response = self.diff_and_apply(payload)
+        device = Device.objects.get(name=f"Device {device_uuid}")
+        self.assertEqual(device.site.name, f"Site {site_uuid}")
+        self.assertEqual(device.role.name, f"Role {role_2_uuid}")
+
+
     def test_generate_diff_and_apply_create_site_autoslug(self):
         """Test generate diff and apply create site."""
         """Test generate diff create site."""
@@ -320,6 +378,35 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         diff = response1.json().get("change_set", {})
         self.assertEqual(diff.get("changes", []), [])
+
+    def test_generate_diff_wrong_type_date(self):
+        """Test generate diff wrong type date."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "name": "Site Generate Diff 1",
+                    "slug": "site-generate-diff-1",
+                    "customFields": {
+                        "mydate": {
+                            "date": 12,
+                        },
+                    },
+                },
+            }
+        }
+        response1 = self.client.post(
+            self.diff_url, data=payload, format="json", **self.user_header
+        )
+        self.assertEqual(response1.status_code, status.HTTP_200_OK)
+
+        diff = response1.json().get("change_set", {})
+
+        response2 = self.client.post(
+            self.apply_url, data=diff, format="json", **self.user_header
+        )
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
 
 
     def diff_and_apply(self, payload):

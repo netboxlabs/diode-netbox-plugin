@@ -23,7 +23,7 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     _validate_change_set(change_set)
 
     created = {}
-    for i, change in enumerate(change_set.changes):
+    for change in change_set.changes:
         change_type = change.change_type
         object_type = change.object_type
 
@@ -35,9 +35,14 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
             data = _pre_apply(model_class, change, created)
             _apply_change(data, model_class, change, created, request)
         except ValidationError as e:
-            raise _err_from_validation_error(e, f"changes[{i}]")
+            raise _err_from_validation_error(e, object_type)
         except ObjectDoesNotExist:
-            raise _err(f"{object_type} with id {change.object_id} does not exist", f"changes[{i}]", "object_id")
+            raise _err(f"{object_type} with id {change.object_id} does not exist", object_type, "object_id")
+        except TypeError as e:
+            # this indicates a problem in model validation (should raise ValidationError)
+            # but raised non-validation error (TypeError) -- we don't know which field trigged it.
+            logger.error(f"invalid data type for unspecified field (validation raised non-validation error): {data}: {e}")
+            raise _err("invalid data type for field", object_type, "__all__")
         # ConstraintViolationError ?
         # ...
 
@@ -113,13 +118,15 @@ def _validate_change_set(change_set: ChangeSet):
     if not change_set.changes:
         raise _err("Changes are required", "changeset", "changes")
 
-    for i, change in enumerate(change_set.changes):
+    for change in change_set.changes:
         if change.object_id is None and change.ref_id is None:
-            raise _err("Object ID or Ref ID must be provided", f"changes[{i}]", NON_FIELD_ERRORS)
+            raise _err("Object ID or Ref ID must be provided", change.object_type, NON_FIELD_ERRORS)
         if change.change_type not in ChangeType:
-            raise _err(f"Unsupported change type '{change.change_type}'", f"changes[{i}]", "change_type")
+            raise _err(f"Unsupported change type '{change.change_type}'", change.object_type, "change_type")
 
 def _err(message, object_name, field):
+    if not object_name:
+        object_name = "__all__"
     return ChangeSetException(message, errors={object_name: {field: [message]}})
 
 def _err_from_validation_error(e, object_name):
