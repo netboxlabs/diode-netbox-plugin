@@ -55,7 +55,7 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         if hasattr(value, "all"):  # Handle many-to-many and many-to-one relationships
             # For any relationship that has an 'all' method, get all related objects' primary keys
             prechange_data[field_name] = (
-                [item.pk for item in value.all()] if value is not None else []
+                sorted([item.pk for item in value.all()] if value is not None else [])
             )
         elif hasattr(
             value, "pk"
@@ -233,8 +233,11 @@ def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> d
     """Merge lists and custom_fields rather than replacing the full value..."""
     result = {}
     for key, value in postchange_data.items():
-        # TODO: partially merge lists like tags? all lists?
-        result[key] = value
+        # currently we only merge tags, but this could be extended to other reference lists?
+        if key == "tags":
+            result[key] = _merge_reference_list(prechange_data.get(key, []), value)
+        else:
+            result[key] = value
 
     # these are fully merged in from the prechange state because
     # they don't respect partial update serialization.
@@ -244,3 +247,11 @@ def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> d
                 result["custom_fields"][key] = value
         set_custom_field_defaults(result, instance)
     return result
+
+def _merge_reference_list(prechange_list: list, postchange_list: list) -> list:
+    """Merge reference lists rather than replacing the full value."""
+    result = set(prechange_list)
+    result.update(postchange_list)
+    return sorted(result, key=str)
+
+

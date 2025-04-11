@@ -189,6 +189,97 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         new_site = Site.objects.get(name=f"Site {site_uuid}")
         self.assertEqual(new_site.slug, f"site-{site_uuid}")
 
+    def test_generate_diff_and_apply_tags_merged(self):
+        """Test generate diff and apply merges tags."""
+        site_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "name": f"Site {site_uuid}",
+                    "tags": [
+                        {"name": "tag 1"},
+                        {"name": "tag 2"},
+                    ],
+                },
+            }
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_site = Site.objects.get(name=f"Site {site_uuid}")
+        self.assertEqual(new_site.tags.count(), 2)
+        tag_names = [tag.name for tag in new_site.tags.all()]
+        self.assertIn("tag 1", tag_names)
+        self.assertIn("tag 2", tag_names)
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "name": f"Site {site_uuid}",
+                    "tags": [
+                        {"name": "tag 3"},
+                    ],
+                },
+            }
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_site = Site.objects.get(name=f"Site {site_uuid}")
+        self.assertEqual(new_site.tags.count(), 3)
+        tag_names = [tag.name for tag in new_site.tags.all()]
+        self.assertIn("tag 1", tag_names)
+        self.assertIn("tag 2", tag_names)
+        self.assertIn("tag 3", tag_names)
+
+    def test_generate_diff_and_apply_refs_not_merged(self):
+        """Test generate diff and apply does not merge reference lists."""
+        site_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "name": f"Site {site_uuid}",
+                    "asns": [
+                        {"asn": "1", "rir": {"name": "RIR 1"}},
+                        {"asn": "2", "rir": {"name": "RIR 1"}},
+                    ],
+                },
+            }
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_site = Site.objects.get(name=f"Site {site_uuid}")
+        self.assertEqual(new_site.asns.count(), 2)
+        asns = [asn.asn for asn in new_site.asns.all()]
+        self.assertIn(1, asns)
+        self.assertIn(2, asns)
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "name": f"Site {site_uuid}",
+                    "asns": [
+                        {"asn": "3", "rir": {"name": "RIR 1"}},
+                    ],
+                },
+            }
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_site = Site.objects.get(name=f"Site {site_uuid}")
+        self.assertEqual(new_site.asns.count(), 1)
+        asns = [asn.asn for asn in new_site.asns.all()]
+        self.assertNotIn(1, asns)
+        self.assertNotIn(2, asns)
+        self.assertIn(3, asns)
+
+
     def test_generate_diff_and_apply_create_interface_with_primay_mac_address(self):
         """Test generate diff and apply create interface with primary mac address."""
         interface_uuid = str(uuid4())
