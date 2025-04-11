@@ -14,12 +14,7 @@ docker-compose-netbox-plugin-down:
 
 .PHONY: docker-compose-netbox-plugin-test
 docker-compose-netbox-plugin-test:
-	-@$(DOCKER_COMPOSE) -f docker/docker-compose.yaml -f docker/docker-compose.test.yaml run -u root --rm netbox ./manage.py test --keepdb netbox_diode_plugin
-	@$(MAKE) docker-compose-netbox-plugin-down
-
-.PHONY: docker-compose-netbox-plugin-test-ff
-docker-compose-netbox-plugin-test-ff:
-	-@$(DOCKER_COMPOSE) -f docker/docker-compose.yaml -f docker/docker-compose.test.yaml run -u root --rm netbox ./manage.py test --failfast --keepdb netbox_diode_plugin
+	-@$(DOCKER_COMPOSE) -f docker/docker-compose.yaml -f docker/docker-compose.test.yaml run -u root --rm netbox ./manage.py test $(TEST_FLAGS) --keepdb netbox_diode_plugin
 	@$(MAKE) docker-compose-netbox-plugin-down
 
 .PHONY: docker-compose-netbox-plugin-test-cover

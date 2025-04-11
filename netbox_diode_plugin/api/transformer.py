@@ -319,7 +319,7 @@ def _update_unresolved_refs(entity, new_refs):
 def _update_dict_refs(data, new_refs):
     for k, v in data.items():
         if isinstance(v, UnresolvedReference) and v.uuid in new_refs:
-            data[k] = new_refs[v.uuid]
+            v.uuid = new_refs[v.uuid]
         elif isinstance(v, (list, tuple)):
             for item in v:
                 if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
@@ -439,7 +439,7 @@ def _check_unresolved_refs(entities: list[dict]) -> list[str]:
                     )
 
 
-def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict, set, list]:
+def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict, set, list]: # noqa: C901
     """Prepare custom fields for transformation."""
     out = {}
     refs = set()
