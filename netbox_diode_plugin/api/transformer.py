@@ -18,7 +18,7 @@ from extras.models.customfields import CustomField
 
 from .common import AutoSlug, ChangeSetException, UnresolvedReference
 from .matcher import find_existing_object, fingerprint
-from .plugin_utils import CUSTOM_FIELD_OBJECT_REFERENCE_TYPE, get_json_ref_info, get_primary_value
+from .plugin_utils import CUSTOM_FIELD_OBJECT_REFERENCE_TYPE, get_json_ref_info, get_primary_value, legal_fields
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -27,7 +27,6 @@ def _camel_to_snake_case(name):
     """Convert camelCase string to snake_case."""
     name = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
     return re.sub("([a-z0-9])([A-Z])", r"\1_\2", name).lower()
-
 
 # these are implied values pushed down to referenced objects.
 _NESTED_CONTEXT = {
@@ -104,6 +103,9 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
         "_refs": set(),
     }
 
+    # handle camelCase protoJSON if provided...
+    proto_json = _ensure_snake_case(proto_json, object_type)
+
     # context pushed down from parent nodes
     if context is not None:
         for k, v in context.items():
@@ -115,7 +117,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
     post_create = None
 
     # special handling for custom fields
-    custom_fields = dict.pop(proto_json, "customFields", {})
+    custom_fields = dict.pop(proto_json, "custom_fields", {})
     if custom_fields:
         custom_fields, custom_fields_refs, nested = _prepare_custom_fields(object_type, custom_fields)
         node['custom_fields'] = custom_fields
@@ -125,7 +127,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
     for key, value in proto_json.items():
         ref_info = get_json_ref_info(object_type, key)
         if ref_info is None:
-            node[_camel_to_snake_case(key)] = copy.deepcopy(value)
+            node[key] = copy.deepcopy(value)
             continue
 
         nested_context = _nested_context(object_type, uuid, ref_info.field_name)
@@ -180,6 +182,22 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
         nodes.append(post_create)
 
     return nodes
+
+def _ensure_snake_case(proto_json: dict, object_type: str) -> dict:
+    fields = legal_fields(object_type)
+    out = {}
+    for k, v in proto_json.items():
+        if k in fields or get_json_ref_info(object_type, k):
+            out[k] = v
+            continue
+        snake_key = _camel_to_snake_case(k)
+        if snake_key in fields or get_json_ref_info(object_type, snake_key):
+            out[snake_key] = v
+        else:
+            # error?
+            logger.warning(f"Unknown field {k}/{snake_key} is not legal for {object_type}, skipping...")
+    return out
+
 
 def _topo_sort(entities: list[dict]) -> list[dict]:
     """Topologically sort entities by reference."""
