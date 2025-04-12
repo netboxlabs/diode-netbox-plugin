@@ -30,13 +30,19 @@ except ImportError:
     )
 
 
-def get_entity_key(model_name):
-    """Get the entity key for a model name."""
+def get_valid_entity_keys(model_name):
+    """
+    Get the valid entity keys for a model name.
+
+    This can be snake or lowerCamel case (both are valid for protoJSON)
+    """
     s = re.sub(r'([A-Z0-9]{2,})([A-Z])([a-z])', r'\1_\2\3', model_name)
     s = re.sub(r'([a-z])([A-Z])', r'\1_\2', s)
-    s = re.sub(r'_+', '_', s.lower()) # snake
-    s = ''.join([word.capitalize() for word in s.split("_")]) # upperCamelCase
-    return s[0].lower() + s[1:] # lowerCamelCase
+    snake = re.sub(r'_+', '_', s.lower()) # snake
+    upperCamel = ''.join([word.capitalize() for word in snake.split("_")]) # upperCamelCase
+    lowerCamel = upperCamel[0].lower() + upperCamel[1:] # lowerCamelCase
+
+    return (snake, lowerCamel)
 
 
 class GenerateDiffView(views.APIView):
@@ -65,9 +71,10 @@ class GenerateDiffView(views.APIView):
         app_label, model_name = object_type.split(".")
         model_class = apps.get_model(app_label, model_name)
 
-        # Convert model name to lowerCamelCase for entity lookup
-        entity_key = get_entity_key(model_class.__name__)
-        original_entity_data = entity.get(entity_key)
+        for entity_key in get_valid_entity_keys(model_class.__name__):
+            original_entity_data = entity.get(entity_key)
+            if original_entity_data:
+                break
 
         if original_entity_data is None:
             raise ValidationError(

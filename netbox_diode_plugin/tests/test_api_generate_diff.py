@@ -112,7 +112,7 @@ class GenerateDiffTestCase(APITestCase):
                 "site": {
                     "name": "A New Site",
                     "slug": "a-new-site",
-                    "customFields": {
+                    "custom_fields": {
                         "some_json": {
                             "json": '{"some_key": 1234567890}',
                         },
@@ -182,7 +182,7 @@ class GenerateDiffTestCase(APITestCase):
                     # but we expect to match the existing site by the
                     # unique custom field myuuid
                     "comments": "A custom comment",
-                    "customFields": {
+                    "custom_fields": {
                         "myuuid": {
                             "text": self.site_uuid,
                         },
@@ -217,7 +217,7 @@ class GenerateDiffTestCase(APITestCase):
             "timestamp": 1,
             "object_type": "dcim.racktype",
             "entity": {
-                "rackType": {
+                "rack_type": {
                     "model": "Rack Type 1",
                     "form_factor": "wall-frame",
                 },
@@ -246,6 +246,38 @@ class GenerateDiffTestCase(APITestCase):
         # correct slug is present in before data
         self.assertEqual(before.get("slug"), "rack-type-1")
 
+    def test_generate_diff_update_rack_type_camel_case(self):
+        """Test generate diff update rack type with came cased protoJSON."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.racktype",
+            "entity": {
+                "rackType": {
+                    "slug": "rack-type-1",
+                    "model": "Rack Type 1",
+                    "formFactor": "wall-frame",
+                },
+            }
+        }
+
+        response = self.send_request(payload)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        cs = response.json().get("change_set", {})
+        self.assertIsNotNone(cs.get("id"))
+        changes = cs.get("changes", [])
+        self.assertEqual(len(changes), 1)
+        change = changes[0]
+        self.assertEqual(change.get("object_type"), "dcim.racktype")
+        self.assertEqual(change.get("change_type"), "update")
+        self.assertEqual(change.get("object_id"), self.rack_type.id)
+        self.assertEqual(change.get("ref_id"), None)
+
+        data = change.get("data", {})
+        self.assertEqual(data.get("model"), "Rack Type 1")
+        self.assertEqual(data.get("form_factor"), "wall-frame")
+
+        before = change.get("before", {})
+        self.assertEqual(before.get("model"), "Rack Type 1")
 
     def send_request(self, payload, status_code=status.HTTP_200_OK):
         """Post the payload to the url and return the response."""

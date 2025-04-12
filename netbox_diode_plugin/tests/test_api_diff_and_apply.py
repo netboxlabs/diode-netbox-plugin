@@ -89,7 +89,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                     "type": "1000base-t",
                     "device": {
                         "name": f"Device {uuid4()}",
-                        "deviceType": {
+                        "device_type": {
                             "model": f"Device Type {uuid4()}",
                             "manufacturer": {
                                 "name": f"Manufacturer {uuid4()}"
@@ -125,7 +125,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             "entity": {
                 "device": {
                     "name": f"Device {device_uuid}",
-                    "deviceType": {
+                    "device_type": {
                         "model": f"Device Type {uuid4()}",
                         "manufacturer": {
                             "name": f"Manufacturer {uuid4()}"
@@ -298,14 +298,14 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                         "site": {
                             "Name": f"Site {uuid4()}",
                         },
-                        "deviceType": {
+                        "device_type": {
                             "manufacturer": {
                                 "Name": f"Manufacturer {uuid4()}",
                             },
                             "model": f"Device Type {uuid4()}",
                         },
                     },
-                    "primaryMacAddress": {
+                    "primary_mac_address": {
                         "mac_address": "00:00:00:00:00:01",
                     },
                 },
@@ -316,8 +316,8 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         new_interface = Interface.objects.get(name=f"Interface {interface_uuid}")
         self.assertEqual(new_interface.primary_mac_address.mac_address, "00:00:00:00:00:01")
 
-    def test_generate_diff_and_apply_create_device_with_primary_ip4(self):
-        """Test generate diff and apply create device with primary ip4."""
+    def test_generate_diff_and_apply_create_device_with_primary_ip4_camel_case(self):
+        """Test generate diff and apply create device with primary ip4 (camel case)."""
         device_uuid = str(uuid4())
         interface_uuid = str(uuid4())
         addr = "192.168.1.1"
@@ -359,6 +359,49 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         device = Device.objects.get(name=f"Device {device_uuid}")
         self.assertEqual(device.primary_ip4.pk, new_ipaddress.pk)
 
+    def test_generate_diff_and_apply_create_device_with_primary_ip4(self):
+        """Test generate diff and apply create device with primary ip4."""
+        device_uuid = str(uuid4())
+        interface_uuid = str(uuid4())
+        addr = "192.168.1.1"
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.ipaddress",
+            "entity": {
+                "ip_address": {
+                    "address": addr,
+                    "assigned_object_interface": {
+                        "name": f"Interface {interface_uuid}",
+                        "type": "1000base-t",
+                        "device": {
+                            "name": f"Device {device_uuid}",
+                            "role": {
+                                "name": f"Role {uuid4()}",
+                            },
+                            "site": {
+                                "name": f"Site {uuid4()}",
+                            },
+                            "device_type": {
+                                "manufacturer": {
+                                    "name": f"Manufacturer {uuid4()}",
+                                },
+                                "model": f"Device Type {uuid4()}",
+                            },
+                            "primary_ip4": {
+                                "address": addr,
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_ipaddress = IPAddress.objects.get(address=addr)
+        self.assertEqual(new_ipaddress.assigned_object.name, f"Interface {interface_uuid}")
+        device = Device.objects.get(name=f"Device {device_uuid}")
+        self.assertEqual(device.primary_ip4.pk, new_ipaddress.pk)
+
     def test_generate_diff_and_apply_create_and_update_site_with_custom_field(self):
         """Test generate diff and apply create and update site with custom field."""
         site_uuid = str(uuid4())
@@ -369,7 +412,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                 "site": {
                     "name": "A New Custom Site",
                     "slug": "a-new-custom-site",
-                    "customFields": {
+                    "custom_fields": {
                         "myuuid": {
                             "text": site_uuid,
                         },
@@ -392,7 +435,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             "entity": {
                 "site": {
                     "comments": "An updated comment",
-                    "customFields": {
+                    "custom_fields": {
                         "myuuid": {
                             "text": site_uuid,
                         },
@@ -422,7 +465,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             "object_type": "dcim.site",
             "entity": {
                 "site": {
-                    "customFields": {
+                    "custom_fields": {
                         "myuuid": {
                             "text": site_uuid,
                         },
@@ -449,7 +492,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             "object_type": "dcim.site",
             "entity": {
                 "site": {
-                    "customFields": {
+                    "custom_fields": {
                         "myuuid": {
                             "text": site_uuid,
                         },
@@ -479,7 +522,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                 "site": {
                     "name": "Site Generate Diff 1",
                     "slug": "site-generate-diff-1",
-                    "customFields": {
+                    "custom_fields": {
                         "mydate": {
                             "date": 12,
                         },
