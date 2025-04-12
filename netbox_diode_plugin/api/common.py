@@ -235,3 +235,20 @@ class AutoSlug:
 
     field_name: str
     value: str
+
+
+def error_from_validation_error(e, object_name):
+    """Convert a drf ValidationError to a ChangeSetException."""
+    errors = {}
+    if e.detail:
+        if isinstance(e.detail, dict):
+            errors[object_name] = e.detail
+        elif isinstance(e.detail, (list, tuple)):
+            errors[object_name] = {
+                NON_FIELD_ERRORS: e.detail
+            }
+        else:
+            errors[object_name] = {
+                NON_FIELD_ERRORS: [e.detail]
+            }
+    return ChangeSetException("validation error", errors=errors)

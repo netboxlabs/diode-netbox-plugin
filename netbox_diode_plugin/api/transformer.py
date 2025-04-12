@@ -18,7 +18,13 @@ from extras.models.customfields import CustomField
 
 from .common import AutoSlug, ChangeSetException, UnresolvedReference
 from .matcher import find_existing_object, fingerprint
-from .plugin_utils import CUSTOM_FIELD_OBJECT_REFERENCE_TYPE, get_json_ref_info, get_primary_value, legal_fields
+from .plugin_utils import (
+    CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
+    apply_format_transformations,
+    get_json_ref_info,
+    get_primary_value,
+    legal_fields,
+)
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -72,6 +78,7 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     """
     entities = _transform_proto_json_1(proto_json, object_type)
     logger.debug(f"_transform_proto_json_1 entities: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+
     entities = _topo_sort(entities)
     logger.debug(f"_topo_sort: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
     deduplicated = _fingerprint_dedupe(entities)
@@ -105,6 +112,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
 
     # handle camelCase protoJSON if provided...
     proto_json = _ensure_snake_case(proto_json, object_type)
+    apply_format_transformations(proto_json, object_type)
 
     # context pushed down from parent nodes
     if context is not None:

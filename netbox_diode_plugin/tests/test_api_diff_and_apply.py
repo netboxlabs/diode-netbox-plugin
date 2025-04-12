@@ -3,11 +3,14 @@
 """Diode NetBox Plugin - Tests."""
 
 import datetime
+import decimal
 import logging
 from uuid import uuid4
 
 from core.models import ObjectType
 from dcim.models import Device, Interface, Site
+from ipam.models import VLANGroup
+from circuits.models import Circuit
 from django.contrib.auth import get_user_model
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
@@ -71,6 +74,15 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         )
         self.date_field.object_types.set([self.object_type])
         self.date_field.save()
+
+        self.decimal_field = CustomField.objects.create(
+            name='mydecimal',
+            type=CustomFieldTypeChoices.TYPE_DECIMAL,
+            required=False,
+            unique=False,
+        )
+        self.decimal_field.object_types.set([self.object_type])
+        self.decimal_field.save()
 
     def test_generate_diff_and_apply_create_interface_with_tags(self):
         """Test generate diff and apply create interface with tags."""
@@ -416,6 +428,9 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                         "myuuid": {
                             "text": site_uuid,
                         },
+                        "mydecimal": {
+                            "decimal": 1234.567,
+                        },
                         "some_json": {
                             "json": '{"some_key": 9876543210}',
                         },
@@ -428,6 +443,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         new_site = Site.objects.get(name="A New Custom Site")
         self.assertEqual(new_site.custom_field_data[self.uuid_field.name], site_uuid)
         self.assertEqual(new_site.custom_field_data[self.json_field.name], {"some_key": 9876543210})
+        self.assertEqual(new_site.custom_field_data[self.decimal_field.name], 1234.567)
 
         payload = {
             "timestamp": 1,
@@ -513,8 +529,52 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         diff = response1.json().get("change_set", {})
         self.assertEqual(diff.get("changes", []), [])
 
-    def test_generate_diff_wrong_type_date(self):
-        """Test generate diff wrong type date."""
+    def test_generate_diff_and_apply_circuit_with_install_date(self):
+        """Test generate diff and apply circuit with date."""
+        circuit_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "circuits.circuit",
+            "entity": {
+                "circuit": {
+                    "cid": f"Circuit {circuit_uuid}",
+                    "install_date": "2026-01-01T00:00:00Z",
+                    "provider": {
+                        "name": f"Provider {uuid4()}",
+                    },
+                    "type": {
+                        "name": f"Ciruit Type {uuid4()}",
+                    },
+                },
+            },
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_circuit = Circuit.objects.get(cid=f"Circuit {circuit_uuid}")
+        self.assertEqual(new_circuit.install_date, datetime.date(2026, 1, 1))
+
+    def test_generate_diff_and_apply_site_with_lat_lon(self):
+        """Test generate diff and apply site with lat and lon."""
+        site_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "name": f"Site {site_uuid}",
+                    "latitude":  23.456,
+                    "longitude": 78.910,
+                },
+            },
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_site = Site.objects.get(name=f"Site {site_uuid}")
+        self.assertEqual(new_site.latitude, decimal.Decimal("23.456"))
+        self.assertEqual(new_site.longitude, decimal.Decimal("78.910"))
+
+    def test_generate_diff_and_apply_wrong_type_date(self):
+        """Test generate diff and apply wrong type date."""
         payload = {
             "timestamp": 1,
             "object_type": "dcim.site",
@@ -541,6 +601,42 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             self.apply_url, data=diff, format="json", **self.user_header
         )
         self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_generate_diff_and_apply_vlan_group_with_vid_ranges(self):
+        """Test generate diff and apply vlan group vid ranges."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.vlangroup",
+            "entity": {
+                "vlan_group": {
+                    "name": "VLAN Group 1",
+                    "vid_ranges": [1,5,10,15],
+                },
+            },
+        }
+        _, response = self.diff_and_apply(payload)
+        new_vlan_group = VLANGroup.objects.get(name="VLAN Group 1")
+        self.assertEqual(new_vlan_group.vid_ranges[0].lower, 1)
+        self.assertEqual(new_vlan_group.vid_ranges[0].upper, 6)
+        self.assertEqual(new_vlan_group.vid_ranges[1].lower, 10)
+        self.assertEqual(new_vlan_group.vid_ranges[1].upper, 16)
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.vlangroup",
+            "entity": {
+                "vlan_group": {
+                    "name": "VLAN Group 1",
+                    "vid_ranges": [3,9,12,20],
+                },
+            },
+        }
+        _, response = self.diff_and_apply(payload)
+        new_vlan_group = VLANGroup.objects.get(name="VLAN Group 1")
+        self.assertEqual(new_vlan_group.vid_ranges[0].lower, 3)
+        self.assertEqual(new_vlan_group.vid_ranges[0].upper, 10)
+        self.assertEqual(new_vlan_group.vid_ranges[1].lower, 12)
+        self.assertEqual(new_vlan_group.vid_ranges[1].upper, 21)
 
 
     def diff_and_apply(self, payload):

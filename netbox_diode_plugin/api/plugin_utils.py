@@ -1,16 +1,20 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Timestamp: 2025-04-12 15:25:46Z
+# Timestamp: 2025-04-13 13:20:10Z
 
 from dataclasses import dataclass
+import datetime
+import decimal
 from functools import lru_cache
+import logging
 from typing import Type
 
 from core.models import ObjectType as NetBoxType
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
+logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=256)
 def get_object_type_model(object_type: str) -> Type[models.Model]:
@@ -996,3 +1000,196 @@ _OBJECT_TYPE_PRIMARY_VALUE_FIELD_MAP = {
 def get_primary_value(data: dict, object_type: str) -> str|None:
     field = _OBJECT_TYPE_PRIMARY_VALUE_FIELD_MAP.get(object_type, 'name')
     return data.get(field)
+
+
+def transform_timestamp_to_date_only(value: str) -> str:
+    return datetime.datetime.fromisoformat(value).strftime('%Y-%m-%d')
+
+def transform_float_to_decimal(value: float) -> decimal.Decimal:
+    try:
+        return decimal.Decimal(str(value))
+    except decimal.InvalidOperation:
+        raise ValueError(f'Invalid decimal value: {value}')
+
+def int_from_int64string(value: str) -> int:
+    return int(value)
+
+def collect_integer_pairs(value: list[int]) -> list[tuple[int, int]]:
+    if len(value) % 2 != 0:
+        raise ValueError('Array must have an even number of elements')
+    return [(value[i], value[i+1]) for i in range(0, len(value), 2)]
+
+def for_all(transform):
+    def wrapper(value):
+        if isinstance(value, list):
+            return [transform(v) for v in value]
+        return transform(value)
+    return wrapper
+
+_FORMAT_TRANSFORMATIONS = {
+    'circuits.circuit': {
+        'commit_rate': int_from_int64string,
+        'distance': transform_float_to_decimal,
+        'install_date': transform_timestamp_to_date_only,
+        'termination_date': transform_timestamp_to_date_only,
+    },
+    'circuits.circuittermination': {
+        'port_speed': int_from_int64string,
+        'upstream_speed': int_from_int64string,
+    },
+    'dcim.cable': {
+        'length': transform_float_to_decimal,
+    },
+    'dcim.consoleport': {
+        'speed': int_from_int64string,
+    },
+    'dcim.consoleserverport': {
+        'speed': int_from_int64string,
+    },
+    'dcim.device': {
+        'latitude': transform_float_to_decimal,
+        'longitude': transform_float_to_decimal,
+        'position': transform_float_to_decimal,
+        'vc_position': int_from_int64string,
+        'vc_priority': int_from_int64string,
+    },
+    'dcim.devicetype': {
+        'u_height': transform_float_to_decimal,
+        'weight': transform_float_to_decimal,
+    },
+    'dcim.frontport': {
+        'rear_port_position': int_from_int64string,
+    },
+    'dcim.interface': {
+        'mtu': int_from_int64string,
+        'rf_channel_frequency': transform_float_to_decimal,
+        'rf_channel_width': transform_float_to_decimal,
+        'speed': int_from_int64string,
+        'tx_power': int_from_int64string,
+    },
+    'dcim.moduletype': {
+        'weight': transform_float_to_decimal,
+    },
+    'dcim.powerfeed': {
+        'amperage': int_from_int64string,
+        'max_utilization': int_from_int64string,
+        'voltage': int_from_int64string,
+    },
+    'dcim.powerport': {
+        'allocated_draw': int_from_int64string,
+        'maximum_draw': int_from_int64string,
+    },
+    'dcim.rack': {
+        'max_weight': int_from_int64string,
+        'mounting_depth': int_from_int64string,
+        'outer_depth': int_from_int64string,
+        'outer_width': int_from_int64string,
+        'starting_unit': int_from_int64string,
+        'u_height': int_from_int64string,
+        'weight': transform_float_to_decimal,
+        'width': int_from_int64string,
+    },
+    'dcim.rackreservation': {
+        'units': for_all(int_from_int64string),
+    },
+    'dcim.racktype': {
+        'max_weight': int_from_int64string,
+        'mounting_depth': int_from_int64string,
+        'outer_depth': int_from_int64string,
+        'outer_width': int_from_int64string,
+        'starting_unit': int_from_int64string,
+        'u_height': int_from_int64string,
+        'weight': transform_float_to_decimal,
+        'width': int_from_int64string,
+    },
+    'dcim.rearport': {
+        'positions': int_from_int64string,
+    },
+    'dcim.site': {
+        'latitude': transform_float_to_decimal,
+        'longitude': transform_float_to_decimal,
+    },
+    'dcim.virtualdevicecontext': {
+        'identifier': int_from_int64string,
+    },
+    'ipam.aggregate': {
+        'date_added': transform_timestamp_to_date_only,
+    },
+    'ipam.asn': {
+        'asn': int_from_int64string,
+    },
+    'ipam.asnrange': {
+        'end': int_from_int64string,
+        'start': int_from_int64string,
+    },
+    'ipam.fhrpgroup': {
+        'group_id': int_from_int64string,
+    },
+    'ipam.fhrpgroupassignment': {
+        'priority': int_from_int64string,
+    },
+    'ipam.role': {
+        'weight': int_from_int64string,
+    },
+    'ipam.service': {
+        'ports': for_all(int_from_int64string),
+    },
+    'ipam.vlan': {
+        'vid': int_from_int64string,
+    },
+    'ipam.vlangroup': {
+        'vid_ranges': collect_integer_pairs,
+    },
+    'ipam.vlantranslationrule': {
+        'local_vid': int_from_int64string,
+        'remote_vid': int_from_int64string,
+    },
+    'virtualization.virtualdisk': {
+        'size': int_from_int64string,
+    },
+    'virtualization.virtualmachine': {
+        'disk': int_from_int64string,
+        'memory': int_from_int64string,
+        'vcpus': transform_float_to_decimal,
+    },
+    'virtualization.vminterface': {
+        'mtu': int_from_int64string,
+    },
+    'vpn.ikepolicy': {
+        'version': int_from_int64string,
+    },
+    'vpn.ikeproposal': {
+        'group': int_from_int64string,
+        'sa_lifetime': int_from_int64string,
+    },
+    'vpn.ipsecpolicy': {
+        'pfs_group': int_from_int64string,
+    },
+    'vpn.ipsecproposal': {
+        'sa_lifetime_data': int_from_int64string,
+        'sa_lifetime_seconds': int_from_int64string,
+    },
+    'vpn.l2vpn': {
+        'identifier': int_from_int64string,
+    },
+    'vpn.tunnel': {
+        'tunnel_id': int_from_int64string,
+    },
+    'wireless.wirelesslink': {
+        'distance': transform_float_to_decimal,
+    },
+}
+
+def apply_format_transformations(data: dict, object_type: str):
+    for key, transform in _FORMAT_TRANSFORMATIONS.get(object_type, {}).items():
+        val = data.get(key, None)
+        if val is None:
+            continue
+        try:
+            data[key] = transform(val)
+        except ValidationError:
+            raise
+        except ValueError as e:
+            raise ValidationError(f'Invalid value {val} for field {key} in {object_type}: {e}')
+        except Exception as e:
+            raise ValidationError(f'Invalid value {val} for field {key} in {object_type}')
