@@ -364,6 +364,10 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
         data = copy.deepcopy(data)
         _update_resolved_refs(data, new_refs)
 
+        if data.get('_is_post_create'):
+            resolved.append(data)
+            continue
+
         existing = find_existing_object(data, object_type)
         if existing is not None:
             logger.debug(f"existing {data} -> {existing}")

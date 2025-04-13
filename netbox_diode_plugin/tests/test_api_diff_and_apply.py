@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Tests."""
 
+import copy
 import datetime
 import decimal
 import logging
@@ -19,6 +20,7 @@ from ipam.models import IPAddress
 import netaddr
 from rest_framework import status
 from users.models import Token
+from virtualization.models import VMInterface
 from utilities.testing import APITestCase
 
 logger = logging.getLogger(__name__)
@@ -822,7 +824,78 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(ip2.vrf, None)
         self.assertEqual(ip2.status, "deprecated")
 
+    def test_generate_diff_and_apply_complex_vminterface(self):
+        """Test generate diff and apply and update a complex vm interface."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "virtualization.vminterface",
+            "entity": {
+                "vm_interface": {
+                    "virtual_machine": {
+                        "name": "Virtual Machine 15e00bdf-4294-41df-a450-ffcfec6c7f2b",
+                        "status": "active",
+                        "site": {
+                            "name": "Site 10"
+                        },
+                        "cluster": {
+                            "name": "Cluster 10",
+                            "type": {
+                                "name": "Cluster type 10"
+                            },
+                            "group": {
+                                "name": "Cluster group 10"
+                            },
+                            "status": "active",
+                            "scope_site": {
+                                "name": "Site 10"
+                            }
+                        },
+                        "role": {
+                            "name": "Role 10"
+                        },
+                        "platform": {
+                            "name": "Platform 10",
+                            "manufacturer": {
+                            "name": "Manufacturer 10"
+                            }
+                        },
+                        "vcpus": 1.0,
+                        "memory": "4096",
+                        "disk": "100",
+                        "description": "Virtual Machine A description",
+                        "comments": "Lorem ipsum dolor sit amet",
+                        "tags": [
+                            {
+                            "name": "tag 1"
+                            }
+                        ]
+                    },
+                    "name": "Interface 47e8a593-8b74-4e94-9a8e-c02113f0bf88",
+                    "enabled": False,
+                    "mtu": "1500",
+                    "primary_mac_address": {
+                        "mac_address": "00:00:00:00:00:00"
+                    },
+                    "description": "Interface A description",
+                    "tags": [
+                        {
+                            "name": "tag 1"
+                        }
+                    ]
+                }
+            }
+        }
+        _ = self.diff_and_apply(payload)
 
+        payload2 = copy.deepcopy(payload)
+        payload2['entity']['vm_interface']["mtu"] = "2000"
+        payload2['entity']['vm_interface']["primary_mac_address"] = {
+            "mac_address": "00:00:00:00:00:01"
+        }
+        _ = self.diff_and_apply(payload2)
+        vm_interface = VMInterface.objects.get(name="Interface 47e8a593-8b74-4e94-9a8e-c02113f0bf88")
+        self.assertEqual(vm_interface.mtu, 2000)
+        self.assertEqual(vm_interface.primary_mac_address.mac_address, "00:00:00:00:00:01")
 
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
