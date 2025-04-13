@@ -238,7 +238,7 @@ class AutoSlug:
 
 
 def error_from_validation_error(e, object_name):
-    """Convert a drf ValidationError to a ChangeSetException."""
+    """Convert a from rest_framework.exceptions.ValidationError to a ChangeSetException."""
     errors = {}
     if e.detail:
         if isinstance(e.detail, dict):

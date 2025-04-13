@@ -17,6 +17,7 @@ from django.db.models import F, Value
 from django.db.models.fields import SlugField
 from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
+import netaddr
 from extras.models.customfields import CustomField
 
 from .common import AutoSlug, UnresolvedReference
@@ -46,17 +47,17 @@ _LOGICAL_MATCHERS = {
         ),
     ],
     "ipam.ipaddress": lambda: [
-        ObjectMatchCriteria(
-            fields=("address", ),
+        GlobalIPNetworkIPMatcher(
+            ip_field="address",
+            vrf_field="vrf",
+            model_class=get_object_type_model("ipam.ipaddress"),
             name="logical_ip_address_global_no_vrf",
-            model_class=get_object_type_model("ipam.ipaddress"),
-            condition=Q(vrf__isnull=True),
         ),
-        ObjectMatchCriteria(
-            fields=("address", "assigned_object_type", "assigned_object_id"),
-            name="logical_ip_address_within_vrf",
+        VRFIPNetworkIPMatcher(
+            ip_field="address",
+            vrf_field="vrf",
             model_class=get_object_type_model("ipam.ipaddress"),
-            condition=Q(vrf__isnull=False)
+            name="logical_ip_address_within_vrf",
         ),
     ],
     "ipam.prefix": lambda: [
@@ -271,6 +272,8 @@ class ObjectMatchCriteria:
                 continue
         return prepared
 
+
+
 @dataclass
 class CustomFieldMatcher:
     """A matcher for a unique custom field."""
@@ -304,6 +307,124 @@ class CustomFieldMatcher:
     def has_required_fields(self, data: dict) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
         return self.custom_field in data.get("custom_fields", {})
+
+
+@dataclass
+class GlobalIPNetworkIPMatcher:
+    """A matcher that ignores the mask."""
+
+    ip_field: str
+    vrf_field: str
+    model_class: Type[models.Model]
+    name: str
+
+    def _check_condition(self, data: dict) -> bool:
+        """Check the condition for the custom field."""
+        return data.get(self.vrf_field, None) is None
+
+    def fingerprint(self, data: dict) -> str|None:
+        """Fingerprint the custom field value."""
+        if not self.has_required_fields(data):
+            return None
+
+        if not self._check_condition(data):
+            return None
+
+        value = self.ip_value(data)
+        if value is None:
+            return None
+
+        return hash((self.model_class.__name__, self.name, value))
+
+    def has_required_fields(self, data: dict) -> bool:
+        """Returns True if the data given contains a value for all fields referenced by the constraint."""
+        return self.ip_field in data
+
+    def ip_value(self, data: dict) -> str|None:
+        """Get the IP value from the data."""
+        value = data.get(self.ip_field)
+        if value is None:
+            return None
+        return _ip_only(value)
+
+    def build_queryset(self, data: dict) -> models.QuerySet:
+        """Build a queryset for the custom field."""
+        if not self.has_required_fields(data):
+            return None
+
+        if not self._check_condition(data):
+            return None
+
+        value = self.ip_value(data)
+        if value is None:
+            return None
+
+        return self.model_class.objects.filter(**{f'{self.ip_field}__net_host': value, f'{self.vrf_field}__isnull': True})
+
+@dataclass
+class VRFIPNetworkIPMatcher:
+    """Matches ip in a vrf, ignores mask."""
+
+    ip_field: str
+    vrf_field: str
+    model_class: Type[models.Model]
+    name: str
+
+    def _check_condition(self, data: dict) -> bool:
+        """Check the condition for the custom field."""
+        return data.get('vrf_id', None) is not None
+
+    def fingerprint(self, data: dict) -> str|None:
+        """Fingerprint the custom field value."""
+        if not self.has_required_fields(data):
+            return None
+
+        if not self._check_condition(data):
+            return None
+
+        value = self.ip_value(data)
+        if value is None:
+            return None
+
+        vrf_id = data[self.vrf_field]
+
+        return hash((self.model_class.__name__, self.name, value, vrf_id))
+
+    def has_required_fields(self, data: dict) -> bool:
+        """Returns True if the data given contains a value for all fields referenced by the constraint."""
+        return self.ip_field in data and self.vrf_field in data
+
+    def ip_value(self, data: dict) -> str|None:
+        """Get the IP value from the data."""
+        value = data.get(self.ip_field)
+        if value is None:
+            return None
+        return _ip_only(value)
+
+    def build_queryset(self, data: dict) -> models.QuerySet:
+        """Build a queryset for the custom field."""
+        if not self.has_required_fields(data):
+            return None
+
+        if not self._check_condition(data):
+            return None
+
+        value = self.ip_value(data)
+        if value is None:
+            return None
+
+        vrf_id = data[self.vrf_field]
+        return self.model_class.objects.filter(**{f'{self.ip_field}__net_host': value, f'{self.vrf_field}': vrf_id})
+
+
+def _ip_only(value: str) -> str|None:
+    try:
+        ip = netaddr.IPNetwork(value)
+        value = ip.ip
+    except netaddr.core.AddrFormatError:
+        return None
+
+    return value
 
 @dataclass
 class AutoSlugMatcher:
