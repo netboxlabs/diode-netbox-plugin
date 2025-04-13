@@ -7,6 +7,7 @@ import decimal
 import logging
 from uuid import uuid4
 
+
 from core.models import ObjectType
 from dcim.models import Device, Interface, Site
 from ipam.models import VLANGroup
@@ -15,6 +16,7 @@ from django.contrib.auth import get_user_model
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
 from ipam.models import IPAddress
+import netaddr
 from rest_framework import status
 from users.models import Token
 from utilities.testing import APITestCase
@@ -759,6 +761,67 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         _ = self.diff_and_apply(payload)
         ip = IPAddress.objects.get(address="254.198.174.116")
         self.assertEqual(ip.status, "active")
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.ipaddress",
+            "entity": {
+                "ip_address": {
+                    "address": "254.198.174.116/24",
+                    "status": "deprecated",
+                }
+            }
+        }
+        _ = self.diff_and_apply(payload)
+        ip = IPAddress.objects.get(address="254.198.174.116/24")
+        self.assertEqual(ip.role, "secondary")
+        self.assertEqual(ip.status, "deprecated")
+        self.assertEqual(ip.address, netaddr.IPNetwork("254.198.174.0/24"))
+
+        vrf_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.ipaddress",
+            "entity": {
+                "ip_address": {
+                    "address": "254.198.174.116/24",
+                    "status": "active",
+                    "vrf": {
+                        "name": f"VRF {vrf_uuid}"
+                    }
+                }
+            }
+        }
+        _ = self.diff_and_apply(payload)
+        ip = IPAddress.objects.get(address="254.198.174.116/24", vrf__name=f"VRF {vrf_uuid}")
+        self.assertEqual(ip.vrf.name, f"VRF {vrf_uuid}")
+        self.assertEqual(ip.status, "active")
+
+        ip2 = IPAddress.objects.get(address="254.198.174.116/24", vrf__isnull=True)
+        self.assertEqual(ip2.vrf, None)
+        self.assertEqual(ip2.status, "deprecated")
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.ipaddress",
+            "entity": {
+                "ip_address": {
+                    "address": "254.198.174.116",
+                    "status": "dhcp",
+                    "vrf": {
+                        "name": f"VRF {vrf_uuid}"
+                    }
+                }
+            }
+        }
+        _ = self.diff_and_apply(payload)
+        ip = IPAddress.objects.get(address="254.198.174.116", vrf__name=f"VRF {vrf_uuid}")
+        self.assertEqual(ip.status, "dhcp")
+
+        ip2 = IPAddress.objects.get(address="254.198.174.116/24", vrf__isnull=True)
+        self.assertEqual(ip2.vrf, None)
+        self.assertEqual(ip2.status, "deprecated")
+
 
 
     def diff_and_apply(self, payload):
