@@ -1,7 +1,7 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Timestamp: 2025-04-13 13:20:10Z
+# Timestamp: 2025-04-13 16:50:25Z
 
 from dataclasses import dataclass
 import datetime
@@ -13,6 +13,8 @@ from typing import Type
 from core.models import ObjectType as NetBoxType
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
+import netaddr
+from rest_framework.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -1014,6 +1016,12 @@ def transform_float_to_decimal(value: float) -> decimal.Decimal:
 def int_from_int64string(value: str) -> int:
     return int(value)
 
+def ip_network_defaulting(value: str) -> str:
+    try:
+        return str(netaddr.IPNetwork(value))
+    except netaddr.AddrFormatError:
+        raise ValueError(f'Invalid IP network value: {value}')
+
 def collect_integer_pairs(value: list[int]) -> list[tuple[int, int]]:
     if len(value) % 2 != 0:
         raise ValueError('Array must have an even number of elements')
@@ -1114,6 +1122,7 @@ _FORMAT_TRANSFORMATIONS = {
     },
     'ipam.aggregate': {
         'date_added': transform_timestamp_to_date_only,
+        'prefix': ip_network_defaulting,
     },
     'ipam.asn': {
         'asn': int_from_int64string,
@@ -1127,6 +1136,16 @@ _FORMAT_TRANSFORMATIONS = {
     },
     'ipam.fhrpgroupassignment': {
         'priority': int_from_int64string,
+    },
+    'ipam.ipaddress': {
+        'address': ip_network_defaulting,
+    },
+    'ipam.iprange': {
+        'end_address': ip_network_defaulting,
+        'start_address': ip_network_defaulting,
+    },
+    'ipam.prefix': {
+        'prefix': ip_network_defaulting,
     },
     'ipam.role': {
         'weight': int_from_int64string,
