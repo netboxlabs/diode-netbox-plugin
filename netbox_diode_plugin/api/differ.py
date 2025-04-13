@@ -6,11 +6,11 @@ import copy
 import datetime
 import logging
 
+import netaddr
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from utilities.data import shallow_compare_dict
 from django.db.backends.postgresql.psycopg_any import NumericRange
-import netaddr
+from utilities.data import shallow_compare_dict
 
 from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
 from .plugin_utils import get_primary_value, legal_fields

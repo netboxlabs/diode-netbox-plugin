@@ -8,20 +8,18 @@ import decimal
 import logging
 from uuid import uuid4
 
-
+import netaddr
+from circuits.models import Circuit
 from core.models import ObjectType
 from dcim.models import Device, Interface, Site
-from ipam.models import VLANGroup
-from circuits.models import Circuit
 from django.contrib.auth import get_user_model
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
-from ipam.models import IPAddress
-import netaddr
+from ipam.models import IPAddress, VLANGroup
 from rest_framework import status
 from users.models import Token
-from virtualization.models import VMInterface
 from utilities.testing import APITestCase
+from virtualization.models import VMInterface
 
 logger = logging.getLogger(__name__)
 
