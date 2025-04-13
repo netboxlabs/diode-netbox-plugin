@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from functools import cache, lru_cache
 from typing import Type
 
+import netaddr
 from core.models import ObjectType as NetBoxType
 from django.conf import settings
 from django.contrib.contenttypes.fields import ContentType
@@ -17,7 +18,6 @@ from django.db.models import F, Value
 from django.db.models.fields import SlugField
 from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
-import netaddr
 from extras.models.customfields import CustomField
 
 from .common import AutoSlug, UnresolvedReference
