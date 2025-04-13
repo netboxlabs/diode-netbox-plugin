@@ -4,12 +4,14 @@
 
 import copy
 import datetime
+import decimal
 import logging
 
 import netaddr
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.backends.postgresql.psycopg_any import NumericRange
+from netaddr.eui import EUI
 from utilities.data import shallow_compare_dict
 
 from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
@@ -87,7 +89,7 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
 def _harmonize_formats(prechange_data):
     if prechange_data is None:
         return None
-    if isinstance(prechange_data, (str, int, float, bool)):
+    if isinstance(prechange_data, (str, int, float, bool, decimal.Decimal)):
         return prechange_data
     if isinstance(prechange_data, dict):
         return {k: _harmonize_formats(v) for k, v in prechange_data.items()}
@@ -101,9 +103,11 @@ def _harmonize_formats(prechange_data):
         return (prechange_data.lower, prechange_data.upper-1)
     if isinstance(prechange_data, netaddr.IPNetwork):
         return str(prechange_data)
+    if isinstance(prechange_data, EUI):
+        return str(prechange_data)
 
     logger.warning(f"Unknown type in prechange_data: {type(prechange_data)}")
-    return str(prechange_data)
+    return prechange_data
 
 def clean_diff_data(data: dict, exclude_empty_values: bool = True) -> dict:
     """Clean diff data by removing null values."""

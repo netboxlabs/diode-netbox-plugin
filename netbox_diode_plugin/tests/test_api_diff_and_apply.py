@@ -575,6 +575,24 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_site.latitude, decimal.Decimal("23.456"))
         self.assertEqual(new_site.longitude, decimal.Decimal("78.910"))
 
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.site",
+            "entity": {
+                "site": {
+                    "name": f"Site {site_uuid}",
+                    "latitude":  23.456,
+                    "longitude": 78.910,
+                },
+            },
+        }
+        response1 = self.client.post(
+            self.diff_url, data=payload, format="json", **self.user_header
+        )
+        self.assertEqual(response1.status_code, status.HTTP_200_OK)
+        diff = response1.json().get("change_set", {})
+        self.assertEqual(diff.get("changes", []), [])
+
     def test_generate_diff_and_apply_wrong_type_date(self):
         """Test generate diff and apply wrong type date."""
         payload = {
