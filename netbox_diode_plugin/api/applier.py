@@ -11,7 +11,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
 from rest_framework.exceptions import ValidationError as ValidationError
 
-from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType
+from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
 from .plugin_utils import get_object_type_model, legal_fields
 from .supported_models import get_serializer_for_model
 
@@ -35,7 +35,7 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
             data = _pre_apply(model_class, change, created)
             _apply_change(data, model_class, change, created, request)
         except ValidationError as e:
-            raise _err_from_validation_error(e, object_type)
+            raise error_from_validation_error(e, object_type)
         except ObjectDoesNotExist:
             raise _err(f"{object_type} with id {change.object_id} does not exist", object_type, "object_id")
         except TypeError as e:
@@ -129,17 +129,3 @@ def _err(message, object_name, field):
         object_name = "__all__"
     return ChangeSetException(message, errors={object_name: {field: [message]}})
 
-def _err_from_validation_error(e, object_name):
-    errors = {}
-    if e.detail:
-        if isinstance(e.detail, dict):
-            errors[object_name] = e.detail
-        elif isinstance(e.detail, (list, tuple)):
-            errors[object_name] = {
-                NON_FIELD_ERRORS: e.detail
-            }
-        else:
-            errors[object_name] = {
-                NON_FIELD_ERRORS: [e.detail]
-            }
-    return ChangeSetException("validation error", errors=errors)

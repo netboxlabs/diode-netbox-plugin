@@ -9,8 +9,9 @@ import logging
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from utilities.data import shallow_compare_dict
+from django.db.backends.postgresql.psycopg_any import NumericRange
 
-from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, UnresolvedReference
+from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
 from .plugin_utils import get_primary_value, legal_fields
 from .supported_models import extract_supported_models
 from .transformer import cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
@@ -78,29 +79,23 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
             else:
                 cfmap[cf.name] = cf.serialize(value)
         prechange_data["custom_fields"] = cfmap
-
+    prechange_data = _harmonize_formats(prechange_data)
     return prechange_data
 
 
-def _harmonize_formats(prechange_data: dict, postchange_data: dict):
-    for k, v in prechange_data.items():
-        if k.startswith('_'):
-            continue
-        if isinstance(v, datetime.datetime):
-            prechange_data[k] = v.strftime("%Y-%m-%dT%H:%M:%SZ")
-        elif isinstance(v, datetime.date):
-            prechange_data[k] = v.strftime("%Y-%m-%d")
-        elif isinstance(v, int) and k in postchange_data:
-            val = postchange_data[k]
-            if isinstance(val, UnresolvedReference):
-                continue
-            try:
-                postchange_data[k] = int(val)
-            except Exception:
-                continue
-        elif isinstance(v, dict):
-            _harmonize_formats(v, postchange_data.get(k, {}))
+def _harmonize_formats(prechange_data):
+    if isinstance(prechange_data, dict):
+        return {k: _harmonize_formats(v) for k, v in prechange_data.items()}
+    if isinstance(prechange_data, (list, tuple)):
+        return [_harmonize_formats(v) for v in prechange_data]
+    if isinstance(prechange_data, datetime.datetime):
+        return prechange_data.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(prechange_data, datetime.date):
+        return prechange_data.strftime("%Y-%m-%d")
+    if isinstance(prechange_data, NumericRange):
+        return (prechange_data.lower, prechange_data.upper-1)
 
+    return prechange_data
 
 def clean_diff_data(data: dict, exclude_empty_values: bool = True) -> dict:
     """Clean diff data by removing null values."""
@@ -170,8 +165,19 @@ def sort_dict_recursively(d):
         return sorted([sort_dict_recursively(item) for item in d], key=str)
     return d
 
-
 def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
+    """Generate a changeset for an entity."""
+    try:
+        return _generate_changeset(entity, object_type)
+    except ChangeSetException:
+        raise
+    except ValidationError as e:
+        raise error_from_validation_error(e, object_type)
+    except Exception as e:
+        logger.error(f"Unexpected error generating changeset: {e}")
+        raise
+
+def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
     """Generate a changeset for an entity."""
     change_set = ChangeSet()
 
@@ -196,7 +202,6 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
                 # this is also important for custom fields because they do not appear to
                 # respsect paritial update serialization.
                 entity = _partially_merge(prechange_data, entity, instance)
-                _harmonize_formats(prechange_data, entity)
             changed_data = shallow_compare_dict(
                 prechange_data, entity,
             )
