@@ -61,7 +61,7 @@ def _nested_context(object_type, uuid, field_name):
 _IS_CIRCULAR_REFERENCE = {
     "dcim.interface": frozenset(["primary_mac_address"]),
     "virtualization.vminterface": frozenset(["primary_mac_address"]),
-    "dcim.device": frozenset(["primary_ip4", "primary_ip6"]),
+    "dcim.device": frozenset(["primary_ip4", "primary_ip6", "oob_ip"]),
     "dcim.virtualdevicecontext": frozenset(["primary_ip4", "primary_ip6"]),
     "virtualization.virtualmachine": frozenset(["primary_ip4", "primary_ip6"]),
     "circuits.provider": frozenset(["accounts"]),

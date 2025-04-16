@@ -9,7 +9,7 @@ import logging
 from uuid import uuid4
 
 import netaddr
-from circuits.models import Circuit
+from circuits.models import Circuit, Provider
 from core.models import ObjectType
 from dcim.models import Device, Interface, Site
 from django.contrib.auth import get_user_model
@@ -415,6 +415,92 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_ipaddress.assigned_object.name, f"Interface {interface_uuid}")
         device = Device.objects.get(name=f"Device {device_uuid}")
         self.assertEqual(device.primary_ip4.pk, new_ipaddress.pk)
+
+    def test_generate_diff_and_apply_create_device_with_primary_ip6(self):
+        """Test generate diff and apply create device with primary ip6."""
+        device_uuid = str(uuid4())
+        interface_uuid = str(uuid4())
+        addr = "2001:db8::1"
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.ipaddress",
+            "entity": {
+                "ip_address": {
+                    "address": addr,
+                    "assigned_object_interface": {
+                        "name": f"Interface {interface_uuid}",
+                        "type": "1000base-t",
+                        "device": {
+                            "name": f"Device {device_uuid}",
+                            "role": {
+                                "name": f"Role {uuid4()}",
+                            },
+                            "site": {
+                                "name": f"Site {uuid4()}",
+                            },
+                            "device_type": {
+                                "manufacturer": {
+                                    "name": f"Manufacturer {uuid4()}",
+                                },
+                                "model": f"Device Type {uuid4()}",
+                            },
+                            "primary_ip6": {
+                                "address": addr,
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_ipaddress = IPAddress.objects.get(address=addr)
+        self.assertEqual(new_ipaddress.assigned_object.name, f"Interface {interface_uuid}")
+        device = Device.objects.get(name=f"Device {device_uuid}")
+        self.assertEqual(device.primary_ip6.pk, new_ipaddress.pk)
+
+    def test_generate_diff_and_apply_create_device_with_oob_ip(self):
+        """Test generate diff and apply create device with oob ip."""
+        device_uuid = str(uuid4())
+        interface_uuid = str(uuid4())
+        addr = "192.168.1.1/24"
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.ipaddress",
+            "entity": {
+                "ip_address": {
+                    "address": addr,
+                    "assigned_object_interface": {
+                        "name": f"Interface {interface_uuid}",
+                        "type": "1000base-t",
+                        "device": {
+                            "name": f"Device {device_uuid}",
+                            "role": {
+                                "name": f"Role {uuid4()}",
+                            },
+                            "site": {
+                                "name": f"Site {uuid4()}",
+                            },
+                            "device_type": {
+                                "manufacturer": {
+                                    "name": f"Manufacturer {uuid4()}",
+                                },
+                                "model": f"Device Type {uuid4()}",
+                            },
+                            "oob_ip": {
+                                "address": addr,
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_ipaddress = IPAddress.objects.get(address=addr)
+        self.assertEqual(new_ipaddress.assigned_object.name, f"Interface {interface_uuid}")
+        device = Device.objects.get(name=f"Device {device_uuid}")
+        self.assertEqual(device.oob_ip.pk, new_ipaddress.pk)
 
     def test_generate_diff_and_apply_create_and_update_site_with_custom_field(self):
         """Test generate diff and apply create and update site with custom field."""
@@ -971,6 +1057,52 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         }
 
         _ = self.diff_and_apply(payload)
+
+    def test_generate_diff_and_apply_provider_with_accounts(self):
+        """Test generate diff and apply provider with accounts."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "circuits.provider",
+            "entity": {
+                "provider": {
+                    "name": "Level 3 Communications",
+                    "slug": "level3",
+                    "description": "Global Tier 1 Internet Service Provider",
+                    "comments": "Primary transit provider for data center connectivity",
+                    "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}],
+                    "accounts": [
+                        {
+                            "provider": {"name": "Level 3 Communications"},
+                            "name": "East Coast Account",
+                            "account": "L3-12345",
+                            "description": "East Coast regional services account",
+                            "comments": "Managed through regional NOC"
+                        },
+                        {
+                            "provider": {"name": "Level 3 Communications"},
+                            "name": "West Coast Account",
+                            "account": "L3-67890",
+                            "description": "West Coast regional services account",
+                            "comments": "Managed through regional NOC"
+                        }
+                    ],
+                    "asns": [
+                        {
+                            "asn": "3356",
+                            "rir": {"name": "ARIN"},
+                            "tenant": {"name": "Tenant 1"},
+                            "description": "Level 3 Global ASN",
+                            "comments": "Primary transit ASN"
+                        }
+                    ]
+                }
+            }
+        }
+
+        _ = self.diff_and_apply(payload)
+        provider = Provider.objects.get(name="Level 3 Communications")
+        self.assertEqual(provider.accounts.count(), 2)
+        self.assertEqual(provider.asns.count(), 1)
 
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
