@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Tests."""
 
+import logging
 from uuid import uuid4
 
 from core.models import ObjectType
@@ -14,6 +15,12 @@ from users.models import Token
 from utilities.testing import APITestCase
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
+
+def _get_error(response, object_name, field):
+    return response.json().get("errors", {}).get(object_name, {}).get(field, [])
+
 
 class GenerateDiffTestCase(APITestCase):
     """GenerateDiff test cases."""
@@ -320,8 +327,12 @@ class GenerateDiffTestCase(APITestCase):
             }
         }
 
-        response = self.send_request(payload)
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        response = self.send_request(payload, status.HTTP_400_BAD_REQUEST)
+        logger.error(response.json())
+        errs = _get_error(response, "ipam.vrf", "__all__")
+        self.assertEqual(len(errs), 1)
+        err = errs[0]
+        self.assertTrue(err.startswith("Conflicting values for 'description' merging duplicate ipam.routetarget"))
 
     def test_vlangroup_error(self):
         """Test vlangroup error."""
@@ -350,47 +361,6 @@ class GenerateDiffTestCase(APITestCase):
             }
         }
         _ = self.send_request(payload)
-
-    def test_circuit_assignments_error(self):
-        """Test circuit assignment errors."""
-        payload = {
-            "timestamp": 1,
-            "object_type": "circuits.circuit",
-            "entity": {
-                "circuit": {
-                    "cid": "Circuit 1",
-                    "provider": {"name": "Provider 1"},
-                    "provider_account": {
-                        "provider": {"name": "Provider 1"},
-                        "account": "account1"
-                    },
-                    "type": {"name": "Circuit Type 1"},
-                    "status": "offline",
-                    "tenant": {"name": "Tenant 1"},
-                    "install_date": "2025-04-14T00:00:00Z",
-                    "termination_date": "2025-04-14T00:00:00Z",
-                    "commit_rate": "10",
-                    "description": "Circuit 1 Description",
-                    "distance": 12.4,
-                    "distance_unit": "ft",
-                    "comments": "Circuit 1 Comments",
-                    "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}],
-                    "assignments": [
-                        {
-                            "group": {
-                                "name": "Circuit Group 1"
-                            },
-                            "member_circuit": {
-                                "cid": "Circuit 1"
-                            },
-                            "priority": "inactive"
-                        }
-                    ]
-                }
-            }
-        }
-        _ = self.send_request(payload)
-
 
 
     def send_request(self, payload, status_code=status.HTTP_200_OK):

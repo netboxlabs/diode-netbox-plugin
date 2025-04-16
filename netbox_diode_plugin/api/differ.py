@@ -9,12 +9,12 @@ import logging
 
 import netaddr
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
 from django.db.backends.postgresql.psycopg_any import NumericRange
 from netaddr.eui import EUI
+from rest_framework import serializers
 from utilities.data import shallow_compare_dict
 
-from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error, harmonize_formats
+from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error, harmonize_formats, NON_FIELD_ERRORS
 from .plugin_utils import get_primary_value, legal_fields
 from .supported_models import extract_supported_models
 from .transformer import cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
@@ -36,11 +36,15 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
 
     model = SUPPORTED_MODELS.get(object_type)
     if not model:
-        raise ValidationError(f"Model {model_class.__name__} is not supported")
+        raise serializers.ValidationError({
+            NON_FIELD_ERRORS: [f"Model {model_class.__name__} is not supported"]
+        })
 
     fields = model.get("fields", {})
     if not fields:
-        raise ValidationError(f"Model {model_class.__name__} has no fields")
+        raise serializers.ValidationError({
+            NON_FIELD_ERRORS: [f"Model {model_class.__name__} has no fields"]
+        })
 
     diode_fields = legal_fields(model_class)
 
@@ -160,7 +164,7 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
         return _generate_changeset(entity, object_type)
     except ChangeSetException:
         raise
-    except ValidationError as e:
+    except serializers.ValidationError as e:
         raise error_from_validation_error(e, object_type)
     except Exception as e:
         logger.error(f"Unexpected error generating changeset: {e}")

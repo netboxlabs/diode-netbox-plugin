@@ -12,11 +12,11 @@ from functools import lru_cache
 from uuid import uuid4
 
 import graphlib
-from django.core.exceptions import ValidationError
+from rest_framework import serializers
 from django.utils.text import slugify
 from extras.models.customfields import CustomField
 
-from .common import AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats
+from .common import AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats, NON_FIELD_ERRORS
 from .matcher import find_existing_object, fingerprint
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -222,8 +222,8 @@ def _topo_sort(entities: list[dict]) -> list[dict]:
     except graphlib.CycleError as e:
         # TODO the cycle error references the cycle here ...
         raise ChangeSetException(f"Circular reference in entities: {e}", errors={
-            "__all__": {
-                "message": "Unable to resolve circular reference in entities",
+            NON_FIELD_ERRORS: {
+                NON_FIELD_ERRORS: "Unable to resolve circular reference in entities",
             }
         })
 
@@ -234,7 +234,9 @@ def _set_defaults(entities: list[dict], supported_models: dict):
         entity = copy.deepcopy(entity)
         model_fields = supported_models.get(entity['_object_type'])
         if model_fields is None:
-            raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
+            raise serializers.ValidationError({
+                NON_FIELD_ERRORS: [f"Model for object type {entity['_object_type']} is not supported"]
+            })
 
         auto_slug = entity.pop("_auto_slug", None)
         if entity.get("_instance"):
@@ -275,7 +277,9 @@ def _set_auto_slugs(entities: list[dict], supported_models: dict):
     for entity in entities:
         model_fields = supported_models.get(entity['_object_type'])
         if model_fields is None:
-            raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
+            raise serializers.ValidationError({
+                NON_FIELD_ERRORS: [f"Model for object type {entity['_object_type']} is not supported"]
+            })
 
         for field_name, field_info in model_fields.get('fields', {}).items():
             if field_info["type"] == "SlugField" and entity.get(field_name) is None:
@@ -343,7 +347,13 @@ def _merge_nodes(a: dict, b: dict) -> dict:
         if k.startswith("_"):
             continue
         if k in merged and merged[k] != v:
-            raise ValueError(f"Conflict merging {a} and {b} on {k}: {merged[k]} and {v}")
+            ov = {
+                ok: v for ok, v in a.items()
+                if ok != k and not ok.startswith("_")
+            }
+            raise serializers.ValidationError({
+                NON_FIELD_ERRORS: [f"Conflicting values for '{k}' merging duplicate {a.get('_object_type')}, `{merged[k]}` != `{v}` other values : {ov}"]
+            })
         merged[k] = v
     return merged
 
@@ -528,7 +538,9 @@ def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict,
                     ))
                 out[key] = vals
             else:
-                raise ValueError(f"Custom field {keyname} has unknown type: {value_type}")
+                raise serializers.ValidationError({
+                    keyname: [f"Custom field {keyname} has unknown type: {value_type}"]
+                })
         except ValueError as e:
             raise ChangeSetException(
                 f"Custom field {keyname} is invalid: {value}",
