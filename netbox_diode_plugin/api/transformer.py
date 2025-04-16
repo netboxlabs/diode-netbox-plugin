@@ -16,7 +16,7 @@ from django.core.exceptions import ValidationError
 from django.utils.text import slugify
 from extras.models.customfields import CustomField
 
-from .common import AutoSlug, ChangeSetException, UnresolvedReference
+from .common import AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats
 from .matcher import find_existing_object, fingerprint
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -89,11 +89,11 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     logger.debug(f"_set_auto_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
     resolved = _resolve_existing_references(deduplicated)
     logger.debug(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
-    _set_defaults(resolved, supported_models)
-    logger.debug(f"_set_defaults: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    defaulted = _set_defaults(resolved, supported_models)
+    logger.debug(f"_set_defaults: {json.dumps(defaulted, default=lambda o: str(o), indent=4)}")
 
     # handle post-create steps
-    output = _handle_post_creates(resolved)
+    output = _handle_post_creates(defaulted)
     logger.debug(f"_handle_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}")
 
     _check_unresolved_refs(output)
@@ -228,23 +228,34 @@ def _topo_sort(entities: list[dict]) -> list[dict]:
 
 
 def _set_defaults(entities: list[dict], supported_models: dict):
+    out = []
     for entity in entities:
+        entity = copy.deepcopy(entity)
         model_fields = supported_models.get(entity['_object_type'])
         if model_fields is None:
             raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
 
         auto_slug = entity.pop("_auto_slug", None)
         if entity.get("_instance"):
+            out.append(entity)
             continue
 
         if auto_slug:
             if auto_slug.field_name not in entity:
                 entity[auto_slug.field_name] = auto_slug.value
 
+        legal = legal_fields(entity['_object_type'])
         for field_name, field_info in model_fields.get('fields', {}).items():
+            if field_name not in legal:
+                continue
             if entity.get(field_name) is None and field_info.get("default") is not None:
-                entity[field_name] = field_info["default"]
+                default = field_info["default"]
+                if callable(default):
+                    default = default()
+                entity[field_name] = default
         set_custom_field_defaults(entity, model_fields['model'])
+        out.append(harmonize_formats(entity))
+    return out
 
 
 def set_custom_field_defaults(entity: dict, model):

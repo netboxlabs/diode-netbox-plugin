@@ -14,7 +14,7 @@ from django.db.backends.postgresql.psycopg_any import NumericRange
 from netaddr.eui import EUI
 from utilities.data import shallow_compare_dict
 
-from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
+from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error, harmonize_formats
 from .plugin_utils import get_primary_value, legal_fields
 from .supported_models import extract_supported_models
 from .transformer import cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
@@ -82,32 +82,9 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
             else:
                 cfmap[cf.name] = cf.serialize(value)
         prechange_data["custom_fields"] = cfmap
-    prechange_data = _harmonize_formats(prechange_data)
+    prechange_data = harmonize_formats(prechange_data)
     return prechange_data
 
-
-def _harmonize_formats(prechange_data):
-    if prechange_data is None:
-        return None
-    if isinstance(prechange_data, (str, int, float, bool, decimal.Decimal)):
-        return prechange_data
-    if isinstance(prechange_data, dict):
-        return {k: _harmonize_formats(v) for k, v in prechange_data.items()}
-    if isinstance(prechange_data, (list, tuple)):
-        return [_harmonize_formats(v) for v in prechange_data]
-    if isinstance(prechange_data, datetime.datetime):
-        return prechange_data.strftime("%Y-%m-%dT%H:%M:%SZ")
-    if isinstance(prechange_data, datetime.date):
-        return prechange_data.strftime("%Y-%m-%d")
-    if isinstance(prechange_data, NumericRange):
-        return (prechange_data.lower, prechange_data.upper-1)
-    if isinstance(prechange_data, netaddr.IPNetwork):
-        return str(prechange_data)
-    if isinstance(prechange_data, EUI):
-        return str(prechange_data)
-
-    logger.warning(f"Unknown type in prechange_data: {type(prechange_data)}")
-    return prechange_data
 
 def clean_diff_data(data: dict, exclude_empty_values: bool = True) -> dict:
     """Clean diff data by removing null values."""

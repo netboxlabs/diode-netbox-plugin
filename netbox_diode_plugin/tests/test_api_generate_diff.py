@@ -279,6 +279,120 @@ class GenerateDiffTestCase(APITestCase):
         before = change.get("before", {})
         self.assertEqual(before.get("model"), "Rack Type 1")
 
+    def test_merge_states_failed(self):
+        """Test merge states failed."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.vrf",
+            "entity": {
+                "vrf": {
+                    "name": "Customer-A-VRF",
+                    "rd": "65000:100",
+                    "tenant": {"name": "Tenant 1"},
+                    "enforce_unique": True,
+                    "description": "Isolated routing domain for Customer A",
+                    "comments": "Used for customer's private network services",
+                    "tags": [
+                    {
+                        "name": "Tag 1"
+                    },
+                    {
+                        "name": "Tag 2"
+                    }
+                    ],
+                    "import_targets": [
+                        {
+                            "name": "65000:100",
+                            "description": "Primary import route target"
+                        },
+                        {
+                            "name": "65000:101",
+                            "description": "Backup import route target"
+                        }
+                    ],
+                    "export_targets": [
+                        {
+                            "name": "65000:100",
+                            "description": "Primary export route target"
+                        }
+                    ]
+                }
+            }
+        }
+
+        response = self.send_request(payload)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_vlangroup_error(self):
+        """Test vlangroup error."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.vlangroup",
+            "entity": {
+                "vlan_group": {
+                    "name": "Data Center Core",
+                    "slug": "dc-core",
+                    "scope_site": {
+                        "name": "Data Center West",
+                        "slug": "dc-west",
+                        "status": "active"
+                    },
+                    "description": "Core network VLANs for data center infrastructure",
+                    "tags": [
+                    {
+                        "name": "Tag 1"
+                    },
+                    {
+                        "name": "Tag 2"
+                    }
+                    ]
+                }
+            }
+        }
+        _ = self.send_request(payload)
+
+    def test_circuit_assignments_error(self):
+        """Test circuit assignment errors."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "circuits.circuit",
+            "entity": {
+                "circuit": {
+                    "cid": "Circuit 1",
+                    "provider": {"name": "Provider 1"},
+                    "provider_account": {
+                        "provider": {"name": "Provider 1"},
+                        "account": "account1"
+                    },
+                    "type": {"name": "Circuit Type 1"},
+                    "status": "offline",
+                    "tenant": {"name": "Tenant 1"},
+                    "install_date": "2025-04-14T00:00:00Z",
+                    "termination_date": "2025-04-14T00:00:00Z",
+                    "commit_rate": "10",
+                    "description": "Circuit 1 Description",
+                    "distance": 12.4,
+                    "distance_unit": "ft",
+                    "comments": "Circuit 1 Comments",
+                    "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}],
+                    "assignments": [
+                        {
+                            "group": {
+                                "name": "Circuit Group 1"
+                            },
+                            "member_circuit": {
+                                "cid": "Circuit 1"
+                            },
+                            "priority": "inactive"
+                        }
+                    ]
+                }
+            }
+        }
+        _ = self.send_request(payload)
+
+
+
     def send_request(self, payload, status_code=status.HTTP_200_OK):
         """Post the payload to the url and return the response."""
         response = self.client.post(

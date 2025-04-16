@@ -6,8 +6,13 @@ import logging
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
+import decimal
+import datetime
 from enum import Enum
 
+import netaddr
+from netaddr.eui import EUI
+from django.db.backends.postgresql.psycopg_any import NumericRange
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
@@ -252,3 +257,27 @@ def error_from_validation_error(e, object_name):
                 NON_FIELD_ERRORS: [e.detail]
             }
     return ChangeSetException("validation error", errors=errors)
+
+def harmonize_formats(data):
+    """Puts all data in a format that can be serialized and compared."""
+    if data is None:
+        return None
+    if isinstance(data, (str, int, float, bool, decimal.Decimal)):
+        return data
+    if isinstance(data, dict):
+        return {k: harmonize_formats(v) for k, v in data.items()}
+    if isinstance(data, (list, tuple)):
+        return [harmonize_formats(v) for v in data]
+    if isinstance(data, datetime.datetime):
+        return data.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(data, datetime.date):
+        return data.strftime("%Y-%m-%d")
+    if isinstance(data, NumericRange):
+        return (data.lower, data.upper-1)
+    if isinstance(data, netaddr.IPNetwork):
+        return str(data)
+    if isinstance(data, EUI):
+        return str(data)
+
+    logger.warning(f"Unknown type in harmonize_formats: {type(data)}")
+    return data
