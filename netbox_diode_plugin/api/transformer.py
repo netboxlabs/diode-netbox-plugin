@@ -50,6 +50,22 @@ _NESTED_CONTEXT = {
             "assigned_object_id": UnresolvedReference(object_type=object_type, uuid=uuid),
         },
     },
+    "virtualization.virtualmachine": {
+        "primary_ip4": lambda object_type, uuid: {
+            "__force_after": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+        "primary_ip6": lambda object_type, uuid: {
+            "__force_after": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+    },
+    "dcim.virtualdevicecontext": {
+        "primary_ip4": lambda object_type, uuid: {
+            "__force_after": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+        "primary_ip6": lambda object_type, uuid: {
+            "__force_after": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+    },
 }
 
 def _no_context(object_type, uuid):
@@ -65,7 +81,7 @@ _IS_CIRCULAR_REFERENCE = {
     "dcim.virtualdevicecontext": frozenset(["primary_ip4", "primary_ip6"]),
     "virtualization.virtualmachine": frozenset(["primary_ip4", "primary_ip6"]),
     "circuits.provider": frozenset(["accounts"]),
-    "dcim.modulebay": frozenset(["module"]), # this isn't technically allowed, but gives a better error
+    "dcim.modulebay": frozenset(["module"]), # this isn't  allowed to be circular, but gives a better error
 }
 
 def _is_circular_reference(object_type, field_name):
@@ -119,7 +135,8 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
     # context pushed down from parent nodes
     if context is not None:
         for k, v in context.items():
-            node[k] = v
+            if not k.startswith("_"):
+                node[k] = v
             if isinstance(v, UnresolvedReference):
                 node['_refs'].add(v.uuid)
 

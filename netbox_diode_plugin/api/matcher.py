@@ -74,6 +74,19 @@ _LOGICAL_MATCHERS = {
             condition=Q(vrf__isnull=False),
         ),
     ],
+    "virtualization.cluster": lambda: [
+        ObjectMatchCriteria(
+            fields=("name", "scope_type", "scope_id"),
+            name="logical_cluster_within_scope",
+            model_class=get_object_type_model("virtualization.cluster"),
+        ),
+        ObjectMatchCriteria(
+            fields=("name",),
+            name="logical_cluster_with_no_scope_or_group",
+            model_class=get_object_type_model("virtualization.cluster"),
+            condition=Q(scope_type__isnull=True, group__isnull=True),
+        ),
+    ],
 }
 
 @dataclass

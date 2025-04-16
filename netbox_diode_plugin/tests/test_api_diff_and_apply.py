@@ -1236,6 +1236,72 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             _get_error(response2, "dcim.modulebay", "__all__")
         )
 
+    def test_generate_diff_and_apply_virtual_machine_with_primary_ip_4_ok(self):
+        """Test generate diff and apply virtual machine with primary ip 4 assigned."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "virtualization.virtualmachine",
+            "entity": {
+                "timestamp": "2025-04-16T13:45:02.045208Z",
+                "virtual_machine": {
+                    "name": "app-server-01",
+                    "status": "active",
+                    "site": {"name": "Site 1"},
+                    "cluster": {
+                        "name": "Cluster 1",
+                        "type": {"name": "Cluster Type 1"}
+                    },
+                    "device": {
+                        "name": "Device 1",
+                        "device_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S"
+                        },
+                        "role": {"name": "Device Role 1"},
+                        "site": {"name": "Site 1"},
+                        "cluster": {
+                            "name": "Cluster 1",
+                            "type": {"name": "Cluster Type 1"}
+                        }
+                    },
+                    "serial": "VM-2023-001",
+                    "role": {"name": "Application Server"},
+                    "tenant": {"name": "Tenant 1"},
+                    "platform": {"name": "Ubuntu 22.04"},
+                    "primary_ip4": {
+                        "address": "192.168.2.10",
+                        "assigned_object_vm_interface": {
+                            "virtual_machine": {
+                                "name": "app-server-01",
+                                "cluster": {
+                                    "name": "Cluster 1",
+                                    "type": {"name": "Cluster Type 1"}
+                                },
+                                "tenant": {"name": "Tenant 1"},
+                            },
+                            "name": "eth0",
+                            "enabled": True,
+                            "mtu": "1500",
+                        }
+                    },
+                    "vcpus": 4.0,
+                    "memory": "214748364",
+                    "disk": "147483647",
+                    "description": "Primary application server instance",
+                    "comments": "Hosts critical business applications",
+                    "tags": [
+                        {
+                            "name": "Tag 1"
+                        },
+                        {
+                            "name": "Tag 2"
+                        }
+                    ]
+                }
+            }
+        }
+        _ = self.diff_and_apply(payload)
+
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
         response1 = self.client.post(
