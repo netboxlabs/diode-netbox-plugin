@@ -262,10 +262,10 @@ def harmonize_formats(data):
     """Puts all data in a format that can be serialized and compared."""
     if data is None:
         return None
-    if isinstance(data, (str, int, float, bool, decimal.Decimal)):
+    if isinstance(data, (str, int, float, bool, decimal.Decimal, UnresolvedReference)):
         return data
     if isinstance(data, dict):
-        return {k: harmonize_formats(v) for k, v in data.items()}
+        return {k: harmonize_formats(v) if not k.startswith("_") else v for k, v in data.items()}
     if isinstance(data, (list, tuple)):
         return [harmonize_formats(v) for v in data]
     if isinstance(data, datetime.datetime):

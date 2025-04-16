@@ -303,11 +303,14 @@ def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
     new_refs = {} # uuid -> uuid
 
     for entity in entities:
+        logger.debug(f"fingerprint_dedupe: {entity}")
         if entity.get('_is_post_create'):
             fp = entity['_uuid']
             existing = None
         else:
+            _update_unresolved_refs(entity, new_refs)
             fp = fingerprint(entity, entity['_object_type'])
+            logger.debug(f"    ==> {fp}")
             existing = by_fp.get(fp)
 
         if existing is None:

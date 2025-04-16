@@ -913,6 +913,65 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(vm_interface.mtu, 2000)
         self.assertEqual(vm_interface.primary_mac_address.mac_address, "00:00:00:00:00:01")
 
+    def test_generate_diff_and_apply_dedupe_devicetype(self):
+        """Test generate diff and apply dedupe devicetype in wireless link."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "wireless.wirelesslink",
+            "entity": {
+                "wireless_link": {
+                    "interface_a": {
+                        "device": {
+                            "name": "Device 1",
+                            "device_type": {
+                                "manufacturer": {"name": "Cisco"},
+                                "model": "C2960S"
+                            },
+                            "role": {"name": "Device Role 1"},
+                            "site": {"name": "Site 1"}
+                        },
+                        "name": "Radio0/1",
+                        "type": "ieee802.11ac",
+                        "enabled": True
+                    },
+                    "interface_b": {
+                        "device": {
+                            "name": "Device 2",
+                            "device_type": {
+                                "manufacturer": {"name": "Cisco"},
+                                "model": "C2960S"
+                            },
+                            "role": {"name": "Device Role 1"},
+                            "site": {"name": "Site 1"}
+                        },
+                        "name": "Radio0/1",
+                        "type": "ieee802.11ac",
+                        "enabled": True
+                    },
+                    "ssid": "P2P-Link-1",
+                    "status": "connected",
+                    "tenant": {"name": "Tenant 1"},
+                    "auth_type": "wpa-personal",
+                    "auth_cipher": "aes",
+                    "auth_psk": "P2PLinkKey123!",
+                    "distance": 1.5,
+                    "distance_unit": "km",
+                    "description": "Point-to-point wireless backhaul link",
+                    "comments": "Building A to Building B wireless bridge",
+                    "tags": [
+                        {
+                            "name": "Tag 1"
+                        },
+                        {
+                            "name": "Tag 2"
+                        }
+                    ]
+                }
+            }
+        }
+
+        _ = self.diff_and_apply(payload)
+
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
         response1 = self.client.post(
