@@ -11,7 +11,7 @@ from uuid import uuid4
 import netaddr
 from circuits.models import Circuit, Provider
 from core.models import ObjectType
-from dcim.models import Device, Interface, Site
+from dcim.models import Device, Interface, Site, ModuleBay
 from django.contrib.auth import get_user_model
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
+def _get_error(response, object_name, field):
+    return response.json().get("errors", {}).get(object_name, {}).get(field, [])
 
 class GenerateDiffAndApplyTestCase(APITestCase):
     """GenerateDiff -> ApplyChangeSet test cases."""
@@ -1103,6 +1105,136 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         provider = Provider.objects.get(name="Level 3 Communications")
         self.assertEqual(provider.accounts.count(), 2)
         self.assertEqual(provider.asns.count(), 1)
+
+    def test_generate_diff_and_apply_module_bay_with_module(self):
+        """Test generate diff and apply module bay with module."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "dcim.modulebay",
+            "entity":     {
+                "module_bay": {
+                    "device": {
+                        "name": "Device 1",
+                        "role": {"name": "Device Role 1"},
+                        "device_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S"
+                        },
+                        "site": {"name": "Site 1"}
+                    },
+                    "name": "Stack Module Bay 2",
+                    "module": {
+                        "device": {
+                            "name": "Device 1",
+                            "role": {"name": "Device Role 1"},
+                            "device_type": {
+                                "manufacturer": {"name": "Cisco"},
+                                "model": "C2960S"
+                            },
+                            "site": {"name": "Site 1"}
+                        },
+                        "module_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S-STACK"
+                        },
+                        "module_bay": {
+                            "name": "Module Bay 1",
+                            "device": {
+                                "name": "Device 1",
+                                "role": {"name": "Device Role 1"},
+                                "device_type": {
+                                    "manufacturer": {"name": "Cisco"},
+                                    "model": "C2960S"
+                                },
+                                "site": {"name": "Site 1"}
+                            }
+                        } 
+
+                    },
+                    "label": "STACK-2",
+                    "position": "Rear",
+                    "description": "Secondary stacking module bay",
+                    "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+                }
+            }
+        }
+        _ = self.diff_and_apply(payload)
+        module_bay = ModuleBay.objects.get(name="Stack Module Bay 2")
+        self.assertEqual(module_bay.module.device.name, "Device 1")
+        self.assertEqual(module_bay.module.module_type.manufacturer.name, "Cisco")
+        self.assertEqual(module_bay.module.module_type.model, "C2960S-STACK")
+        self.assertEqual(module_bay.module.module_bay.name, "Module Bay 1")
+
+    def test_generate_diff_and_apply_module_bay_circular_ref_fails(self):
+        """Test generate diff and apply module bay."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "dcim.modulebay",
+            "entity":     {
+                "module_bay": {
+                    "name": "Module Bay 1",
+                    "device": {
+                        "name": "Device 1",
+                        "role": {"name": "Device Role 1"},
+                        "device_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S"
+                        },
+                        "site": {"name": "Site 1"}
+                    },
+                    "module": {
+                        "asset_tag": "1234567890",
+                        "device": {
+                            "name": "Device 1",
+                            "role": {"name": "Device Role 1"},
+                            "device_type": {
+                                "manufacturer": {"name": "Cisco"},
+                                "model": "C2960S"
+                            },
+                            "site": {"name": "Site 1"}
+                        },
+                        "module_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S-STACK"
+                        },
+                        "module_bay": {
+                            "name": "Module Bay 1",
+                            "device": {
+                                "name": "Device 1",
+                                "role": {"name": "Device Role 1"},
+                                "device_type": {
+                                    "manufacturer": {"name": "Cisco"},
+                                    "model": "C2960S"
+                                },
+                                "site": {"name": "Site 1"}
+                            },
+                            "module": {
+                                "asset_tag": "1234567890",
+                            }
+                        }
+                    },
+                    "label": "STACK-2",
+                    "position": "Rear",
+                    "description": "Secondary stacking module bay",
+                    "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+                }
+            }
+        }
+        response1 = self.client.post(
+            self.diff_url, data=payload, format="json", **self.user_header
+        )
+        self.assertEqual(response1.status_code, status.HTTP_200_OK)
+        diff = response1.json().get("change_set", {})
+
+        response2 = self.client.post(
+            self.apply_url, data=diff, format="json", **self.user_header
+        )
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.assertIn(
+            "A module bay cannot belong to a module installed within it.",
+            _get_error(response2, "dcim.modulebay", "__all__")
+        )
 
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""

@@ -608,29 +608,30 @@ def _fingerprint_all(data: dict) -> str:
 
     return hash(tuple(values))
 
-def fingerprint(data: dict, object_type: str) -> str:
+def fingerprints(data: dict, object_type: str) -> list[str]:
     """
-    Fingerprint a data structure.
+    Get fingerprints for a data structure.
 
-    This uses the first matcher that has all
-    required fields or else uses all fields.
-
-    TODO: This means there are pathological? cases where
-    the same object is being referenced but by
-    different unique constraints in the same diff...
-    this could lead to some unexpected behavior.
+    This returns all fingerprints for the given data that
+    have required fields.
     """
     if data is None:
         return None
 
     model_class = get_object_type_model(object_type)
     # check any known match criteria
+    fps = []
     for matcher in get_model_matchers(model_class):
         fp = matcher.fingerprint(data)
         if fp is not None:
-            return fp
-    # fall back to fingerprinting all the data
-    return _fingerprint_all(data)
+            fps.append(fp)
+            logger.debug(f"  ** matcher {matcher.name} gave fingerprint {fp}")
+        else:
+            logger.debug(f"  ** skipped matcher {matcher.name}")
+    fp = _fingerprint_all(data)
+    logger.debug(f"  ** matcher _fingerprint_all gave fingerprint {fp}")
+    fps.append(fp)
+    return fps
 
 def find_existing_object(data: dict, object_type: str):
     """

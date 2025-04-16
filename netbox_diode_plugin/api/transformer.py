@@ -17,7 +17,7 @@ from django.utils.text import slugify
 from extras.models.customfields import CustomField
 
 from .common import AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats, NON_FIELD_ERRORS
-from .matcher import find_existing_object, fingerprint
+from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
     apply_format_transformations,
@@ -65,6 +65,7 @@ _IS_CIRCULAR_REFERENCE = {
     "dcim.virtualdevicecontext": frozenset(["primary_ip4", "primary_ip6"]),
     "virtualization.virtualmachine": frozenset(["primary_ip4", "primary_ip6"]),
     "circuits.provider": frozenset(["accounts"]),
+    "dcim.modulebay": frozenset(["module"]), # this isn't technically allowed, but gives a better error
 }
 
 def _is_circular_reference(object_type, field_name):
@@ -302,6 +303,7 @@ def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
 
     *list must be in topo order by reference already*
     """
+    by_uuid = {}
     by_fp = {}
     deduplicated = []
     new_refs = {} # uuid -> uuid
@@ -310,27 +312,37 @@ def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
         logger.debug(f"fingerprint_dedupe: {entity}")
         if entity.get('_is_post_create'):
             fp = entity['_uuid']
-            existing = None
+            existing_uuid = None
         else:
             _update_unresolved_refs(entity, new_refs)
-            fp = fingerprint(entity, entity['_object_type'])
-            logger.debug(f"    ==> {fp}")
-            existing = by_fp.get(fp)
+            fps = fingerprints(entity, entity['_object_type'])
+            logger.debug(f"    ==> {fps}")
+            for fp in fps:
+                existing_uuid = by_fp.get(fp)
+                if existing_uuid is not None:
+                    break
 
-        if existing is None:
+        if existing_uuid is None:
             logger.debug("  * entity is new.")
             new_entity = copy.deepcopy(entity)
             _update_unresolved_refs(new_entity, new_refs)
-            by_fp[fp] = new_entity
-            deduplicated.append(fp)
+            primary_uuid = new_entity['_uuid']
+            for fp in fps:
+                by_fp[fp] = primary_uuid
+            by_uuid[primary_uuid] = new_entity
+            deduplicated.append(primary_uuid)
         else:
             logger.debug("  * entity already exists.")
+            existing = by_uuid[existing_uuid]
             new_refs[entity['_uuid']] = existing['_uuid']
             merged = _merge_nodes(existing, entity)
             _update_unresolved_refs(merged, new_refs)
-            by_fp[fp] = merged
+            for fp in fps:
+                by_fp[fp] = existing_uuid
+            by_uuid[existing_uuid] = merged
+            deduplicated.append(existing_uuid)
 
-    return [by_fp[fp] for fp in deduplicated]
+    return [by_uuid[u] for u in deduplicated]
 
 def _merge_nodes(a: dict, b: dict) -> dict:
     """
