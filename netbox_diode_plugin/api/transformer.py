@@ -64,6 +64,7 @@ _IS_CIRCULAR_REFERENCE = {
     "dcim.device": frozenset(["primary_ip4", "primary_ip6"]),
     "dcim.virtualdevicecontext": frozenset(["primary_ip4", "primary_ip6"]),
     "virtualization.virtualmachine": frozenset(["primary_ip4", "primary_ip6"]),
+    "circuits.provider": frozenset(["accounts"]),
 }
 
 def _is_circular_reference(object_type, field_name):
