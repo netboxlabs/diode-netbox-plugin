@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import decimal
 import datetime
 from enum import Enum
-
+from zoneinfo import ZoneInfo
 import netaddr
 from netaddr.eui import EUI
 from django.db.backends.postgresql.psycopg_any import NumericRange
@@ -277,6 +277,8 @@ def harmonize_formats(data):
     if isinstance(data, netaddr.IPNetwork):
         return str(data)
     if isinstance(data, EUI):
+        return str(data)
+    if isinstance(data, ZoneInfo):
         return str(data)
 
     logger.warning(f"Unknown type in harmonize_formats: {type(data)}")
