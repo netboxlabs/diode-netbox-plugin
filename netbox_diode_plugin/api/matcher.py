@@ -68,7 +68,7 @@ _LOGICAL_MATCHERS = {
             condition=Q(vrf__isnull=True),
         ),
         ObjectMatchCriteria(
-            fields=("prefix", "vrf_id"),
+            fields=("prefix", "vrf"),
             name="logical_prefix_within_vrf",
             model_class=get_object_type_model("ipam.prefix"),
             condition=Q(vrf__isnull=False),
