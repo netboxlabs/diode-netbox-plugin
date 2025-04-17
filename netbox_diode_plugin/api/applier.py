@@ -9,6 +9,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
+from django.db.utils import IntegrityError
 from rest_framework.exceptions import ValidationError as ValidationError
 
 from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
@@ -46,8 +47,9 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
             logger.error(f"validation raised TypeError error on unspecified field of {object_type}: {data}: {e}")
             logger.error(traceback.format_exc())
             raise _err("invalid data type for field (TypeError)", object_type, "__all__")
-        # ConstraintViolationError ?
-        # ...
+        except IntegrityError as e:
+            logger.error(f"Integrity error {object_type}: {e} {data}")
+            raise _err(f"created a conflict with an existing {object_type}", object_type, "__all__")
 
     return ChangeSetResult(
         id=change_set.id,
