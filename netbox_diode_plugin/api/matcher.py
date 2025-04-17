@@ -79,6 +79,7 @@ _LOGICAL_MATCHERS = {
             fields=("name", "scope_type", "scope_id"),
             name="logical_cluster_within_scope",
             model_class=get_object_type_model("virtualization.cluster"),
+            condition=Q(scope_type__isnull=False),
         ),
         ObjectMatchCriteria(
             fields=("name",),
@@ -179,32 +180,39 @@ class ObjectMatchCriteria:
         return hash((self.model_class.__name__, self.name, tuple(values)))
 
     def _check_condition(self, data) -> bool:
-        if self.condition is None:
+        return self._check_condition_1(data, self.condition)
+
+    def _check_condition_1(self, data, condition) -> bool:
+        if condition is None:
             return True
-        # TODO: handle evaluating complex conditions,
-        # there are only simple ones currently
-        if self.condition.connector != Q.AND:
-            logger.warning(f"Unhandled condition {self.condition}")
-            return False
+        logger.debug(f"checking condition {condition}")
+        if isinstance(condition, tuple):
+            return self._check_simple_condition(data, condition)
 
-        if len(self.condition.children) != 1:
-            logger.warning(f"Unhandled condition {self.condition}")
-            return False
+        if hasattr(condition, "connector") and condition.connector == Q.AND:
+            result = True
+            for child in condition.children:
+                if not self._check_condition_1(data, child):
+                    result = False
+                    break
+            if condition.negated:
+                return not result
+            return result
+        # TODO handle OR ?
+        logger.warning(f"Unhandled condition {condition}")
+        return False
 
-        if len(self.condition.children[0]) != 2:
-            logger.warning(f"Unhandled condition {self.condition}")
-            return False
+    def _check_simple_condition(self, data, condition) -> bool:
+        if condition is None:
+            return True
 
-        k, v = self.condition.children[0]
+        k, v = condition
         result = False
         if k.endswith("__isnull"):
             k = k[:-8]
             result = k not in data or data[k] is None
         else:
             result = k in data and data[k] == v
-
-        if self.condition.negated:
-            result = not result
 
         return result
 
@@ -218,6 +226,10 @@ class ObjectMatchCriteria:
 
     def _build_fields_queryset(self, data) -> models.QuerySet:
         """Builds a queryset for a simple set-of-fields constraint."""
+        if not self._check_condition(data):
+            logger.debug(f"  * cannot build fields queryset for {self.name} (condition not met)")
+            return None
+
         data = self._prepare_data(data)
         lookup_kwargs = {}
         for field_name in self.fields:

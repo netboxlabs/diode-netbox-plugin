@@ -105,8 +105,12 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     logger.debug(f"_topo_sort: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
     _set_auto_slugs(deduplicated, supported_models)
     logger.debug(f"_set_auto_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    _handle_cached_scope(deduplicated, supported_models)
+    logger.debug(f"_handle_cached_scope: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
     resolved = _resolve_existing_references(deduplicated)
     logger.debug(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    _strip_cached_scope(resolved)
+    logger.debug(f"_strip_cached_scope: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
     defaulted = _set_defaults(resolved, supported_models)
     logger.debug(f"_set_defaults: {json.dumps(defaulted, default=lambda o: str(o), indent=4)}")
 
@@ -278,6 +282,85 @@ def _set_defaults(entities: list[dict], supported_models: dict):
         out.append(harmonize_formats(entity))
     return out
 
+def _handle_cached_scope(entities: list[dict], supported_models: dict):
+    by_type_id = {
+        (entity['_object_type'], entity['_uuid']): entity
+        for entity in entities
+    }
+    for entity in entities:
+        model = supported_models.get(entity['_object_type'], {}).get("model")
+        if _has_cached_scope(model):
+            _handle_cached_scope_1(entity, by_type_id)
+
+def _strip_cached_scope(entities: list[dict]):
+    for entity in entities:
+        entity.pop("_region", None)
+        entity.pop("_site_group", None)
+        entity.pop("_site", None)
+        entity.pop("_location", None)
+
+@lru_cache(maxsize=256)
+def _has_cached_scope(model):
+    return  hasattr(model, "cache_related_objects") and hasattr(model, "scope")
+
+def _handle_cached_scope_1(entity: dict, by_type_id: dict):
+    # these are some auto-set fields that cache scope information,
+    # some indexes rely on them. Here we attempt to emulate that behavior
+    # for the purpose of matching.  These generally only exist after save.
+    scope_type = entity.get("scope_type")
+    scope_id = entity.get("scope_id")
+
+    if scope_type and scope_id:
+        scope = by_type_id.get((scope_type, scope_id.uuid))
+        if scope_type == "dcim.region":
+            _cache_region_ref(entity, scope_id)
+        elif scope_type == "dcim.sitegroup":
+            _cache_site_group_ref(entity, scope_id)
+        elif scope_type == "dcim.site":
+            _cache_site_ref(entity, scope_id)
+            _cache_region_ref(entity, scope.get("region"))
+            _cache_site_group_ref(entity, scope.get("group"))
+        elif scope_type == "dcim.location":
+            _cache_location_ref(entity, scope_id)
+            site_ref = scope.get("site")
+            if site_ref is not None and isinstance(site_ref, UnresolvedReference):
+                _cache_site_ref(entity, site_ref)
+                site_obj = by_type_id.get((site_ref.object_type, site_ref.uuid))
+                if site_obj is not None:
+                    _cache_region_ref(entity, site_obj.get("region"))
+                    _cache_site_group_ref(entity, site_obj.get("group"))
+
+def _cache_region_ref(entity: dict, ref: UnresolvedReference|None):
+    if ref is None:
+        return
+    entity["_region"] = UnresolvedReference(
+        object_type=ref.object_type,
+        uuid=ref.uuid,
+    )
+
+def _cache_site_group_ref(entity: dict, ref: UnresolvedReference|None):
+    if ref is None:
+        return
+    entity["_site_group"] = UnresolvedReference(
+        object_type=ref.object_type,
+        uuid=ref.uuid,
+    )
+
+def _cache_site_ref(entity: dict, ref: UnresolvedReference|None):
+    if ref is None:
+        return
+    entity["_site"] = UnresolvedReference(
+        object_type=ref.object_type,
+        uuid=ref.uuid,
+    )
+
+def _cache_location_ref(entity: dict, ref: UnresolvedReference|None):
+    if ref is None:
+        return
+    entity["_location"] = UnresolvedReference(
+        object_type=ref.object_type,
+        uuid=ref.uuid,
+    )
 
 def set_custom_field_defaults(entity: dict, model):
     """Set default values for custom fields in an entity."""

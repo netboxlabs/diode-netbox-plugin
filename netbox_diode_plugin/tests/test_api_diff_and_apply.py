@@ -19,7 +19,7 @@ from ipam.models import IPAddress, VLANGroup
 from rest_framework import status
 from users.models import Token
 from utilities.testing import APITestCase
-from virtualization.models import VMInterface
+from virtualization.models import VMInterface, Cluster
 
 logger = logging.getLogger(__name__)
 
@@ -1301,6 +1301,51 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             }
         }
         _ = self.diff_and_apply(payload)
+
+    def test_generate_diff_and_apply_update_cluster_location(self):
+        """Test generate diff and apply update cluster location, same site."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "virtualization.cluster",
+            "entity":     {
+                "cluster": {
+                    "name": "Cluster A",
+                    "type": {"name": "Cluster Type 1"},
+                    "group": {"name": "Cluster Group 1"},
+                    "status": "active",
+                    "tenant": {"name": "Tenant 1"},
+                    "scope_site": {"name": "Site 1"},
+                    "description": "Cluster 1 Description",
+                    "comments": "Cluster 1 Comments",
+                    "tags": [{"name": "Tag 1"}]
+                }
+            },
+        }
+        _ = self.diff_and_apply(payload)
+
+        cluster = Cluster.objects.get(name="Cluster A")
+        self.assertEqual(cluster.scope.name, "Site 1")
+
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "virtualization.cluster",
+            "entity":     {
+                "cluster": {
+                    "name": "Cluster A",
+                    "type": {"name": "Cluster Type 1"},
+                    "group": {"name": "Cluster Group 1"},
+                    "status": "active",
+                    "tenant": {"name": "Tenant 1"},
+                    "scope_location": {"name": "Location 1", "site": {"name": "Site 1"}},
+                    "description": "Cluster 1 Description",
+                    "comments": "Cluster 1 Comments",
+                    "tags": [{"name": "Tag 1"}]
+                }
+            },
+        }
+        _ = self.diff_and_apply(payload)
+        cluster = Cluster.objects.get(name="Cluster A")
+        self.assertEqual(cluster.scope.name, "Location 1")
 
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
