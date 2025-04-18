@@ -88,6 +88,77 @@ _LOGICAL_MATCHERS = {
             condition=Q(scope_type__isnull=True, group__isnull=True),
         ),
     ],
+    "ipam.vlan": lambda: [
+        ObjectMatchCriteria(
+            fields=("vid",),
+            name="logical_vlan_vid_no_group_or_svlan",
+            model_class=get_object_type_model("ipam.vlan"),
+            condition=Q(group__isnull=True, qinq_svlan__isnull=True),
+        ),
+    ],
+    "ipam.vlangroup": lambda: [
+        ObjectMatchCriteria(
+            fields=("name",),
+            name="logical_vlan_group_name_no_scope",
+            model_class=get_object_type_model("ipam.vlangroup"),
+            condition=Q(scope_type__isnull=True),
+        ),
+    ],
+    "wireless.wirelesslan": lambda: [
+        ObjectMatchCriteria(
+            fields=("ssid",),
+            name="logical_wireless_lan_ssid_no_group_or_vlan",
+            model_class=get_object_type_model("wireless.wirelesslan"),
+            condition=Q(group__isnull=True, vlan__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("ssid", "group"),
+            name="logical_wireless_lan_ssid_in_group",
+            model_class=get_object_type_model("wireless.wirelesslan"),
+            condition=Q(group__isnull=False),
+        ),
+        ObjectMatchCriteria(
+            fields=("ssid", "vlan"),
+            name="logical_wireless_lan_ssid_in_vlan",
+            model_class=get_object_type_model("wireless.wirelesslan"),
+            condition=Q(vlan__isnull=False),
+        ),
+    ],
+    "virtualization.virtualmachine": lambda: [
+        ObjectMatchCriteria(
+            fields=("name",),
+            name="logical_virtual_machine_name_no_cluster",
+            model_class=get_object_type_model("virtualization.virtualmachine"),
+            condition=Q(cluster__isnull=True),
+        ),
+    ],
+    "ipam.service": lambda: [
+        ObjectMatchCriteria(
+            fields=("name",),
+            name="logical_service_name_no_device_or_vm",
+            model_class=get_object_type_model("ipam.service"),
+            condition=Q(device__isnull=True, virtual_machine__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("name", "device"),
+            name="logical_service_name_on_device",
+            model_class=get_object_type_model("ipam.service"),
+            condition=Q(device__isnull=False),
+        ),
+        ObjectMatchCriteria(
+            fields=("name", "virtual_machine"),
+            name="logical_service_name_on_vm",
+            model_class=get_object_type_model("ipam.service"),
+            condition=Q(virtual_machine__isnull=False),
+        ),
+    ],
+    "dcim.modulebay": lambda: [
+        ObjectMatchCriteria(
+            fields=("name", "device"),
+            name="logical_module_bay_name_on_device",
+            model_class=get_object_type_model("dcim.modulebay"),
+        )
+    ],
 }
 
 @dataclass
@@ -196,6 +267,7 @@ class ObjectMatchCriteria:
                     result = False
                     break
             if condition.negated:
+                logger.debug(f"negated condition {condition} => {not result}")
                 return not result
             return result
         # TODO handle OR ?
@@ -207,11 +279,15 @@ class ObjectMatchCriteria:
             return True
 
         k, v = condition
+        logger.debug(f"checking simple condition {k} => {v}")
         result = False
         if k.endswith("__isnull"):
             k = k[:-8]
-            result = k not in data or data[k] is None
+            is_null = k not in data or data[k] is None
+            logger.debug(f"checking isnull {k}? ({is_null}) want {v}")
+            result = is_null == v
         else:
+            logger.debug(f"checking equality {k} => {data.get(k)} == {v}")
             result = k in data and data[k] == v
 
         return result
