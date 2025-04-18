@@ -56,9 +56,6 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         if not hasattr(instance, field_name):
             continue
 
-        if field_info["type"] == "ForeignKey" and field_info.get("is_many_to_one_rel", False):
-            continue
-
         value = getattr(instance, field_name)
         if hasattr(value, "all"):  # Handle many-to-many and many-to-one relationships
             # For any relationship that has an 'all' method, get all related objects' primary keys
@@ -87,6 +84,7 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
                 cfmap[cf.name] = cf.serialize(value)
         prechange_data["custom_fields"] = cfmap
     prechange_data = harmonize_formats(prechange_data)
+
     return prechange_data
 
 
@@ -154,8 +152,7 @@ def sort_dict_recursively(d):
     if isinstance(d, dict):
         return {k: sort_dict_recursively(v) for k, v in sorted(d.items())}
     if isinstance(d, list):
-        # Convert all items to strings for comparison
-        return sorted([sort_dict_recursively(item) for item in d], key=str)
+        return [sort_dict_recursively(item) for item in d]
     return d
 
 def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
