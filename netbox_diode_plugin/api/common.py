@@ -48,6 +48,8 @@ class UnresolvedReference:
 
     def __lt__(self, other):
         """Less than operator."""
+        if not isinstance(other, UnresolvedReference):
+            return False
         return self.object_type < other.object_type or (self.object_type == other.object_type and self.uuid < other.uuid)
 
 

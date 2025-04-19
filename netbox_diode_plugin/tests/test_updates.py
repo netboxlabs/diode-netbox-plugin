@@ -5,6 +5,7 @@
 import copy
 import datetime
 import decimal
+import inspect
 import json
 import logging
 import os
@@ -126,20 +127,41 @@ class ApplyUpdatesTestCase(APITestCase):
 
     def _check_expect(self, obj, expect):
         for field, value in expect.items():
+            check_contains = False
+            check_path = []
             path = field.split(".")
             cur = obj
             for i, p in enumerate(path):
                 if p.isdigit():
                     p = int(p)
                     cur = cur[p]
+                elif p.startswith("__contains_"):
+                    check_contains = True
+                    check_path = p[len("__contains_"):]
+                    break
                 else:
                     cur = getattr(cur, p)
                 if i != len(path) - 1:
                     self.assertIsNotNone(cur)
                 if callable(cur):
-                    cur = cur()
+                    try:
+                        signature = inspect.signature(cur)
+                        if len(signature.parameters) == 0:
+                            cur = cur()
+                    except ValueError:
+                        pass
+            cur = harmonize_formats(cur)
 
-            self.assertEqual(harmonize_formats(cur), value)
+            if check_contains:
+                has_match = False
+                for c in cur:
+                    cv = getattr(c, check_path)
+                    if value == cv:
+                        has_match = True
+                        break
+                self.assertTrue(has_match, f"Expected {value} in {cur} ({check_path})")
+            else:
+                self.assertEqual(cur, value)
 
     def send_request(self, url, payload, status_code=status.HTTP_200_OK):
         """Post the payload to the url and return the response."""

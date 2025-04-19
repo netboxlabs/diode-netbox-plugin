@@ -46,18 +46,46 @@ _LOGICAL_MATCHERS = {
             condition=Q(assigned_object_id__isnull=True),
         ),
     ],
+    "ipam.aggregate": lambda: [
+        ObjectMatchCriteria(
+            fields=("prefix",),
+            name="logical_aggregate_prefix_no_rir",
+            model_class=get_object_type_model("ipam.aggregate"),
+            condition=Q(rir__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("prefix", "rir"),
+            name="logical_aggregate_prefix_within_rir",
+            model_class=get_object_type_model("ipam.aggregate"),
+            condition=Q(rir__isnull=False),
+        ),
+    ],
     "ipam.ipaddress": lambda: [
         GlobalIPNetworkIPMatcher(
-            ip_field="address",
+            ip_fields=("address",),
             vrf_field="vrf",
             model_class=get_object_type_model("ipam.ipaddress"),
             name="logical_ip_address_global_no_vrf",
         ),
         VRFIPNetworkIPMatcher(
-            ip_field="address",
+            ip_fields=("address",),
             vrf_field="vrf",
             model_class=get_object_type_model("ipam.ipaddress"),
             name="logical_ip_address_within_vrf",
+        ),
+    ],
+    "ipam.iprange": lambda: [
+        GlobalIPNetworkIPMatcher(
+            ip_fields=("start_address", "end_address"),
+            vrf_field="vrf",
+            model_class=get_object_type_model("ipam.iprange"),
+            name="logical_ip_range_start_end_global_no_vrf",
+        ),
+        VRFIPNetworkIPMatcher(
+            ip_fields=("start_address", "end_address"),
+            vrf_field="vrf",
+            model_class=get_object_type_model("ipam.iprange"),
+            name="logical_ip_range_start_end_within_vrf",
         ),
     ],
     "ipam.prefix": lambda: [
@@ -157,6 +185,24 @@ _LOGICAL_MATCHERS = {
             fields=("name", "device"),
             name="logical_module_bay_name_on_device",
             model_class=get_object_type_model("dcim.modulebay"),
+        )
+    ],
+    "dcim.inventoryitem": lambda: [
+        # TODO: this may be handleable by the existing constraints.
+        # we ignore it due to null values for parent but could have
+        # better coverage of this case perhaps.
+        ObjectMatchCriteria(
+            fields=("name", "device"),
+            name="logical_inventory_item_name_on_device_no_parent",
+            model_class=get_object_type_model("dcim.inventoryitem"),
+            condition=Q(parent__isnull=True),
+        )
+    ],
+    "ipam.fhrpgroup": lambda: [
+        ObjectMatchCriteria(
+            fields=("group_id",),
+            name="logical_fhrp_group_id",
+            model_class=get_object_type_model("ipam.fhrpgroup"),
         )
     ],
 }
@@ -414,7 +460,7 @@ class CustomFieldMatcher:
 class GlobalIPNetworkIPMatcher:
     """A matcher that ignores the mask."""
 
-    ip_field: str
+    ip_fields: tuple[str]
     vrf_field: str
     model_class: Type[models.Model]
     name: str
@@ -431,19 +477,22 @@ class GlobalIPNetworkIPMatcher:
         if not self._check_condition(data):
             return None
 
-        value = self.ip_value(data)
-        if value is None:
-            return None
+        values = []
+        for field in self.ip_fields:
+            value = self.ip_value(data, field)
+            if value is None:
+                return None
+            values.append(value)
 
-        return hash((self.model_class.__name__, self.name, value))
+        return hash((self.model_class.__name__, self.name, tuple(values)))
 
     def has_required_fields(self, data: dict) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
-        return self.ip_field in data
+        return all(field in data for field in self.ip_fields)
 
-    def ip_value(self, data: dict) -> str|None:
+    def ip_value(self, data: dict, field: str) -> str|None:
         """Get the IP value from the data."""
-        value = data.get(self.ip_field)
+        value = data.get(field)
         if value is None:
             return None
         return _ip_only(value)
@@ -451,29 +500,37 @@ class GlobalIPNetworkIPMatcher:
     def build_queryset(self, data: dict) -> models.QuerySet:
         """Build a queryset for the custom field."""
         if not self.has_required_fields(data):
+            logger.debug(f"  * cannot build expr queryset for {self.name} (missing field {self.ip_field})")
             return None
 
         if not self._check_condition(data):
+            logger.debug(f"  * cannot build expr queryset for {self.name} (condition not met)")
             return None
 
-        value = self.ip_value(data)
-        if value is None:
-            return None
+        filter = {
+            f'{self.vrf_field}__isnull': True,
+        }
+        for field in self.ip_fields:
+            value = self.ip_value(data, field)
+            if value is None:
+                logger.debug(f"  * cannot build expr queryset for {self.name} (ip value is None)")
+                return None
+            filter[f'{field}__net_host'] = value
 
-        return self.model_class.objects.filter(**{f'{self.ip_field}__net_host': value, f'{self.vrf_field}__isnull': True})
+        return self.model_class.objects.filter(**filter)
 
 @dataclass
 class VRFIPNetworkIPMatcher:
     """Matches ip in a vrf, ignores mask."""
 
-    ip_field: str
+    ip_fields: tuple[str]
     vrf_field: str
     model_class: Type[models.Model]
     name: str
 
     def _check_condition(self, data: dict) -> bool:
         """Check the condition for the custom field."""
-        return data.get('vrf_id', None) is not None
+        return data.get(self.vrf_field, None) is not None
 
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
@@ -483,21 +540,24 @@ class VRFIPNetworkIPMatcher:
         if not self._check_condition(data):
             return None
 
-        value = self.ip_value(data)
-        if value is None:
-            return None
+        values = []
+        for field in self.ip_fields:
+            value = self.ip_value(data, field)
+            if value is None:
+                return None
+            values.append(value)
 
         vrf_id = data[self.vrf_field]
 
-        return hash((self.model_class.__name__, self.name, value, vrf_id))
+        return hash((self.model_class.__name__, self.name, tuple(values), vrf_id))
 
     def has_required_fields(self, data: dict) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
-        return self.ip_field in data and self.vrf_field in data
+        return all(field in data for field in self.ip_fields) and self.vrf_field in data
 
-    def ip_value(self, data: dict) -> str|None:
+    def ip_value(self, data: dict, field: str) -> str|None:
         """Get the IP value from the data."""
-        value = data.get(self.ip_field)
+        value = data.get(field)
         if value is None:
             return None
         return _ip_only(value)
@@ -505,17 +565,28 @@ class VRFIPNetworkIPMatcher:
     def build_queryset(self, data: dict) -> models.QuerySet:
         """Build a queryset for the custom field."""
         if not self.has_required_fields(data):
+            logger.debug(f"  * cannot build expr queryset for {self.name} (missing field {self.ip_field})")
             return None
 
         if not self._check_condition(data):
+            logger.debug(f"  * cannot build expr queryset for {self.name} (condition not met)")
             return None
 
-        value = self.ip_value(data)
-        if value is None:
-            return None
+        filter = {}
+        for field in self.ip_fields:
+            value = self.ip_value(data, field)
+            if value is None:
+                logger.debug(f"  * cannot build expr queryset for {self.name} (ip value is None)")
+                return None
+            filter[f'{field}__net_host'] = value
 
         vrf_id = data[self.vrf_field]
-        return self.model_class.objects.filter(**{f'{self.ip_field}__net_host': value, f'{self.vrf_field}': vrf_id})
+        if isinstance(vrf_id, UnresolvedReference):
+            logger.debug(f"  * cannot build expr queryset for {self.name} ({self.vrf_field} is unresolved reference)")
+            return None
+        filter[f'{self.vrf_field}'] = vrf_id
+
+        return self.model_class.objects.filter(**filter)
 
 
 def _ip_only(value: str) -> str|None:

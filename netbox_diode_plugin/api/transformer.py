@@ -534,7 +534,7 @@ def _update_resolved_refs(data, new_refs):
                     new_items.append(new_refs[item.uuid])
                 else:
                     new_items.append(item)
-            data[k] = new_items
+            data[k] = sorted(new_items)
         elif isinstance(v, dict):
             _update_resolved_refs(v, new_refs)
 

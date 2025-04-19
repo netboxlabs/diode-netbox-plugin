@@ -59,6 +59,7 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
     serializer_class = get_serializer_for_model(model_class)
     change_type = change.change_type
     if change_type == ChangeType.CREATE.value:
+        logger.info(f"Creating {model_class.__name__} with data: {data}")
         serializer = serializer_class(data=data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         instance = serializer.save()

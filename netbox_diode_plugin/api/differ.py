@@ -51,11 +51,14 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
     for field_name, field_info in fields.items():
         # permit only diode fields and the primary key
         if field_name not in diode_fields and field_name != "id":
+            logger.debug(f"Skipping field {field_name} for {model_class.__name__}")
             continue
 
         if not hasattr(instance, field_name):
+            logger.debug(f"Skipping field {field_name} for {model_class.__name__} because it doesn't exist")
             continue
 
+        logger.debug(f"Processing field {field_name} for {model_class.__name__}")
         value = getattr(instance, field_name)
         if hasattr(value, "all"):  # Handle many-to-many and many-to-one relationships
             # For any relationship that has an 'all' method, get all related objects' primary keys
@@ -73,6 +76,7 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
                 prechange_data[field_name] = value.pk if value is not None else None
         else:
             prechange_data[field_name] = value
+        logger.debug(f"Processed field {field_name} for {model_class.__name__} => {prechange_data[field_name]}")
 
     if hasattr(instance, "get_custom_fields"):
         custom_field_values = instance.get_custom_fields()
@@ -118,7 +122,7 @@ def diff_to_change(
     change_type = ChangeType.UPDATE if len(prechange_data) > 0 else ChangeType.CREATE
     if change_type == ChangeType.UPDATE and not len(changed_attrs) > 0:
         change_type = ChangeType.NOOP
-
+    logger.debug(f"Changed attrs: {changed_attrs}")
     primary_value = str(get_primary_value(prechange_data | postchange_data, object_type))
     if primary_value is None:
         primary_value = "(unnamed)"
