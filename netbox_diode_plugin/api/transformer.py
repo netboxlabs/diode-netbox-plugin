@@ -16,7 +16,7 @@ from rest_framework import serializers
 from django.utils.text import slugify
 from extras.models.customfields import CustomField
 
-from .common import AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats, NON_FIELD_ERRORS
+from .common import AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats, NON_FIELD_ERRORS, _TRACE
 from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -95,28 +95,28 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     a certain form of deduplication and resolution of existing objects.
     """
     entities = _transform_proto_json_1(proto_json, object_type)
-    logger.debug(f"_transform_proto_json_1 entities: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_transform_proto_json_1 entities: {json.dumps(entities, default=lambda o: str(o), indent=4)}") # noqa: E701
 
     entities = _topo_sort(entities)
-    logger.debug(f"_topo_sort: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_topo_sort: {json.dumps(entities, default=lambda o: str(o), indent=4)}") # noqa: E701
     deduplicated = _fingerprint_dedupe(entities)
-    logger.debug(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}") # noqa: E701
     deduplicated = _topo_sort(deduplicated)
-    logger.debug(f"_topo_sort: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_topo_sort: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}") # noqa: E701
     _set_auto_slugs(deduplicated, supported_models)
-    logger.debug(f"_set_auto_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_set_auto_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}") # noqa: E701
     _handle_cached_scope(deduplicated, supported_models)
-    logger.debug(f"_handle_cached_scope: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_handle_cached_scope: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}") # noqa: E701
     resolved = _resolve_existing_references(deduplicated)
-    logger.debug(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}") # noqa: E701
     _strip_cached_scope(resolved)
-    logger.debug(f"_strip_cached_scope: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_strip_cached_scope: {json.dumps(resolved, default=lambda o: str(o), indent=4)}") # noqa: E701
     defaulted = _set_defaults(resolved, supported_models)
-    logger.debug(f"_set_defaults: {json.dumps(defaulted, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_set_defaults: {json.dumps(defaulted, default=lambda o: str(o), indent=4)}") # noqa: E701
 
     # handle post-create steps
     output = _handle_post_creates(defaulted)
-    logger.debug(f"_handle_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_handle_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}") # noqa: E701
 
     _check_unresolved_refs(output)
     for entity in output:
@@ -409,21 +409,21 @@ def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
     new_refs = {} # uuid -> uuid
 
     for entity in entities:
-        logger.debug(f"fingerprint_dedupe: {entity}")
+        if _TRACE: logger.debug(f"fingerprint_dedupe: {entity}") # noqa: E701
         if entity.get('_is_post_create'):
             fp = entity['_uuid']
             existing_uuid = None
         else:
             _update_unresolved_refs(entity, new_refs)
             fps = fingerprints(entity, entity['_object_type'])
-            logger.debug(f"    ==> {fps}")
+            if _TRACE: logger.debug(f"    ==> {fps}") # noqa: E701
             for fp in fps:
                 existing_uuid = by_fp.get(fp)
                 if existing_uuid is not None:
                     break
 
         if existing_uuid is None:
-            logger.debug("  * entity is new.")
+            if _TRACE: logger.debug("  * entity is new.") # noqa: E701
             new_entity = copy.deepcopy(entity)
             _update_unresolved_refs(new_entity, new_refs)
             primary_uuid = new_entity['_uuid']
@@ -432,7 +432,7 @@ def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
             by_uuid[primary_uuid] = new_entity
             deduplicated.append(primary_uuid)
         else:
-            logger.debug("  * entity already exists.")
+            if _TRACE: logger.debug("  * entity already exists.") # noqa: E701
             existing = by_uuid[existing_uuid]
             new_refs[entity['_uuid']] = existing['_uuid']
             merged = _merge_nodes(existing, entity)
@@ -507,7 +507,7 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
 
         existing = find_existing_object(data, object_type)
         if existing is not None:
-            logger.debug(f"existing {data} -> {existing}")
+            if _TRACE: logger.debug(f"existing {data} -> {existing}") # noqa: E701
             fp = (object_type, existing.id)
             if fp in seen:
                 logger.warning(f"objects resolved to the same existing id after deduplication: {seen[fp]} and {data}")

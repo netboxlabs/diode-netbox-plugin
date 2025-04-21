@@ -24,6 +24,7 @@ from rest_framework import status
 logger = logging.getLogger("netbox.diode_data")
 
 NON_FIELD_ERRORS = "__all__"
+_TRACE = False
 
 @dataclass
 class UnresolvedReference:

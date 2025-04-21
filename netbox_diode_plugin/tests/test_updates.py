@@ -86,7 +86,6 @@ def load_test_cases(cls):
             self.assertEqual(res.status_code, status.HTTP_200_OK)
 
             diff = res.json().get("change_set", {})
-            logger.error(f"**** Update Diff: {json.dumps(diff, indent=4)}")
             res = self.client.post(
                 self.apply_url, data=diff, format="json", **self.user_header
             )
