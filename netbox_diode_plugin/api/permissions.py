@@ -5,21 +5,8 @@
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 
-class IsDiodeReader(BasePermission):
-    """Custom permission to allow users that has permission "netbox_diode_plugin.view_objectstate" to view the object type."""
+class IsDiodeOAuth2Authenticated(BasePermission):
+    """Check if the request is authenticated via OAuth2."""
 
     def has_permission(self, request, view):
-        """Check if the request is in SAFE_METHODS and user has netbox_diode_plugin.view_diode permission."""
-        return request.method in SAFE_METHODS and request.user.has_perm(
-            "netbox_diode_plugin.view_diode"
-        )
-
-
-class IsDiodeWriter(BasePermission):
-    """Custom permission to allow users that has permission "netbox_diode_plugin.add_diode" and POST requests."""
-
-    def has_permission(self, request, view):
-        """Check if the request is in POST and user has netbox_diode_plugin.add_diode permission."""
-        return request.method in ["POST"] and request.user.has_perm(
-            "netbox_diode_plugin.add_diode"
-        )
+        return bool(getattr(request.user, "is_authenticated", False))

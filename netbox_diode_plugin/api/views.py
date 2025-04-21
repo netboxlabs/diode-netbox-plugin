@@ -15,7 +15,8 @@ from rest_framework.response import Response
 from netbox_diode_plugin.api.applier import apply_changeset
 from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeSetException, ChangeSetResult
 from netbox_diode_plugin.api.differ import generate_changeset
-from netbox_diode_plugin.api.permissions import IsDiodeWriter
+from netbox_diode_plugin.api.permissions import IsDiodeOAuth2Authenticated
+from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -48,7 +49,8 @@ def get_valid_entity_keys(model_name):
 class GenerateDiffView(views.APIView):
     """GenerateDiff view."""
 
-    permission_classes = [IsAuthenticated, IsDiodeWriter]
+    authentication_classes = [DiodeOAuth2Authentication]
+    permission_classes = [IsDiodeOAuth2Authenticated]
 
     def post(self, request, *args, **kwargs):
         """Generate diff for entity."""
@@ -106,7 +108,8 @@ class GenerateDiffView(views.APIView):
 class ApplyChangeSetView(views.APIView):
     """ApplyChangeSet view."""
 
-    permission_classes = [IsAuthenticated, IsDiodeWriter]
+    authentication_classes = [DiodeOAuth2Authentication]
+    permission_classes = [IsDiodeOAuth2Authenticated]
 
     def post(self, request, *args, **kwargs):
         """Apply change set for entity."""
