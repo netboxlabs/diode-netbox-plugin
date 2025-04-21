@@ -2,24 +2,25 @@
 # Copyright 2025 NetBox Labs Inc
 """Diode NetBox Plugin - API - Common types and utilities."""
 
+import datetime
+import decimal
 import logging
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
-import decimal
-import datetime
 from enum import Enum
-from zoneinfo import ZoneInfo
+
 import netaddr
-from netaddr.eui import EUI
-from django.db.backends.postgresql.psycopg_any import NumericRange
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.backends.postgresql.psycopg_any import NumericRange
 from extras.models import CustomField
+from netaddr.eui import EUI
 from rest_framework import status
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -263,26 +264,23 @@ def error_from_validation_error(e, object_name):
 
 def harmonize_formats(data):
     """Puts all data in a format that can be serialized and compared."""
-    if data is None:
-        return None
-    if isinstance(data, (str, int, float, bool, decimal.Decimal, UnresolvedReference)):
-        return data
-    if isinstance(data, dict):
-        return {k: harmonize_formats(v) if not k.startswith("_") else v for k, v in data.items()}
-    if isinstance(data, (list, tuple)):
-        return [harmonize_formats(v) for v in data]
-    if isinstance(data, datetime.datetime):
-        return data.strftime("%Y-%m-%dT%H:%M:%SZ")
-    if isinstance(data, datetime.date):
-        return data.strftime("%Y-%m-%d")
-    if isinstance(data, NumericRange):
-        return (data.lower, data.upper-1)
-    if isinstance(data, netaddr.IPNetwork):
-        return str(data)
-    if isinstance(data, EUI):
-        return str(data)
-    if isinstance(data, ZoneInfo):
-        return str(data)
-
-    logger.warning(f"Unknown type in harmonize_formats: {type(data)}")
-    return data
+    match data:
+        case None:
+            return None
+        case str() | int() | float() | bool() | decimal.Decimal() | UnresolvedReference():
+            return data
+        case dict():
+            return {k: harmonize_formats(v) if not k.startswith("_") else v for k, v in data.items()}
+        case list() | tuple():
+            return [harmonize_formats(v) for v in data]
+        case datetime.datetime():
+            return data.strftime("%Y-%m-%dT%H:%M:%SZ")
+        case datetime.date():
+            return data.strftime("%Y-%m-%d")
+        case NumericRange():
+            return (data.lower, data.upper-1)
+        case netaddr.IPNetwork() | EUI() | ZoneInfo():
+            return str(data)
+        case _:
+            logger.warning(f"Unknown type in harmonize_formats: {type(data)}")
+            return data

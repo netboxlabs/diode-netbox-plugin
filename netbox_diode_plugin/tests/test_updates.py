@@ -18,8 +18,8 @@ from rest_framework import status
 from users.models import Token
 from utilities.testing import APITestCase
 
-from netbox_diode_plugin.api.plugin_utils import get_object_type_model
 from netbox_diode_plugin.api.common import harmonize_formats
+from netbox_diode_plugin.api.plugin_utils import get_object_type_model
 
 logger = logging.getLogger(__name__)
 
@@ -124,43 +124,49 @@ class ApplyUpdatesTestCase(APITestCase):
 
         self.add_permissions("netbox_diode_plugin.add_diode")
 
+    def _follow_path(self, obj, path):
+        cur = obj
+        for i, p in enumerate(path):
+            if p.isdigit():
+                p = int(p)
+                cur = cur[p]
+            else:
+                cur = getattr(cur, p)
+            if i != len(path) - 1:
+                self.assertIsNotNone(cur)
+            if callable(cur):
+                try:
+                    signature = inspect.signature(cur)
+                    if len(signature.parameters) == 0:
+                        cur = cur()
+                except ValueError:
+                    pass
+        return harmonize_formats(cur)
+
+    def _check_set_by(self, obj, path, value):
+        key = path[-1][len("__by_"):]
+        path = path[:-1]
+        cur = self._follow_path(obj, path)
+
+        if isinstance(value, (list, tuple)):
+            vals = set(value)
+        else:
+            vals = {value}
+
+        cvals = {harmonize_formats(getattr(c, key)) for c in cur}
+        self.assertEqual(cvals, vals)
+
+    def _check_equals(self, obj, path, value):
+        cur = self._follow_path(obj, path)
+        self.assertEqual(cur, value)
+
     def _check_expect(self, obj, expect):
         for field, value in expect.items():
-            check_contains = False
-            check_path = []
-            path = field.split(".")
-            cur = obj
-            for i, p in enumerate(path):
-                if p.isdigit():
-                    p = int(p)
-                    cur = cur[p]
-                elif p.startswith("__contains_"):
-                    check_contains = True
-                    check_path = p[len("__contains_"):]
-                    break
-                else:
-                    cur = getattr(cur, p)
-                if i != len(path) - 1:
-                    self.assertIsNotNone(cur)
-                if callable(cur):
-                    try:
-                        signature = inspect.signature(cur)
-                        if len(signature.parameters) == 0:
-                            cur = cur()
-                    except ValueError:
-                        pass
-            cur = harmonize_formats(cur)
-
-            if check_contains:
-                has_match = False
-                for c in cur:
-                    cv = getattr(c, check_path)
-                    if value == cv:
-                        has_match = True
-                        break
-                self.assertTrue(has_match, f"Expected {value} in {cur} ({check_path})")
+            path = field.strip().split(".")
+            if path[-1].startswith("__by_"):
+                self._check_set_by(obj, path, value)
             else:
-                self.assertEqual(cur, value)
+                self._check_equals(obj, path, value)
 
     def send_request(self, url, payload, status_code=status.HTTP_200_OK):
         """Post the payload to the url and return the response."""

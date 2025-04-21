@@ -12,11 +12,11 @@ from functools import lru_cache
 from uuid import uuid4
 
 import graphlib
-from rest_framework import serializers
 from django.utils.text import slugify
 from extras.models.customfields import CustomField
+from rest_framework import serializers
 
-from .common import AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats, NON_FIELD_ERRORS, _TRACE
+from .common import _TRACE, NON_FIELD_ERRORS, AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats
 from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -87,7 +87,7 @@ _IS_CIRCULAR_REFERENCE = {
 def _is_circular_reference(object_type, field_name):
     return field_name in _IS_CIRCULAR_REFERENCE.get(object_type, frozenset())
 
-def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]:
+def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]: # noqa: C901
     """
     Transform keys of proto json dict to flattened dictionaries with model field keys.
 
@@ -397,7 +397,7 @@ def _generate_slug(object_type, data):
         return slugify(str(source_value))
     return None
 
-def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
+def _fingerprint_dedupe(entities: list[dict]) -> list[dict]: # noqa: C901
     """
     Deduplicates/merges entities by fingerprint.
 
@@ -464,7 +464,9 @@ def _merge_nodes(a: dict, b: dict) -> dict:
                 if ok != k and not ok.startswith("_")
             }
             raise serializers.ValidationError({
-                NON_FIELD_ERRORS: [f"Conflicting values for '{k}' merging duplicate {a.get('_object_type')}, `{merged[k]}` != `{v}` other values : {ov}"]
+                NON_FIELD_ERRORS: [
+                    f"Conflicting values for '{k}' merging duplicate {a.get('_object_type')},"
+                    f" `{merged[k]}` != `{v}` other values : {ov}"]
             })
         merged[k] = v
     return merged

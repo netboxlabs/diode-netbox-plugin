@@ -20,7 +20,7 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 from extras.models.customfields import CustomField
 
-from .common import AutoSlug, UnresolvedReference, _TRACE
+from .common import _TRACE, AutoSlug, UnresolvedReference
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model
 
 logger = logging.getLogger(__name__)
@@ -346,7 +346,7 @@ class ObjectMatchCriteria:
             return self._build_expressions_queryset(data)
         raise ValueError("No fields or expressions to build queryset from")
 
-    def _build_fields_queryset(self, data) -> models.QuerySet:
+    def _build_fields_queryset(self, data) -> models.QuerySet: # noqa: C901
         """Builds a queryset for a simple set-of-fields constraint."""
         if not self._check_condition(data):
             if _TRACE: logger.debug(f"  * cannot build fields queryset for {self.name} (condition not met)") # noqa: E701
@@ -805,7 +805,7 @@ def fingerprints(data: dict, object_type: str) -> list[str]:
     fps.append(fp)
     return fps
 
-def find_existing_object(data: dict, object_type: str):
+def find_existing_object(data: dict, object_type: str): # noqa: C901
     """
     Find an existing object that matches the given data.
 

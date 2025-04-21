@@ -14,7 +14,16 @@ from netaddr.eui import EUI
 from rest_framework import serializers
 from utilities.data import shallow_compare_dict
 
-from .common import Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error, harmonize_formats, NON_FIELD_ERRORS
+from .common import (
+    NON_FIELD_ERRORS,
+    Change,
+    ChangeSet,
+    ChangeSetException,
+    ChangeSetResult,
+    ChangeType,
+    error_from_validation_error,
+    harmonize_formats,
+)
 from .plugin_utils import get_primary_value, legal_fields
 from .supported_models import extract_supported_models
 from .transformer import cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json

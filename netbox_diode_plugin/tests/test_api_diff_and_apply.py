@@ -11,7 +11,7 @@ from uuid import uuid4
 import netaddr
 from circuits.models import Circuit, Provider
 from core.models import ObjectType
-from dcim.models import Device, Interface, Site, ModuleBay
+from dcim.models import Device, Interface, ModuleBay, Site
 from django.contrib.auth import get_user_model
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
@@ -19,7 +19,7 @@ from ipam.models import IPAddress, VLANGroup
 from rest_framework import status
 from users.models import Token
 from utilities.testing import APITestCase
-from virtualization.models import VMInterface, Cluster
+from virtualization.models import Cluster, VMInterface
 
 logger = logging.getLogger(__name__)
 
@@ -1148,7 +1148,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                                 },
                                 "site": {"name": "Site 1"}
                             }
-                        } 
+                        }
 
                     },
                     "label": "STACK-2",
