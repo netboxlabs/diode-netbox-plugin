@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - API Permissions."""
 
 from rest_framework.permissions import SAFE_METHODS, BasePermission
