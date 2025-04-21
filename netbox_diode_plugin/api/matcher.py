@@ -20,7 +20,7 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 from extras.models.customfields import CustomField
 
-from .common import AutoSlug, UnresolvedReference
+from .common import _TRACE, AutoSlug, UnresolvedReference
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model
 
 logger = logging.getLogger(__name__)
@@ -46,18 +46,46 @@ _LOGICAL_MATCHERS = {
             condition=Q(assigned_object_id__isnull=True),
         ),
     ],
+    "ipam.aggregate": lambda: [
+        ObjectMatchCriteria(
+            fields=("prefix",),
+            name="logical_aggregate_prefix_no_rir",
+            model_class=get_object_type_model("ipam.aggregate"),
+            condition=Q(rir__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("prefix", "rir"),
+            name="logical_aggregate_prefix_within_rir",
+            model_class=get_object_type_model("ipam.aggregate"),
+            condition=Q(rir__isnull=False),
+        ),
+    ],
     "ipam.ipaddress": lambda: [
         GlobalIPNetworkIPMatcher(
-            ip_field="address",
+            ip_fields=("address",),
             vrf_field="vrf",
             model_class=get_object_type_model("ipam.ipaddress"),
             name="logical_ip_address_global_no_vrf",
         ),
         VRFIPNetworkIPMatcher(
-            ip_field="address",
+            ip_fields=("address",),
             vrf_field="vrf",
             model_class=get_object_type_model("ipam.ipaddress"),
             name="logical_ip_address_within_vrf",
+        ),
+    ],
+    "ipam.iprange": lambda: [
+        GlobalIPNetworkIPMatcher(
+            ip_fields=("start_address", "end_address"),
+            vrf_field="vrf",
+            model_class=get_object_type_model("ipam.iprange"),
+            name="logical_ip_range_start_end_global_no_vrf",
+        ),
+        VRFIPNetworkIPMatcher(
+            ip_fields=("start_address", "end_address"),
+            vrf_field="vrf",
+            model_class=get_object_type_model("ipam.iprange"),
+            name="logical_ip_range_start_end_within_vrf",
         ),
     ],
     "ipam.prefix": lambda: [
@@ -68,11 +96,114 @@ _LOGICAL_MATCHERS = {
             condition=Q(vrf__isnull=True),
         ),
         ObjectMatchCriteria(
-            fields=("prefix", "vrf_id"),
+            fields=("prefix", "vrf"),
             name="logical_prefix_within_vrf",
             model_class=get_object_type_model("ipam.prefix"),
             condition=Q(vrf__isnull=False),
         ),
+    ],
+    "virtualization.cluster": lambda: [
+        ObjectMatchCriteria(
+            fields=("name", "scope_type", "scope_id"),
+            name="logical_cluster_within_scope",
+            model_class=get_object_type_model("virtualization.cluster"),
+            condition=Q(scope_type__isnull=False),
+        ),
+        ObjectMatchCriteria(
+            fields=("name",),
+            name="logical_cluster_with_no_scope_or_group",
+            model_class=get_object_type_model("virtualization.cluster"),
+            condition=Q(scope_type__isnull=True, group__isnull=True),
+        ),
+    ],
+    "ipam.vlan": lambda: [
+        ObjectMatchCriteria(
+            fields=("vid",),
+            name="logical_vlan_vid_no_group_or_svlan",
+            model_class=get_object_type_model("ipam.vlan"),
+            condition=Q(group__isnull=True, qinq_svlan__isnull=True),
+        ),
+    ],
+    "ipam.vlangroup": lambda: [
+        ObjectMatchCriteria(
+            fields=("name",),
+            name="logical_vlan_group_name_no_scope",
+            model_class=get_object_type_model("ipam.vlangroup"),
+            condition=Q(scope_type__isnull=True),
+        ),
+    ],
+    "wireless.wirelesslan": lambda: [
+        ObjectMatchCriteria(
+            fields=("ssid",),
+            name="logical_wireless_lan_ssid_no_group_or_vlan",
+            model_class=get_object_type_model("wireless.wirelesslan"),
+            condition=Q(group__isnull=True, vlan__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("ssid", "group"),
+            name="logical_wireless_lan_ssid_in_group",
+            model_class=get_object_type_model("wireless.wirelesslan"),
+            condition=Q(group__isnull=False),
+        ),
+        ObjectMatchCriteria(
+            fields=("ssid", "vlan"),
+            name="logical_wireless_lan_ssid_in_vlan",
+            model_class=get_object_type_model("wireless.wirelesslan"),
+            condition=Q(vlan__isnull=False),
+        ),
+    ],
+    "virtualization.virtualmachine": lambda: [
+        ObjectMatchCriteria(
+            fields=("name",),
+            name="logical_virtual_machine_name_no_cluster",
+            model_class=get_object_type_model("virtualization.virtualmachine"),
+            condition=Q(cluster__isnull=True),
+        ),
+    ],
+    "ipam.service": lambda: [
+        ObjectMatchCriteria(
+            fields=("name",),
+            name="logical_service_name_no_device_or_vm",
+            model_class=get_object_type_model("ipam.service"),
+            condition=Q(device__isnull=True, virtual_machine__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("name", "device"),
+            name="logical_service_name_on_device",
+            model_class=get_object_type_model("ipam.service"),
+            condition=Q(device__isnull=False),
+        ),
+        ObjectMatchCriteria(
+            fields=("name", "virtual_machine"),
+            name="logical_service_name_on_vm",
+            model_class=get_object_type_model("ipam.service"),
+            condition=Q(virtual_machine__isnull=False),
+        ),
+    ],
+    "dcim.modulebay": lambda: [
+        ObjectMatchCriteria(
+            fields=("name", "device"),
+            name="logical_module_bay_name_on_device",
+            model_class=get_object_type_model("dcim.modulebay"),
+        )
+    ],
+    "dcim.inventoryitem": lambda: [
+        # TODO: this may be handleable by the existing constraints.
+        # we ignore it due to null values for parent but could have
+        # better coverage of this case perhaps.
+        ObjectMatchCriteria(
+            fields=("name", "device"),
+            name="logical_inventory_item_name_on_device_no_parent",
+            model_class=get_object_type_model("dcim.inventoryitem"),
+            condition=Q(parent__isnull=True),
+        )
+    ],
+    "ipam.fhrpgroup": lambda: [
+        ObjectMatchCriteria(
+            fields=("group_id",),
+            name="logical_fhrp_group_id",
+            model_class=get_object_type_model("ipam.fhrpgroup"),
+        )
     ],
 }
 
@@ -166,32 +297,44 @@ class ObjectMatchCriteria:
         return hash((self.model_class.__name__, self.name, tuple(values)))
 
     def _check_condition(self, data) -> bool:
-        if self.condition is None:
+        return self._check_condition_1(data, self.condition)
+
+    def _check_condition_1(self, data, condition) -> bool:
+        if condition is None:
             return True
-        # TODO: handle evaluating complex conditions,
-        # there are only simple ones currently
-        if self.condition.connector != Q.AND:
-            logger.warning(f"Unhandled condition {self.condition}")
-            return False
+        if _TRACE: logger.debug(f"checking condition {condition}") # noqa: E701
+        if isinstance(condition, tuple):
+            return self._check_simple_condition(data, condition)
 
-        if len(self.condition.children) != 1:
-            logger.warning(f"Unhandled condition {self.condition}")
-            return False
+        if hasattr(condition, "connector") and condition.connector == Q.AND:
+            result = True
+            for child in condition.children:
+                if not self._check_condition_1(data, child):
+                    result = False
+                    break
+            if condition.negated:
+                if _TRACE: logger.debug(f"negated condition {condition} => {not result}") # noqa: E701
+                return not result
+            return result
+        # TODO handle OR ?
+        logger.warning(f"Unhandled condition {condition}")
+        return False
 
-        if len(self.condition.children[0]) != 2:
-            logger.warning(f"Unhandled condition {self.condition}")
-            return False
+    def _check_simple_condition(self, data, condition) -> bool:
+        if condition is None:
+            return True
 
-        k, v = self.condition.children[0]
+        k, v = condition
+        if _TRACE: logger.debug(f"checking simple condition {k} => {v}") # noqa: E701
         result = False
         if k.endswith("__isnull"):
             k = k[:-8]
-            result = k not in data or data[k] is None
+            is_null = k not in data or data[k] is None
+            if _TRACE: logger.debug(f"checking isnull {k}? ({is_null}) want {v}") # noqa: E701
+            result = is_null == v
         else:
+            if _TRACE: logger.debug(f"checking equality {k} => {data.get(k)} == {v}") # noqa: E701
             result = k in data and data[k] == v
-
-        if self.condition.negated:
-            result = not result
 
         return result
 
@@ -203,21 +346,25 @@ class ObjectMatchCriteria:
             return self._build_expressions_queryset(data)
         raise ValueError("No fields or expressions to build queryset from")
 
-    def _build_fields_queryset(self, data) -> models.QuerySet:
+    def _build_fields_queryset(self, data) -> models.QuerySet: # noqa: C901
         """Builds a queryset for a simple set-of-fields constraint."""
+        if not self._check_condition(data):
+            if _TRACE: logger.debug(f"  * cannot build fields queryset for {self.name} (condition not met)") # noqa: E701
+            return None
+
         data = self._prepare_data(data)
         lookup_kwargs = {}
         for field_name in self.fields:
             field = self.model_class._meta.get_field(field_name)
             if field_name not in data:
-                logger.debug(f"  * cannot build fields queryset for {self.name} (missing field {field_name})")
+                if _TRACE: logger.debug(f"  * cannot build fields queryset for {self.name} (missing field {field_name})") # noqa: E701
                 return None  # cannot match, missing field data
             lookup_value = data.get(field_name)
             if isinstance(lookup_value, UnresolvedReference):
-                logger.debug(f"  * cannot build fields queryset for {self.name} ({field_name} is unresolved reference)")
+                if _TRACE: logger.debug(f"  * cannot build fields queryset for {self.name} ({field_name} is unresolved reference)") # noqa: E701
                 return None  # cannot match, missing field data
             if isinstance(lookup_value, dict):
-                logger.debug(f"  * cannot build fields queryset for {self.name} ({field_name} is dict)")
+                if _TRACE: logger.debug(f"  * cannot build fields queryset for {self.name} ({field_name} is dict)") # noqa: E701
                 return None  # cannot match, missing field data
             lookup_kwargs[field.name] = lookup_value
 
@@ -242,10 +389,10 @@ class ObjectMatchCriteria:
             refs = [F(ref) for ref in _get_refs(expr)]
             for ref in refs:
                 if ref not in replacements:
-                    logger.debug(f"  * cannot build expr queryset for {self.name} (missing field {ref})")
+                    if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (missing field {ref})") # noqa: E701
                     return None  # cannot match, missing field data
                 if isinstance(replacements[ref], UnresolvedReference):
-                    logger.debug(f"  * cannot build expr queryset for {self.name} ({ref} is unresolved reference)")
+                    if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} ({ref} is unresolved reference)") # noqa: E701
                     return None  # cannot match, missing field data
 
             rhs = expr.replace_expressions(replacements)
@@ -313,7 +460,7 @@ class CustomFieldMatcher:
 class GlobalIPNetworkIPMatcher:
     """A matcher that ignores the mask."""
 
-    ip_field: str
+    ip_fields: tuple[str]
     vrf_field: str
     model_class: Type[models.Model]
     name: str
@@ -330,19 +477,22 @@ class GlobalIPNetworkIPMatcher:
         if not self._check_condition(data):
             return None
 
-        value = self.ip_value(data)
-        if value is None:
-            return None
+        values = []
+        for field in self.ip_fields:
+            value = self.ip_value(data, field)
+            if value is None:
+                return None
+            values.append(value)
 
-        return hash((self.model_class.__name__, self.name, value))
+        return hash((self.model_class.__name__, self.name, tuple(values)))
 
     def has_required_fields(self, data: dict) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
-        return self.ip_field in data
+        return all(field in data for field in self.ip_fields)
 
-    def ip_value(self, data: dict) -> str|None:
+    def ip_value(self, data: dict, field: str) -> str|None:
         """Get the IP value from the data."""
-        value = data.get(self.ip_field)
+        value = data.get(field)
         if value is None:
             return None
         return _ip_only(value)
@@ -350,29 +500,37 @@ class GlobalIPNetworkIPMatcher:
     def build_queryset(self, data: dict) -> models.QuerySet:
         """Build a queryset for the custom field."""
         if not self.has_required_fields(data):
+            if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (missing field {self.ip_field})") # noqa: E701
             return None
 
         if not self._check_condition(data):
+            if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (condition not met)") # noqa: E701
             return None
 
-        value = self.ip_value(data)
-        if value is None:
-            return None
+        filter = {
+            f'{self.vrf_field}__isnull': True,
+        }
+        for field in self.ip_fields:
+            value = self.ip_value(data, field)
+            if value is None:
+                if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (ip value is None)") # noqa: E701
+                return None
+            filter[f'{field}__net_host'] = value
 
-        return self.model_class.objects.filter(**{f'{self.ip_field}__net_host': value, f'{self.vrf_field}__isnull': True})
+        return self.model_class.objects.filter(**filter)
 
 @dataclass
 class VRFIPNetworkIPMatcher:
     """Matches ip in a vrf, ignores mask."""
 
-    ip_field: str
+    ip_fields: tuple[str]
     vrf_field: str
     model_class: Type[models.Model]
     name: str
 
     def _check_condition(self, data: dict) -> bool:
         """Check the condition for the custom field."""
-        return data.get('vrf_id', None) is not None
+        return data.get(self.vrf_field, None) is not None
 
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
@@ -382,21 +540,24 @@ class VRFIPNetworkIPMatcher:
         if not self._check_condition(data):
             return None
 
-        value = self.ip_value(data)
-        if value is None:
-            return None
+        values = []
+        for field in self.ip_fields:
+            value = self.ip_value(data, field)
+            if value is None:
+                return None
+            values.append(value)
 
         vrf_id = data[self.vrf_field]
 
-        return hash((self.model_class.__name__, self.name, value, vrf_id))
+        return hash((self.model_class.__name__, self.name, tuple(values), vrf_id))
 
     def has_required_fields(self, data: dict) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
-        return self.ip_field in data and self.vrf_field in data
+        return all(field in data for field in self.ip_fields) and self.vrf_field in data
 
-    def ip_value(self, data: dict) -> str|None:
+    def ip_value(self, data: dict, field: str) -> str|None:
         """Get the IP value from the data."""
-        value = data.get(self.ip_field)
+        value = data.get(field)
         if value is None:
             return None
         return _ip_only(value)
@@ -404,17 +565,28 @@ class VRFIPNetworkIPMatcher:
     def build_queryset(self, data: dict) -> models.QuerySet:
         """Build a queryset for the custom field."""
         if not self.has_required_fields(data):
+            if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (missing field {self.ip_field})") # noqa: E701
             return None
 
         if not self._check_condition(data):
+            if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (condition not met)") # noqa: E701
             return None
 
-        value = self.ip_value(data)
-        if value is None:
-            return None
+        filter = {}
+        for field in self.ip_fields:
+            value = self.ip_value(data, field)
+            if value is None:
+                if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (ip value is None)") # noqa: E701
+                return None
+            filter[f'{field}__net_host'] = value
 
         vrf_id = data[self.vrf_field]
-        return self.model_class.objects.filter(**{f'{self.ip_field}__net_host': value, f'{self.vrf_field}': vrf_id})
+        if isinstance(vrf_id, UnresolvedReference):
+            if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} ({self.vrf_field} is unresolved reference)") # noqa: E701
+            return None
+        filter[f'{self.vrf_field}'] = vrf_id
+
+        return self.model_class.objects.filter(**filter)
 
 
 def _ip_only(value: str) -> str|None:
@@ -608,31 +780,32 @@ def _fingerprint_all(data: dict) -> str:
 
     return hash(tuple(values))
 
-def fingerprint(data: dict, object_type: str) -> str:
+def fingerprints(data: dict, object_type: str) -> list[str]:
     """
-    Fingerprint a data structure.
+    Get fingerprints for a data structure.
 
-    This uses the first matcher that has all
-    required fields or else uses all fields.
-
-    TODO: This means there are pathological? cases where
-    the same object is being referenced but by
-    different unique constraints in the same diff...
-    this could lead to some unexpected behavior.
+    This returns all fingerprints for the given data that
+    have required fields.
     """
     if data is None:
         return None
 
     model_class = get_object_type_model(object_type)
     # check any known match criteria
+    fps = []
     for matcher in get_model_matchers(model_class):
         fp = matcher.fingerprint(data)
         if fp is not None:
-            return fp
-    # fall back to fingerprinting all the data
-    return _fingerprint_all(data)
+            fps.append(fp)
+            if _TRACE: logger.debug(f"  ** matcher {matcher.name} gave fingerprint {fp}") # noqa: E701
+        else:
+            if _TRACE: logger.debug(f"  ** skipped matcher {matcher.name}") # noqa: E701
+    fp = _fingerprint_all(data)
+    if _TRACE: logger.debug(f"  ** matcher _fingerprint_all gave fingerprint {fp}") # noqa: E701
+    fps.append(fp)
+    return fps
 
-def find_existing_object(data: dict, object_type: str):
+def find_existing_object(data: dict, object_type: str): # noqa: C901
     """
     Find an existing object that matches the given data.
 
@@ -641,21 +814,21 @@ def find_existing_object(data: dict, object_type: str):
 
     Returns the object if found, otherwise None.
     """
-    logger.debug(f"resolving {data}")
+    if _TRACE: logger.debug(f"resolving {data}") # noqa: E701
     model_class = get_object_type_model(object_type)
     for matcher in get_model_matchers(model_class):
         if not matcher.has_required_fields(data):
-            logger.debug(f"  * skipped matcher {matcher.name} (missing fields)")
+            if _TRACE: logger.debug(f"  * skipped matcher {matcher.name} (missing fields)") # noqa: E701
             continue
         q = matcher.build_queryset(data)
         if q is None:
-            logger.debug(f"  * skipped matcher {matcher.name} (no queryset)")
+            if _TRACE: logger.debug(f"  * skipped matcher {matcher.name} (no queryset)") # noqa: E701
             continue
-        logger.debug(f"  * trying query {q.query}")
+        if _TRACE: logger.debug(f"  * trying query {q.query}") # noqa: E701
         existing = q.order_by('pk').first()
         if existing is not None:
-            logger.debug(f"      -> Found object {existing} via {matcher.name}")
+            if _TRACE: logger.debug(f"      -> Found object {existing} via {matcher.name}") # noqa: E701
             return existing
-        logger.debug(f"      -> No object found for matcher {matcher.name}")
-    logger.debug("  * No matchers found an existing object")
+        if _TRACE: logger.debug(f"      -> No object found for matcher {matcher.name}") # noqa: E701
+    if _TRACE: logger.debug("  * No matchers found an existing object") # noqa: E701
     return None

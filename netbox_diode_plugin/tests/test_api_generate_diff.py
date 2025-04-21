@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Diode NetBox Plugin - Tests."""
 
+import logging
 from uuid import uuid4
 
 from core.models import ObjectType
@@ -14,6 +15,12 @@ from users.models import Token
 from utilities.testing import APITestCase
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
+
+def _get_error(response, object_name, field):
+    return response.json().get("errors", {}).get(object_name, {}).get(field, [])
+
 
 class GenerateDiffTestCase(APITestCase):
     """GenerateDiff test cases."""
@@ -278,6 +285,83 @@ class GenerateDiffTestCase(APITestCase):
 
         before = change.get("before", {})
         self.assertEqual(before.get("model"), "Rack Type 1")
+
+    def test_merge_states_failed(self):
+        """Test merge states failed."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.vrf",
+            "entity": {
+                "vrf": {
+                    "name": "Customer-A-VRF",
+                    "rd": "65000:100",
+                    "tenant": {"name": "Tenant 1"},
+                    "enforce_unique": True,
+                    "description": "Isolated routing domain for Customer A",
+                    "comments": "Used for customer's private network services",
+                    "tags": [
+                    {
+                        "name": "Tag 1"
+                    },
+                    {
+                        "name": "Tag 2"
+                    }
+                    ],
+                    "import_targets": [
+                        {
+                            "name": "65000:100",
+                            "description": "Primary import route target"
+                        },
+                        {
+                            "name": "65000:101",
+                            "description": "Backup import route target"
+                        }
+                    ],
+                    "export_targets": [
+                        {
+                            "name": "65000:100",
+                            "description": "Primary export route target"
+                        }
+                    ]
+                }
+            }
+        }
+
+        response = self.send_request(payload, status.HTTP_400_BAD_REQUEST)
+        logger.error(response.json())
+        errs = _get_error(response, "ipam.vrf", "__all__")
+        self.assertEqual(len(errs), 1)
+        err = errs[0]
+        self.assertTrue(err.startswith("Conflicting values for 'description' merging duplicate ipam.routetarget"))
+
+    def test_vlangroup_error(self):
+        """Test vlangroup error."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.vlangroup",
+            "entity": {
+                "vlan_group": {
+                    "name": "Data Center Core",
+                    "slug": "dc-core",
+                    "scope_site": {
+                        "name": "Data Center West",
+                        "slug": "dc-west",
+                        "status": "active"
+                    },
+                    "description": "Core network VLANs for data center infrastructure",
+                    "tags": [
+                    {
+                        "name": "Tag 1"
+                    },
+                    {
+                        "name": "Tag 2"
+                    }
+                    ]
+                }
+            }
+        }
+        _ = self.send_request(payload)
+
 
     def send_request(self, payload, status_code=status.HTTP_200_OK):
         """Post the payload to the url and return the response."""

@@ -9,9 +9,9 @@ import logging
 from uuid import uuid4
 
 import netaddr
-from circuits.models import Circuit
+from circuits.models import Circuit, Provider
 from core.models import ObjectType
-from dcim.models import Device, Interface, Site
+from dcim.models import Device, Interface, ModuleBay, Site
 from django.contrib.auth import get_user_model
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
@@ -19,12 +19,14 @@ from ipam.models import IPAddress, VLANGroup
 from rest_framework import status
 from users.models import Token
 from utilities.testing import APITestCase
-from virtualization.models import VMInterface
+from virtualization.models import Cluster, VMInterface
 
 logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
+def _get_error(response, object_name, field):
+    return response.json().get("errors", {}).get(object_name, {}).get(field, [])
 
 class GenerateDiffAndApplyTestCase(APITestCase):
     """GenerateDiff -> ApplyChangeSet test cases."""
@@ -415,6 +417,92 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_ipaddress.assigned_object.name, f"Interface {interface_uuid}")
         device = Device.objects.get(name=f"Device {device_uuid}")
         self.assertEqual(device.primary_ip4.pk, new_ipaddress.pk)
+
+    def test_generate_diff_and_apply_create_device_with_primary_ip6(self):
+        """Test generate diff and apply create device with primary ip6."""
+        device_uuid = str(uuid4())
+        interface_uuid = str(uuid4())
+        addr = "2001:db8::1"
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.ipaddress",
+            "entity": {
+                "ip_address": {
+                    "address": addr,
+                    "assigned_object_interface": {
+                        "name": f"Interface {interface_uuid}",
+                        "type": "1000base-t",
+                        "device": {
+                            "name": f"Device {device_uuid}",
+                            "role": {
+                                "name": f"Role {uuid4()}",
+                            },
+                            "site": {
+                                "name": f"Site {uuid4()}",
+                            },
+                            "device_type": {
+                                "manufacturer": {
+                                    "name": f"Manufacturer {uuid4()}",
+                                },
+                                "model": f"Device Type {uuid4()}",
+                            },
+                            "primary_ip6": {
+                                "address": addr,
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_ipaddress = IPAddress.objects.get(address=addr)
+        self.assertEqual(new_ipaddress.assigned_object.name, f"Interface {interface_uuid}")
+        device = Device.objects.get(name=f"Device {device_uuid}")
+        self.assertEqual(device.primary_ip6.pk, new_ipaddress.pk)
+
+    def test_generate_diff_and_apply_create_device_with_oob_ip(self):
+        """Test generate diff and apply create device with oob ip."""
+        device_uuid = str(uuid4())
+        interface_uuid = str(uuid4())
+        addr = "192.168.1.1/24"
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.ipaddress",
+            "entity": {
+                "ip_address": {
+                    "address": addr,
+                    "assigned_object_interface": {
+                        "name": f"Interface {interface_uuid}",
+                        "type": "1000base-t",
+                        "device": {
+                            "name": f"Device {device_uuid}",
+                            "role": {
+                                "name": f"Role {uuid4()}",
+                            },
+                            "site": {
+                                "name": f"Site {uuid4()}",
+                            },
+                            "device_type": {
+                                "manufacturer": {
+                                    "name": f"Manufacturer {uuid4()}",
+                                },
+                                "model": f"Device Type {uuid4()}",
+                            },
+                            "oob_ip": {
+                                "address": addr,
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+        _, response = self.diff_and_apply(payload)
+        new_ipaddress = IPAddress.objects.get(address=addr)
+        self.assertEqual(new_ipaddress.assigned_object.name, f"Interface {interface_uuid}")
+        device = Device.objects.get(name=f"Device {device_uuid}")
+        self.assertEqual(device.oob_ip.pk, new_ipaddress.pk)
 
     def test_generate_diff_and_apply_create_and_update_site_with_custom_field(self):
         """Test generate diff and apply create and update site with custom field."""
@@ -912,6 +1000,352 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         vm_interface = VMInterface.objects.get(name="Interface 47e8a593-8b74-4e94-9a8e-c02113f0bf88")
         self.assertEqual(vm_interface.mtu, 2000)
         self.assertEqual(vm_interface.primary_mac_address.mac_address, "00:00:00:00:00:01")
+
+    def test_generate_diff_and_apply_dedupe_devicetype(self):
+        """Test generate diff and apply dedupe devicetype in wireless link."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "wireless.wirelesslink",
+            "entity": {
+                "wireless_link": {
+                    "interface_a": {
+                        "device": {
+                            "name": "Device 1",
+                            "device_type": {
+                                "manufacturer": {"name": "Cisco"},
+                                "model": "C2960S"
+                            },
+                            "role": {"name": "Device Role 1"},
+                            "site": {"name": "Site 1"}
+                        },
+                        "name": "Radio0/1",
+                        "type": "ieee802.11ac",
+                        "enabled": True
+                    },
+                    "interface_b": {
+                        "device": {
+                            "name": "Device 2",
+                            "device_type": {
+                                "manufacturer": {"name": "Cisco"},
+                                "model": "C2960S"
+                            },
+                            "role": {"name": "Device Role 1"},
+                            "site": {"name": "Site 1"}
+                        },
+                        "name": "Radio0/1",
+                        "type": "ieee802.11ac",
+                        "enabled": True
+                    },
+                    "ssid": "P2P-Link-1",
+                    "status": "connected",
+                    "tenant": {"name": "Tenant 1"},
+                    "auth_type": "wpa-personal",
+                    "auth_cipher": "aes",
+                    "auth_psk": "P2PLinkKey123!",
+                    "distance": 1.5,
+                    "distance_unit": "km",
+                    "description": "Point-to-point wireless backhaul link",
+                    "comments": "Building A to Building B wireless bridge",
+                    "tags": [
+                        {
+                            "name": "Tag 1"
+                        },
+                        {
+                            "name": "Tag 2"
+                        }
+                    ]
+                }
+            }
+        }
+
+        _ = self.diff_and_apply(payload)
+
+    def test_generate_diff_and_apply_provider_with_accounts(self):
+        """Test generate diff and apply provider with accounts."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "circuits.provider",
+            "entity": {
+                "provider": {
+                    "name": "Level 3 Communications",
+                    "slug": "level3",
+                    "description": "Global Tier 1 Internet Service Provider",
+                    "comments": "Primary transit provider for data center connectivity",
+                    "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}],
+                    "accounts": [
+                        {
+                            "provider": {"name": "Level 3 Communications"},
+                            "name": "East Coast Account",
+                            "account": "L3-12345",
+                            "description": "East Coast regional services account",
+                            "comments": "Managed through regional NOC"
+                        },
+                        {
+                            "provider": {"name": "Level 3 Communications"},
+                            "name": "West Coast Account",
+                            "account": "L3-67890",
+                            "description": "West Coast regional services account",
+                            "comments": "Managed through regional NOC"
+                        }
+                    ],
+                    "asns": [
+                        {
+                            "asn": "3356",
+                            "rir": {"name": "ARIN"},
+                            "tenant": {"name": "Tenant 1"},
+                            "description": "Level 3 Global ASN",
+                            "comments": "Primary transit ASN"
+                        }
+                    ]
+                }
+            }
+        }
+
+        _ = self.diff_and_apply(payload)
+        provider = Provider.objects.get(name="Level 3 Communications")
+        self.assertEqual(provider.accounts.count(), 2)
+        self.assertEqual(provider.asns.count(), 1)
+
+    def test_generate_diff_and_apply_module_bay_with_module(self):
+        """Test generate diff and apply module bay with module."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "dcim.modulebay",
+            "entity":     {
+                "module_bay": {
+                    "device": {
+                        "name": "Device 1",
+                        "role": {"name": "Device Role 1"},
+                        "device_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S"
+                        },
+                        "site": {"name": "Site 1"}
+                    },
+                    "name": "Stack Module Bay 2",
+                    "module": {
+                        "device": {
+                            "name": "Device 1",
+                            "role": {"name": "Device Role 1"},
+                            "device_type": {
+                                "manufacturer": {"name": "Cisco"},
+                                "model": "C2960S"
+                            },
+                            "site": {"name": "Site 1"}
+                        },
+                        "module_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S-STACK"
+                        },
+                        "module_bay": {
+                            "name": "Module Bay 1",
+                            "device": {
+                                "name": "Device 1",
+                                "role": {"name": "Device Role 1"},
+                                "device_type": {
+                                    "manufacturer": {"name": "Cisco"},
+                                    "model": "C2960S"
+                                },
+                                "site": {"name": "Site 1"}
+                            }
+                        }
+
+                    },
+                    "label": "STACK-2",
+                    "position": "Rear",
+                    "description": "Secondary stacking module bay",
+                    "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+                }
+            }
+        }
+        _ = self.diff_and_apply(payload)
+        module_bay = ModuleBay.objects.get(name="Stack Module Bay 2")
+        self.assertEqual(module_bay.module.device.name, "Device 1")
+        self.assertEqual(module_bay.module.module_type.manufacturer.name, "Cisco")
+        self.assertEqual(module_bay.module.module_type.model, "C2960S-STACK")
+        self.assertEqual(module_bay.module.module_bay.name, "Module Bay 1")
+
+    def test_generate_diff_and_apply_module_bay_circular_ref_fails(self):
+        """Test generate diff and apply module bay."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "dcim.modulebay",
+            "entity":     {
+                "module_bay": {
+                    "name": "Module Bay 1",
+                    "device": {
+                        "name": "Device 1",
+                        "role": {"name": "Device Role 1"},
+                        "device_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S"
+                        },
+                        "site": {"name": "Site 1"}
+                    },
+                    "module": {
+                        "asset_tag": "1234567890",
+                        "device": {
+                            "name": "Device 1",
+                            "role": {"name": "Device Role 1"},
+                            "device_type": {
+                                "manufacturer": {"name": "Cisco"},
+                                "model": "C2960S"
+                            },
+                            "site": {"name": "Site 1"}
+                        },
+                        "module_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S-STACK"
+                        },
+                        "module_bay": {
+                            "name": "Module Bay 1",
+                            "device": {
+                                "name": "Device 1",
+                                "role": {"name": "Device Role 1"},
+                                "device_type": {
+                                    "manufacturer": {"name": "Cisco"},
+                                    "model": "C2960S"
+                                },
+                                "site": {"name": "Site 1"}
+                            },
+                            "module": {
+                                "asset_tag": "1234567890",
+                            }
+                        }
+                    },
+                    "label": "STACK-2",
+                    "position": "Rear",
+                    "description": "Secondary stacking module bay",
+                    "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+                }
+            }
+        }
+        response1 = self.client.post(
+            self.diff_url, data=payload, format="json", **self.user_header
+        )
+        self.assertEqual(response1.status_code, status.HTTP_200_OK)
+        diff = response1.json().get("change_set", {})
+
+        response2 = self.client.post(
+            self.apply_url, data=diff, format="json", **self.user_header
+        )
+        self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.assertIn(
+            "A module bay cannot belong to a module installed within it.",
+            _get_error(response2, "dcim.modulebay", "__all__")
+        )
+
+    def test_generate_diff_and_apply_virtual_machine_with_primary_ip_4_ok(self):
+        """Test generate diff and apply virtual machine with primary ip 4 assigned."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "virtualization.virtualmachine",
+            "entity": {
+                "timestamp": "2025-04-16T13:45:02.045208Z",
+                "virtual_machine": {
+                    "name": "app-server-01",
+                    "status": "active",
+                    "site": {"name": "Site 1"},
+                    "cluster": {
+                        "name": "Cluster 1",
+                        "type": {"name": "Cluster Type 1"}
+                    },
+                    "device": {
+                        "name": "Device 1",
+                        "device_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S"
+                        },
+                        "role": {"name": "Device Role 1"},
+                        "site": {"name": "Site 1"},
+                        "cluster": {
+                            "name": "Cluster 1",
+                            "type": {"name": "Cluster Type 1"}
+                        }
+                    },
+                    "serial": "VM-2023-001",
+                    "role": {"name": "Application Server"},
+                    "tenant": {"name": "Tenant 1"},
+                    "platform": {"name": "Ubuntu 22.04"},
+                    "primary_ip4": {
+                        "address": "192.168.2.10",
+                        "assigned_object_vm_interface": {
+                            "virtual_machine": {
+                                "name": "app-server-01",
+                                "cluster": {
+                                    "name": "Cluster 1",
+                                    "type": {"name": "Cluster Type 1"}
+                                },
+                                "tenant": {"name": "Tenant 1"},
+                            },
+                            "name": "eth0",
+                            "enabled": True,
+                            "mtu": "1500",
+                        }
+                    },
+                    "vcpus": 4.0,
+                    "memory": "214748364",
+                    "disk": "147483647",
+                    "description": "Primary application server instance",
+                    "comments": "Hosts critical business applications",
+                    "tags": [
+                        {
+                            "name": "Tag 1"
+                        },
+                        {
+                            "name": "Tag 2"
+                        }
+                    ]
+                }
+            }
+        }
+        _ = self.diff_and_apply(payload)
+
+    def test_generate_diff_and_apply_update_cluster_location(self):
+        """Test generate diff and apply update cluster location, same site."""
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "virtualization.cluster",
+            "entity":     {
+                "cluster": {
+                    "name": "Cluster A",
+                    "type": {"name": "Cluster Type 1"},
+                    "group": {"name": "Cluster Group 1"},
+                    "status": "active",
+                    "tenant": {"name": "Tenant 1"},
+                    "scope_site": {"name": "Site 1"},
+                    "description": "Cluster 1 Description",
+                    "comments": "Cluster 1 Comments",
+                    "tags": [{"name": "Tag 1"}]
+                }
+            },
+        }
+        _ = self.diff_and_apply(payload)
+
+        cluster = Cluster.objects.get(name="Cluster A")
+        self.assertEqual(cluster.scope.name, "Site 1")
+
+        payload = {
+            "timestamp": "2025-04-16T02:58:20.564615Z",
+            "object_type": "virtualization.cluster",
+            "entity":     {
+                "cluster": {
+                    "name": "Cluster A",
+                    "type": {"name": "Cluster Type 1"},
+                    "group": {"name": "Cluster Group 1"},
+                    "status": "active",
+                    "tenant": {"name": "Tenant 1"},
+                    "scope_location": {"name": "Location 1", "site": {"name": "Site 1"}},
+                    "description": "Cluster 1 Description",
+                    "comments": "Cluster 1 Comments",
+                    "tags": [{"name": "Tag 1"}]
+                }
+            },
+        }
+        _ = self.diff_and_apply(payload)
+        cluster = Cluster.objects.get(name="Cluster A")
+        self.assertEqual(cluster.scope.name, "Location 1")
 
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
