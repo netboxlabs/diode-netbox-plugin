@@ -2,23 +2,30 @@
 # Copyright 2025 NetBox Labs Inc
 """Diode NetBox Plugin - API - Common types and utilities."""
 
+import datetime
+import decimal
 import logging
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 
+import netaddr
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.backends.postgresql.psycopg_any import NumericRange
 from extras.models import CustomField
+from netaddr.eui import EUI
 from rest_framework import status
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("netbox.diode_data")
 
 NON_FIELD_ERRORS = "__all__"
+_TRACE = False
 
 @dataclass
 class UnresolvedReference:
@@ -43,6 +50,8 @@ class UnresolvedReference:
 
     def __lt__(self, other):
         """Less than operator."""
+        if not isinstance(other, UnresolvedReference):
+            return False
         return self.object_type < other.object_type or (self.object_type == other.object_type and self.uuid < other.uuid)
 
 
@@ -238,7 +247,7 @@ class AutoSlug:
 
 
 def error_from_validation_error(e, object_name):
-    """Convert a from rest_framework.exceptions.ValidationError to a ChangeSetException."""
+    """Convert a from DRF ValidationError to a ChangeSetException."""
     errors = {}
     if e.detail:
         if isinstance(e.detail, dict):
@@ -252,3 +261,26 @@ def error_from_validation_error(e, object_name):
                 NON_FIELD_ERRORS: [e.detail]
             }
     return ChangeSetException("validation error", errors=errors)
+
+def harmonize_formats(data):
+    """Puts all data in a format that can be serialized and compared."""
+    match data:
+        case None:
+            return None
+        case str() | int() | float() | bool() | decimal.Decimal() | UnresolvedReference():
+            return data
+        case dict():
+            return {k: harmonize_formats(v) if not k.startswith("_") else v for k, v in data.items()}
+        case list() | tuple():
+            return [harmonize_formats(v) for v in data]
+        case datetime.datetime():
+            return data.strftime("%Y-%m-%dT%H:%M:%SZ")
+        case datetime.date():
+            return data.strftime("%Y-%m-%d")
+        case NumericRange():
+            return (data.lower, data.upper-1)
+        case netaddr.IPNetwork() | EUI() | ZoneInfo():
+            return str(data)
+        case _:
+            logger.warning(f"Unknown type in harmonize_formats: {type(data)}")
+            return data

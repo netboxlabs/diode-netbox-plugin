@@ -12,12 +12,12 @@ from functools import lru_cache
 from uuid import uuid4
 
 import graphlib
-from django.core.exceptions import ValidationError
 from django.utils.text import slugify
 from extras.models.customfields import CustomField
+from rest_framework import serializers
 
-from .common import AutoSlug, ChangeSetException, UnresolvedReference
-from .matcher import find_existing_object, fingerprint
+from .common import _TRACE, NON_FIELD_ERRORS, AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats
+from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
     apply_format_transformations,
@@ -50,6 +50,22 @@ _NESTED_CONTEXT = {
             "assigned_object_id": UnresolvedReference(object_type=object_type, uuid=uuid),
         },
     },
+    "virtualization.virtualmachine": {
+        "primary_ip4": lambda object_type, uuid: {
+            "__force_after": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+        "primary_ip6": lambda object_type, uuid: {
+            "__force_after": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+    },
+    "dcim.virtualdevicecontext": {
+        "primary_ip4": lambda object_type, uuid: {
+            "__force_after": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+        "primary_ip6": lambda object_type, uuid: {
+            "__force_after": UnresolvedReference(object_type=object_type, uuid=uuid),
+        },
+    },
 }
 
 def _no_context(object_type, uuid):
@@ -61,15 +77,17 @@ def _nested_context(object_type, uuid, field_name):
 _IS_CIRCULAR_REFERENCE = {
     "dcim.interface": frozenset(["primary_mac_address"]),
     "virtualization.vminterface": frozenset(["primary_mac_address"]),
-    "dcim.device": frozenset(["primary_ip4", "primary_ip6"]),
+    "dcim.device": frozenset(["primary_ip4", "primary_ip6", "oob_ip"]),
     "dcim.virtualdevicecontext": frozenset(["primary_ip4", "primary_ip6"]),
     "virtualization.virtualmachine": frozenset(["primary_ip4", "primary_ip6"]),
+    "circuits.provider": frozenset(["accounts"]),
+    "dcim.modulebay": frozenset(["module"]), # this isn't  allowed to be circular, but gives a better error
 }
 
 def _is_circular_reference(object_type, field_name):
     return field_name in _IS_CIRCULAR_REFERENCE.get(object_type, frozenset())
 
-def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]:
+def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]: # noqa: C901
     """
     Transform keys of proto json dict to flattened dictionaries with model field keys.
 
@@ -77,24 +95,28 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     a certain form of deduplication and resolution of existing objects.
     """
     entities = _transform_proto_json_1(proto_json, object_type)
-    logger.debug(f"_transform_proto_json_1 entities: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_transform_proto_json_1 entities: {json.dumps(entities, default=lambda o: str(o), indent=4)}") # noqa: E701
 
     entities = _topo_sort(entities)
-    logger.debug(f"_topo_sort: {json.dumps(entities, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_topo_sort: {json.dumps(entities, default=lambda o: str(o), indent=4)}") # noqa: E701
     deduplicated = _fingerprint_dedupe(entities)
-    logger.debug(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_fingerprint_dedupe: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}") # noqa: E701
     deduplicated = _topo_sort(deduplicated)
-    logger.debug(f"_topo_sort: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_topo_sort: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}") # noqa: E701
     _set_auto_slugs(deduplicated, supported_models)
-    logger.debug(f"_set_auto_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_set_auto_slugs: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}") # noqa: E701
+    _handle_cached_scope(deduplicated, supported_models)
+    if _TRACE: logger.debug(f"_handle_cached_scope: {json.dumps(deduplicated, default=lambda o: str(o), indent=4)}") # noqa: E701
     resolved = _resolve_existing_references(deduplicated)
-    logger.debug(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
-    _set_defaults(resolved, supported_models)
-    logger.debug(f"_set_defaults: {json.dumps(resolved, default=lambda o: str(o), indent=4)}")
+    if _TRACE: logger.debug(f"_resolve_references: {json.dumps(resolved, default=lambda o: str(o), indent=4)}") # noqa: E701
+    _strip_cached_scope(resolved)
+    if _TRACE: logger.debug(f"_strip_cached_scope: {json.dumps(resolved, default=lambda o: str(o), indent=4)}") # noqa: E701
+    defaulted = _set_defaults(resolved, supported_models)
+    if _TRACE: logger.debug(f"_set_defaults: {json.dumps(defaulted, default=lambda o: str(o), indent=4)}") # noqa: E701
 
     # handle post-create steps
-    output = _handle_post_creates(resolved)
-    logger.debug(f"_handle_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}")
+    output = _handle_post_creates(defaulted)
+    if _TRACE: logger.debug(f"_handle_post_creates: {json.dumps(output, default=lambda o: str(o), indent=4)}") # noqa: E701
 
     _check_unresolved_refs(output)
     for entity in output:
@@ -117,7 +139,8 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
     # context pushed down from parent nodes
     if context is not None:
         for k, v in context.items():
-            node[k] = v
+            if not k.startswith("_"):
+                node[k] = v
             if isinstance(v, UnresolvedReference):
                 node['_refs'].add(v.uuid)
 
@@ -221,31 +244,123 @@ def _topo_sort(entities: list[dict]) -> list[dict]:
     except graphlib.CycleError as e:
         # TODO the cycle error references the cycle here ...
         raise ChangeSetException(f"Circular reference in entities: {e}", errors={
-            "__all__": {
-                "message": "Unable to resolve circular reference in entities",
+            NON_FIELD_ERRORS: {
+                NON_FIELD_ERRORS: "Unable to resolve circular reference in entities",
             }
         })
 
 
 def _set_defaults(entities: list[dict], supported_models: dict):
+    out = []
     for entity in entities:
+        entity = copy.deepcopy(entity)
         model_fields = supported_models.get(entity['_object_type'])
         if model_fields is None:
-            raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
+            raise serializers.ValidationError({
+                NON_FIELD_ERRORS: [f"Model for object type {entity['_object_type']} is not supported"]
+            })
 
         auto_slug = entity.pop("_auto_slug", None)
         if entity.get("_instance"):
+            out.append(entity)
             continue
 
         if auto_slug:
             if auto_slug.field_name not in entity:
                 entity[auto_slug.field_name] = auto_slug.value
 
+        legal = legal_fields(entity['_object_type'])
         for field_name, field_info in model_fields.get('fields', {}).items():
+            if field_name not in legal:
+                continue
             if entity.get(field_name) is None and field_info.get("default") is not None:
-                entity[field_name] = field_info["default"]
+                default = field_info["default"]
+                if callable(default):
+                    default = default()
+                entity[field_name] = default
         set_custom_field_defaults(entity, model_fields['model'])
+        out.append(harmonize_formats(entity))
+    return out
 
+def _handle_cached_scope(entities: list[dict], supported_models: dict):
+    by_type_id = {
+        (entity['_object_type'], entity['_uuid']): entity
+        for entity in entities
+    }
+    for entity in entities:
+        model = supported_models.get(entity['_object_type'], {}).get("model")
+        if _has_cached_scope(model):
+            _handle_cached_scope_1(entity, by_type_id)
+
+def _strip_cached_scope(entities: list[dict]):
+    for entity in entities:
+        entity.pop("_region", None)
+        entity.pop("_site_group", None)
+        entity.pop("_site", None)
+        entity.pop("_location", None)
+
+@lru_cache(maxsize=256)
+def _has_cached_scope(model):
+    return  hasattr(model, "cache_related_objects") and hasattr(model, "scope")
+
+def _handle_cached_scope_1(entity: dict, by_type_id: dict):
+    # these are some auto-set fields that cache scope information,
+    # some indexes rely on them. Here we attempt to emulate that behavior
+    # for the purpose of matching.  These generally only exist after save.
+    scope_type = entity.get("scope_type")
+    scope_id = entity.get("scope_id")
+
+    if scope_type and scope_id:
+        scope = by_type_id.get((scope_type, scope_id.uuid))
+        if scope_type == "dcim.region":
+            _cache_region_ref(entity, scope_id)
+        elif scope_type == "dcim.sitegroup":
+            _cache_site_group_ref(entity, scope_id)
+        elif scope_type == "dcim.site":
+            _cache_site_ref(entity, scope_id)
+            _cache_region_ref(entity, scope.get("region"))
+            _cache_site_group_ref(entity, scope.get("group"))
+        elif scope_type == "dcim.location":
+            _cache_location_ref(entity, scope_id)
+            site_ref = scope.get("site")
+            if site_ref is not None and isinstance(site_ref, UnresolvedReference):
+                _cache_site_ref(entity, site_ref)
+                site_obj = by_type_id.get((site_ref.object_type, site_ref.uuid))
+                if site_obj is not None:
+                    _cache_region_ref(entity, site_obj.get("region"))
+                    _cache_site_group_ref(entity, site_obj.get("group"))
+
+def _cache_region_ref(entity: dict, ref: UnresolvedReference|None):
+    if ref is None:
+        return
+    entity["_region"] = UnresolvedReference(
+        object_type=ref.object_type,
+        uuid=ref.uuid,
+    )
+
+def _cache_site_group_ref(entity: dict, ref: UnresolvedReference|None):
+    if ref is None:
+        return
+    entity["_site_group"] = UnresolvedReference(
+        object_type=ref.object_type,
+        uuid=ref.uuid,
+    )
+
+def _cache_site_ref(entity: dict, ref: UnresolvedReference|None):
+    if ref is None:
+        return
+    entity["_site"] = UnresolvedReference(
+        object_type=ref.object_type,
+        uuid=ref.uuid,
+    )
+
+def _cache_location_ref(entity: dict, ref: UnresolvedReference|None):
+    if ref is None:
+        return
+    entity["_location"] = UnresolvedReference(
+        object_type=ref.object_type,
+        uuid=ref.uuid,
+    )
 
 def set_custom_field_defaults(entity: dict, model):
     """Set default values for custom fields in an entity."""
@@ -263,7 +378,9 @@ def _set_auto_slugs(entities: list[dict], supported_models: dict):
     for entity in entities:
         model_fields = supported_models.get(entity['_object_type'])
         if model_fields is None:
-            raise ValidationError(f"Model for object type {entity['_object_type']} is not supported")
+            raise serializers.ValidationError({
+                NON_FIELD_ERRORS: [f"Model for object type {entity['_object_type']} is not supported"]
+            })
 
         for field_name, field_info in model_fields.get('fields', {}).items():
             if field_info["type"] == "SlugField" and entity.get(field_name) is None:
@@ -280,38 +397,52 @@ def _generate_slug(object_type, data):
         return slugify(str(source_value))
     return None
 
-def _fingerprint_dedupe(entities: list[dict]) -> list[dict]:
+def _fingerprint_dedupe(entities: list[dict]) -> list[dict]: # noqa: C901
     """
     Deduplicates/merges entities by fingerprint.
 
     *list must be in topo order by reference already*
     """
+    by_uuid = {}
     by_fp = {}
     deduplicated = []
     new_refs = {} # uuid -> uuid
 
     for entity in entities:
+        if _TRACE: logger.debug(f"fingerprint_dedupe: {entity}") # noqa: E701
         if entity.get('_is_post_create'):
             fp = entity['_uuid']
-            existing = None
+            existing_uuid = None
         else:
-            fp = fingerprint(entity, entity['_object_type'])
-            existing = by_fp.get(fp)
+            _update_unresolved_refs(entity, new_refs)
+            fps = fingerprints(entity, entity['_object_type'])
+            if _TRACE: logger.debug(f"    ==> {fps}") # noqa: E701
+            for fp in fps:
+                existing_uuid = by_fp.get(fp)
+                if existing_uuid is not None:
+                    break
 
-        if existing is None:
-            logger.debug("  * entity is new.")
+        if existing_uuid is None:
+            if _TRACE: logger.debug("  * entity is new.") # noqa: E701
             new_entity = copy.deepcopy(entity)
             _update_unresolved_refs(new_entity, new_refs)
-            by_fp[fp] = new_entity
-            deduplicated.append(fp)
+            primary_uuid = new_entity['_uuid']
+            for fp in fps:
+                by_fp[fp] = primary_uuid
+            by_uuid[primary_uuid] = new_entity
+            deduplicated.append(primary_uuid)
         else:
-            logger.debug("  * entity already exists.")
+            if _TRACE: logger.debug("  * entity already exists.") # noqa: E701
+            existing = by_uuid[existing_uuid]
             new_refs[entity['_uuid']] = existing['_uuid']
             merged = _merge_nodes(existing, entity)
             _update_unresolved_refs(merged, new_refs)
-            by_fp[fp] = merged
+            for fp in fps:
+                by_fp[fp] = existing_uuid
+            by_uuid[existing_uuid] = merged
+            deduplicated.append(existing_uuid)
 
-    return [by_fp[fp] for fp in deduplicated]
+    return [by_uuid[u] for u in deduplicated]
 
 def _merge_nodes(a: dict, b: dict) -> dict:
     """
@@ -328,7 +459,15 @@ def _merge_nodes(a: dict, b: dict) -> dict:
         if k.startswith("_"):
             continue
         if k in merged and merged[k] != v:
-            raise ValueError(f"Conflict merging {a} and {b} on {k}: {merged[k]} and {v}")
+            ov = {
+                ok: v for ok, v in a.items()
+                if ok != k and not ok.startswith("_")
+            }
+            raise serializers.ValidationError({
+                NON_FIELD_ERRORS: [
+                    f"Conflicting values for '{k}' merging duplicate {a.get('_object_type')},"
+                    f" `{merged[k]}` != `{v}` other values : {ov}"]
+            })
         merged[k] = v
     return merged
 
@@ -370,7 +509,7 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
 
         existing = find_existing_object(data, object_type)
         if existing is not None:
-            logger.debug(f"existing {data} -> {existing}")
+            if _TRACE: logger.debug(f"existing {data} -> {existing}") # noqa: E701
             fp = (object_type, existing.id)
             if fp in seen:
                 logger.warning(f"objects resolved to the same existing id after deduplication: {seen[fp]} and {data}")
@@ -397,7 +536,7 @@ def _update_resolved_refs(data, new_refs):
                     new_items.append(new_refs[item.uuid])
                 else:
                     new_items.append(item)
-            data[k] = new_items
+            data[k] = sorted(new_items)
         elif isinstance(v, dict):
             _update_resolved_refs(v, new_refs)
 
@@ -513,7 +652,9 @@ def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict,
                     ))
                 out[key] = vals
             else:
-                raise ValueError(f"Custom field {keyname} has unknown type: {value_type}")
+                raise serializers.ValidationError({
+                    keyname: [f"Custom field {keyname} has unknown type: {value_type}"]
+                })
         except ValueError as e:
             raise ChangeSetException(
                 f"Custom field {keyname} is invalid: {value}",

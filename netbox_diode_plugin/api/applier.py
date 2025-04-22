@@ -7,6 +7,7 @@ import logging
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
+from django.db.utils import IntegrityError
 from rest_framework.exceptions import ValidationError as ValidationError
 
 from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
@@ -39,10 +40,14 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         except TypeError as e:
             # this indicates a problem in model validation (should raise ValidationError)
             # but raised non-validation error (TypeError) -- we don't know which field trigged it.
-            logger.error(f"invalid data type for unspecified field (validation raised non-validation error): {data}: {e}")
-            raise _err("invalid data type for field", object_type, "__all__")
-        # ConstraintViolationError ?
-        # ...
+            import traceback
+            traceback.print_exc()
+            logger.error(f"validation raised TypeError error on unspecified field of {object_type}: {data}: {e}")
+            logger.error(traceback.format_exc())
+            raise _err("invalid data type for field (TypeError)", object_type, "__all__")
+        except IntegrityError as e:
+            logger.error(f"Integrity error {object_type}: {e} {data}")
+            raise _err(f"created a conflict with an existing {object_type}", object_type, "__all__")
 
     return ChangeSetResult(
         id=change_set.id,
