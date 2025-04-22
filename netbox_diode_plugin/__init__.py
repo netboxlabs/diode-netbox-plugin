@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin."""
 
 from netbox.plugins import PluginConfig
@@ -19,7 +19,7 @@ class NetBoxDiodePluginConfig(PluginConfig):
     default_settings = {
         # Default Diode gRPC target for communication with Diode server
         "diode_target": "grpc://localhost:8080/diode",
-        
+
         # Default username associated with changes applied via plugin
         "diode_username": "diode",
     }

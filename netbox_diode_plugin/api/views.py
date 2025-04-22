@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - API Views."""
-import json
 import logging
 import re
 
@@ -9,14 +8,13 @@ from django.apps import apps
 from django.db import transaction
 from rest_framework import views
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from netbox_diode_plugin.api.applier import apply_changeset
+from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeSetException, ChangeSetResult
 from netbox_diode_plugin.api.differ import generate_changeset
 from netbox_diode_plugin.api.permissions import IsDiodeOAuth2Authenticated
-from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 
 logger = logging.getLogger("netbox.diode_data")
 

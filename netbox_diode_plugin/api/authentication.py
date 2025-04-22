@@ -10,10 +10,7 @@ from django.core.cache import cache
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 
-from netbox_diode_plugin.plugin_config import (
-    get_diode_auth_introspect_url,
-    get_diode_user,
-)
+from netbox_diode_plugin.plugin_config import get_diode_auth_introspect_url, get_diode_user
 
 logger = logging.getLogger("netbox.diode_data")
 

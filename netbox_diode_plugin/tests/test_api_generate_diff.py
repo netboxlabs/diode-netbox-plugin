@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Tests."""
 
 from unittest import mock
@@ -7,7 +7,6 @@ from uuid import uuid4
 
 from core.models import ObjectType
 from dcim.models import Manufacturer, RackType, Site
-from django.contrib.auth import get_user_model
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
 from rest_framework import status
@@ -15,6 +14,7 @@ from utilities.testing import APITestCase
 
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.plugin_config import get_diode_user
+
 
 class GenerateDiffTestCase(APITestCase):
     """GenerateDiff test cases."""
@@ -33,7 +33,7 @@ class GenerateDiffTestCase(APITestCase):
         self.auth_patcher.start()
 
         self.object_type = ObjectType.objects.get_for_model(Site)
-        
+
         self.uuid_field = CustomField.objects.create(
             name='myuuid',
             type=CustomFieldTypeChoices.TYPE_TEXT,

@@ -1,13 +1,14 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Tests."""
 
 import copy
 import datetime
 import decimal
 import logging
-from uuid import uuid4
 from unittest import mock
+from uuid import uuid4
+
 import netaddr
 from circuits.models import Circuit
 from core.models import ObjectType
@@ -32,7 +33,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         """Set up the test case."""
         self.diff_url = "/netbox/api/plugins/diode/generate-diff/"
         self.apply_url = "/netbox/api/plugins/diode/apply-change-set/"
-        
+
         self.authorization_header = {"Authorization": "Bearer mocked_oauth_token"}
         self.diode_user = get_diode_user()
         self.auth_patcher = mock.patch.object(
@@ -93,7 +94,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         """Clean up after tests."""
         self.auth_patcher.stop()
         super().tearDown()
-    
+
     def test_generate_diff_and_apply_create_interface_with_tags(self):
         """Test generate diff and apply create interface with tags."""
         interface_uuid = str(uuid4())

@@ -1,35 +1,21 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Tests."""
 
 import uuid
 from unittest import mock
 
-from dcim.models import (
-    Device,
-    DeviceRole,
-    DeviceType,
-    Interface,
-    Manufacturer,
-    Rack,
-    Site,
-)
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Rack, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from ipam.models import ASN, RIR, IPAddress, Prefix
 from netaddr import IPNetwork
 from rest_framework import status
-from users.models import Token
 from utilities.testing import APITestCase
-from virtualization.models import (
-    Cluster,
-    ClusterType,
-    VirtualMachine,
-    VMInterface,
-)
+from virtualization.models import Cluster, ClusterType, VirtualMachine
 
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
-from netbox_diode_plugin.plugin_config import get_diode_user    
+from netbox_diode_plugin.plugin_config import get_diode_user
 
 User = get_user_model()
 

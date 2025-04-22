@@ -1,5 +1,5 @@
 # !/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Forms."""
 from netbox.forms import NetBoxModelForm
 from netbox.plugins import get_plugin_config

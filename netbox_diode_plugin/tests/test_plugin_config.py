@@ -1,15 +1,11 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Tests."""
-from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from netbox_diode_plugin.plugin_config import (
-    get_diode_auth_introspect_url,
-    get_diode_user,
-)
+from netbox_diode_plugin.plugin_config import get_diode_auth_introspect_url, get_diode_user
 
 User = get_user_model()
 
