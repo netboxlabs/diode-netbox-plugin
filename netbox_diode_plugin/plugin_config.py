@@ -1,38 +1,62 @@
 # !/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Plugin Settings."""
 
+from urllib.parse import urlparse
+
+from django.contrib.auth import get_user_model
 from netbox.plugins import get_plugin_config
 
 __all__ = (
-    "get_diode_user_types",
-    "get_diode_usernames",
-    "get_diode_username_for_user_type",
+    "get_diode_auth_introspect_url",
+    "get_diode_user",
 )
 
-
-def get_diode_user_types():
-    """Returns a list of diode user types."""
-    return "diode_to_netbox", "netbox_to_diode", "diode"
+User = get_user_model()
 
 
-def get_diode_user_types_with_labels():
-    """Returns a list of diode user types with labels."""
-    return (
-        ("diode_to_netbox", "Diode to NetBox"),
-        ("netbox_to_diode", "NetBox to Diode"),
-        ("diode", "Diode"),
+def _parse_diode_target(target: str) -> tuple[str, str, bool]:
+    """Parse the target into authority, path and tls_verify."""
+    parsed_target = urlparse(target)
+
+    if parsed_target.scheme not in ["grpc", "grpcs"]:
+        raise ValueError("target should start with grpc:// or grpcs://")
+
+    tls_verify = parsed_target.scheme == "grpcs"
+
+    authority = parsed_target.netloc
+
+    return authority, parsed_target.path, tls_verify
+
+
+def get_diode_auth_introspect_url():
+    """Returns the Diode Auth introspect URL."""
+    diode_target = get_plugin_config("netbox_diode_plugin", "diode_target")
+    diode_target_override = get_plugin_config(
+        "netbox_diode_plugin", "diode_target_override"
     )
 
+    authority, path, tls_verify = _parse_diode_target(
+        diode_target_override or diode_target
+    )
+    scheme = "https" if tls_verify else "http"
+    path = path.rstrip("/")
 
-def get_diode_usernames():
-    """Returns a dictionary of diode user types and their configured usernames."""
-    return {
-        user_type: get_plugin_config("netbox_diode_plugin", f"{user_type}_username")
-        for user_type in get_diode_user_types()
-    }
+    return f"{scheme}://{authority}{path}/auth/introspect"
 
 
-def get_diode_username_for_user_type(user_type):
-    """Returns a diode username for a given user type."""
-    return get_plugin_config("netbox_diode_plugin", f"{user_type}_username")
+def get_diode_user():
+    """Returns the Diode user."""
+    diode_username = get_plugin_config("netbox_diode_plugin", "diode_username")
+    diode_username_override = get_plugin_config(
+        "netbox_diode_plugin", "diode_username_override"
+    )
+
+    diode_username = diode_username_override or diode_username
+
+    try:
+        diode_user = User.objects.get(username=diode_username)
+    except User.DoesNotExist:
+        diode_user = User.objects.create(username=diode_username, is_active=True)
+
+    return diode_user

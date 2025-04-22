@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
-"""Diode Netbox Plugin - Database migrations."""
+# Copyright 2025 NetBox Labs, Inc.
+"""Diode NetBox Plugin - Database migrations."""
 
 import utilities.json
 from django.db import migrations, models
@@ -20,10 +20,21 @@ def create_settings_entity(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    """0002_setting migration."""
+    """Initial migration."""
+
+    replaces = [
+        ("netbox_diode_plugin", "0001_initial"),
+        ("netbox_diode_plugin", "0002_setting"),
+        ("netbox_diode_plugin", "0003_clear_permissions"),
+        ("netbox_diode_plugin", "0004_rename_legacy_users"),
+        ("netbox_diode_plugin", "0005_revoke_superuser_status"),
+    ]
+
+    initial = True
 
     dependencies = [
-        ("netbox_diode_plugin", "0001_initial"),
+        ("contenttypes", "0001_initial"),
+        ("users", "0006_custom_group_model"),
     ]
 
     operations = [
