@@ -4,13 +4,9 @@
 
 import copy
 import datetime
-import decimal
 import logging
 
-import netaddr
 from django.contrib.contenttypes.models import ContentType
-from django.db.backends.postgresql.psycopg_any import NumericRange
-from netaddr.eui import EUI
 from rest_framework import serializers
 from utilities.data import shallow_compare_dict
 

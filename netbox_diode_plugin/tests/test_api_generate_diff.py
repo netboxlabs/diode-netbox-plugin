@@ -16,7 +16,6 @@ from utilities.testing import APITestCase
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.plugin_config import get_diode_user
 
-
 logger = logging.getLogger(__name__)
 
 def _get_error(response, object_name, field):

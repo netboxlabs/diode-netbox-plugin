@@ -1230,13 +1230,13 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             }
         }
         response1 = self.client.post(
-            self.diff_url, data=payload, format="json", **self.user_header
+            self.diff_url, data=payload, format="json", **self.authorization_header
         )
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         diff = response1.json().get("change_set", {})
 
         response2 = self.client.post(
-            self.apply_url, data=diff, format="json", **self.user_header
+            self.apply_url, data=diff, format="json", **self.authorization_header
         )
         self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
 
