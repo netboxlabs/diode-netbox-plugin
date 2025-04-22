@@ -4,7 +4,6 @@
 
 import hashlib
 import logging
-import os
 
 import requests
 from django.core.cache import cache

@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - Tests."""
 
 import uuid
+from unittest import mock
 
 from dcim.models import (
     Device,
@@ -27,6 +28,9 @@ from virtualization.models import (
     VMInterface,
 )
 
+from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
+from netbox_diode_plugin.plugin_config import get_diode_user    
+
 User = get_user_model()
 
 def _get_error(response, object_name, field):
@@ -37,11 +41,14 @@ class BaseApplyChangeSet(APITestCase):
 
     def setUp(self):
         """Set up test."""
-        self.user = User.objects.create_user(username="testcommonuser")
-        self.add_permissions("netbox_diode_plugin.add_diode")
-        self.user_token = Token.objects.create(user=self.user)
-
-        self.user_header = {"HTTP_AUTHORIZATION": f"Token {self.user_token.key}"}
+        self.authorization_header = {"Authorization": "Bearer mocked_oauth_token"}
+        self.diode_user = get_diode_user()
+        self.auth_patcher = mock.patch.object(
+            DiodeOAuth2Authentication,
+            'authenticate',
+            return_value=(self.diode_user, None)
+        )
+        self.auth_patcher.start()
 
         rir = RIR.objects.create(name="RFC 6996", is_private=True)
         self.asns = [ASN(asn=65000 + i, rir=rir) for i in range(8)]
@@ -165,10 +172,15 @@ class BaseApplyChangeSet(APITestCase):
 
         self.url = "/netbox/api/plugins/diode/apply-change-set/"
 
+    def tearDown(self):
+        """Clean up after tests."""
+        self.auth_patcher.stop()
+        super().tearDown()
+
     def send_request(self, payload, status_code=status.HTTP_200_OK):
         """Post the payload to the url and return the response."""
         response = self.client.post(
-            self.url, data=payload, format="json", **self.user_header
+            self.url, data=payload, format="json", **self.authorization_header
         )
         self.assertEqual(response.status_code, status_code)
         return response
@@ -262,7 +274,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         }
 
         _ = self.client.post(
-            self.url, payload, format="json", **self.user_header
+            self.url, payload, format="json", **self.authorization_header
         )
 
         site_updated = Site.objects.get(id=20)
@@ -580,7 +592,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         }
 
         response = self.client.post(
-            self.url, payload, format="json", **self.user_header
+            self.url, payload, format="json", **self.authorization_header
         )
 
         site_updated = Site.objects.get(id=20)

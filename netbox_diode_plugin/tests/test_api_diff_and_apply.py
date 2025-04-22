@@ -7,23 +7,22 @@ import datetime
 import decimal
 import logging
 from uuid import uuid4
-
+from unittest import mock
 import netaddr
 from circuits.models import Circuit
 from core.models import ObjectType
 from dcim.models import Device, Interface, Site
-from django.contrib.auth import get_user_model
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
 from ipam.models import IPAddress, VLANGroup
 from rest_framework import status
-from users.models import Token
 from utilities.testing import APITestCase
 from virtualization.models import VMInterface
 
-logger = logging.getLogger(__name__)
+from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
+from netbox_diode_plugin.plugin_config import get_diode_user
 
-User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 class GenerateDiffAndApplyTestCase(APITestCase):
@@ -33,11 +32,15 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         """Set up the test case."""
         self.diff_url = "/netbox/api/plugins/diode/generate-diff/"
         self.apply_url = "/netbox/api/plugins/diode/apply-change-set/"
-        self.user = User.objects.create_user(username="testcommonuser")
-        self.user_token = Token.objects.create(user=self.user)
-        self.user_header = {"HTTP_AUTHORIZATION": f"Token {self.user_token.key}"}
-
-        self.add_permissions("netbox_diode_plugin.add_diode")
+        
+        self.authorization_header = {"Authorization": "Bearer mocked_oauth_token"}
+        self.diode_user = get_diode_user()
+        self.auth_patcher = mock.patch.object(
+            DiodeOAuth2Authentication,
+            'authenticate',
+            return_value=(self.diode_user, None)
+        )
+        self.auth_patcher.start()
 
         self.object_type = ObjectType.objects.get_for_model(Site)
 
@@ -86,6 +89,11 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.decimal_field.object_types.set([self.object_type])
         self.decimal_field.save()
 
+    def tearDown(self):
+        """Clean up after tests."""
+        self.auth_patcher.stop()
+        super().tearDown()
+    
     def test_generate_diff_and_apply_create_interface_with_tags(self):
         """Test generate diff and apply create interface with tags."""
         interface_uuid = str(uuid4())
@@ -525,7 +533,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             }
         }
         response1 = self.client.post(
-            self.diff_url, data=payload, format="json", **self.user_header
+            self.diff_url, data=payload, format="json", **self.authorization_header
         )
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         diff = response1.json().get("change_set", {})
@@ -587,7 +595,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             },
         }
         response1 = self.client.post(
-            self.diff_url, data=payload, format="json", **self.user_header
+            self.diff_url, data=payload, format="json", **self.authorization_header
         )
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         diff = response1.json().get("change_set", {})
@@ -611,14 +619,14 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             }
         }
         response1 = self.client.post(
-            self.diff_url, data=payload, format="json", **self.user_header
+            self.diff_url, data=payload, format="json", **self.authorization_header
         )
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
 
         diff = response1.json().get("change_set", {})
 
         response2 = self.client.post(
-            self.apply_url, data=diff, format="json", **self.user_header
+            self.apply_url, data=diff, format="json", **self.authorization_header
         )
         self.assertEqual(response2.status_code, status.HTTP_400_BAD_REQUEST)
 
@@ -739,7 +747,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         }
 
         response1 = self.client.post(
-            self.diff_url, data=payload, format="json", **self.user_header
+            self.diff_url, data=payload, format="json", **self.authorization_header
         )
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         diff = response1.json().get("change_set", {})
@@ -758,7 +766,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         }
 
         response1 = self.client.post(
-            self.diff_url, data=payload, format="json", **self.user_header
+            self.diff_url, data=payload, format="json", **self.authorization_header
         )
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         diff = response1.json().get("change_set", {})
@@ -916,13 +924,13 @@ class GenerateDiffAndApplyTestCase(APITestCase):
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
         response1 = self.client.post(
-            self.diff_url, data=payload, format="json", **self.user_header
+            self.diff_url, data=payload, format="json", **self.authorization_header
         )
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         diff = response1.json().get("change_set", {})
 
         response2 = self.client.post(
-            self.apply_url, data=diff, format="json", **self.user_header
+            self.apply_url, data=diff, format="json", **self.authorization_header
         )
         self.assertEqual(response2.status_code, status.HTTP_200_OK)
         return (response1, response2)
