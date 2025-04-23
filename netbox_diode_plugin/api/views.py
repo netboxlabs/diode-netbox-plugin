@@ -111,7 +111,8 @@ class GenerateDiffView(views.APIView):
                 branch = Branch.objects.get(id=branch_id)
                 result.branch = {"id": branch.id, "name": branch.name}
             except Branch.DoesNotExist:
-                logger.warning(f"Branch with ID {branch_id} does not exist")
+                sanitized_branch_id = branch_id.replace('\n', '').replace('\r', '')
+                logger.warning(f"Branch with ID {sanitized_branch_id} does not exist")
 
         return Response(result.to_dict(), status=result.get_status_code())
 
