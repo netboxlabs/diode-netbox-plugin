@@ -1,5 +1,5 @@
 # !/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Models."""
 from urllib.parse import urlparse
 
@@ -18,22 +18,6 @@ def diode_target_validator(target):
             raise ValueError("target should start with grpc:// or grpcs://")
     except ValueError as exc:
         raise ValidationError(exc)
-
-
-class Diode(models.Model):
-    """Dummy model used to generate permissions for Diode NetBox Plugin. Does not exist in the database."""
-
-    class Meta:
-        """Meta class."""
-
-        managed = False
-
-        default_permissions = ()
-
-        permissions = (
-            ("view_diode", "Can view Diode"),
-            ("add_diode", "Can apply change sets from Diode"),
-        )
 
 
 class Setting(NetBoxModel):

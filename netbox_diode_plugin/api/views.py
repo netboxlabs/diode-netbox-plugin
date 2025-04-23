@@ -1,7 +1,6 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - API Views."""
-import json
 import logging
 import re
 
@@ -9,13 +8,23 @@ from django.apps import apps
 from django.db import transaction
 from rest_framework import views
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from netbox_diode_plugin.api.applier import apply_changeset
-from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeSetException, ChangeSetResult
+from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
+from netbox_diode_plugin.api.common import (
+    Change,
+    ChangeSet,
+    ChangeSetException,
+    ChangeSetResult,
+)
 from netbox_diode_plugin.api.differ import generate_changeset
-from netbox_diode_plugin.api.permissions import IsDiodeWriter
+from netbox_diode_plugin.api.permissions import (
+    SCOPE_NETBOX_READ,
+    SCOPE_NETBOX_WRITE,
+    IsAuthenticated,
+    require_scopes,
+)
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -36,11 +45,13 @@ def get_valid_entity_keys(model_name):
 
     This can be snake or lowerCamel case (both are valid for protoJSON)
     """
-    s = re.sub(r'([A-Z0-9]{2,})([A-Z])([a-z])', r'\1_\2\3', model_name)
-    s = re.sub(r'([a-z])([A-Z])', r'\1_\2', s)
-    snake = re.sub(r'_+', '_', s.lower()) # snake
-    upperCamel = ''.join([word.capitalize() for word in snake.split("_")]) # upperCamelCase
-    lowerCamel = upperCamel[0].lower() + upperCamel[1:] # lowerCamelCase
+    s = re.sub(r"([A-Z0-9]{2,})([A-Z])([a-z])", r"\1_\2\3", model_name)
+    s = re.sub(r"([a-z])([A-Z])", r"\1_\2", s)
+    snake = re.sub(r"_+", "_", s.lower())  # snake
+    upperCamel = "".join(
+        [word.capitalize() for word in snake.split("_")]
+    )  # upperCamelCase
+    lowerCamel = upperCamel[0].lower() + upperCamel[1:]  # lowerCamelCase
 
     return (snake, lowerCamel)
 
@@ -48,7 +59,8 @@ def get_valid_entity_keys(model_name):
 class GenerateDiffView(views.APIView):
     """GenerateDiff view."""
 
-    permission_classes = [IsAuthenticated, IsDiodeWriter]
+    authentication_classes = [DiodeOAuth2Authentication]
+    permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_READ)]
 
     def post(self, request, *args, **kwargs):
         """Generate diff for entity."""
@@ -56,6 +68,7 @@ class GenerateDiffView(views.APIView):
             return self._post(request, *args, **kwargs)
         except Exception:
             import traceback
+
             traceback.print_exc()
             raise
 
@@ -106,7 +119,8 @@ class GenerateDiffView(views.APIView):
 class ApplyChangeSetView(views.APIView):
     """ApplyChangeSet view."""
 
-    permission_classes = [IsAuthenticated, IsDiodeWriter]
+    authentication_classes = [DiodeOAuth2Authentication]
+    permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_WRITE)]
 
     def post(self, request, *args, **kwargs):
         """Apply change set for entity."""
@@ -122,20 +136,21 @@ class ApplyChangeSetView(views.APIView):
         data = request.data.copy()
 
         changes = []
-        if 'changes' in data:
+        if "changes" in data:
             changes = [
                 Change(
-                    change_type=change.get('change_type'),
-                    object_type=change.get('object_type'),
-                    object_id=change.get('object_id'),
-                    ref_id=change.get('ref_id'),
-                    data=change.get('data'),
-                    before=change.get('before'),
-                    new_refs=change.get('new_refs', []),
-                ) for change in data['changes']
+                    change_type=change.get("change_type"),
+                    object_type=change.get("object_type"),
+                    object_id=change.get("object_id"),
+                    ref_id=change.get("ref_id"),
+                    data=change.get("data"),
+                    before=change.get("before"),
+                    new_refs=change.get("new_refs", []),
+                )
+                for change in data["changes"]
             ]
         change_set = ChangeSet(
-            id=data.get('id'),
+            id=data.get("id"),
             changes=changes,
         )
         try:

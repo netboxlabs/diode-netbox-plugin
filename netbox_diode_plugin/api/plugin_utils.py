@@ -3,17 +3,17 @@
 # Generated code. DO NOT EDIT.
 # Timestamp: 2025-04-13 16:50:25Z
 
-from dataclasses import dataclass
 import datetime
 import decimal
-from functools import lru_cache
 import logging
+from dataclasses import dataclass
+from functools import lru_cache
 from typing import Type
 
+import netaddr
 from core.models import ObjectType as NetBoxType
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
-import netaddr
 from rest_framework.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)

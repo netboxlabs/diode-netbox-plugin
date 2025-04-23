@@ -1,20 +1,21 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Tests."""
 
 import logging
+from types import SimpleNamespace
+from unittest import mock
 from uuid import uuid4
 
 from core.models import ObjectType
 from dcim.models import Manufacturer, RackType, Site
-from django.contrib.auth import get_user_model
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
 from rest_framework import status
-from users.models import Token
 from utilities.testing import APITestCase
 
-User = get_user_model()
+from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
+from netbox_diode_plugin.plugin_config import get_diode_user
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +30,20 @@ class GenerateDiffTestCase(APITestCase):
         """Set up the test case."""
         self.url = "/netbox/api/plugins/diode/generate-diff/"
 
-        self.user = User.objects.create_user(username="testcommonuser")
-        self.add_permissions("netbox_diode_plugin.add_diode")
-        self.user_token = Token.objects.create(user=self.user)
+        self.authorization_header = {"HTTP_AUTHORIZATION": "Bearer mocked_oauth_token"}
+        self.diode_user = SimpleNamespace(
+            user = get_diode_user(),
+            token_scopes=["netbox:read", "netbox:write"],
+            token_data={"scope": "netbox:read netbox:write"}
+        )
 
-        self.user_header = {"HTTP_AUTHORIZATION": f"Token {self.user_token.key}"}
+        self.introspect_patcher = mock.patch.object(
+            DiodeOAuth2Authentication,
+            '_introspect_token',
+            return_value=self.diode_user
+        )
+        self.introspect_patcher.start()
+
         self.object_type = ObjectType.objects.get_for_model(Site)
 
         self.uuid_field = CustomField.objects.create(
@@ -80,6 +90,11 @@ class GenerateDiffTestCase(APITestCase):
             manufacturer=self.manufacturer,
         )
         self.rack_type.save()
+
+    def tearDown(self):
+        """Clean up after tests."""
+        self.introspect_patcher.stop()
+        super().tearDown()
 
     def test_generate_diff_create_site(self):
         """Test generate diff create site."""
@@ -366,7 +381,7 @@ class GenerateDiffTestCase(APITestCase):
     def send_request(self, payload, status_code=status.HTTP_200_OK):
         """Post the payload to the url and return the response."""
         response = self.client.post(
-            self.url, data=payload, format="json", **self.user_header
+            self.url, data=payload, format="json", **self.authorization_header
         )
         self.assertEqual(response.status_code, status_code)
         return response

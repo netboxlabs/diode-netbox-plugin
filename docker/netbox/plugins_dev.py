@@ -11,8 +11,10 @@ PLUGINS = [
 
 PLUGINS_CONFIG = {
     "netbox_diode_plugin": {
-        "auto_provision_users": True,
         # Diode gRPC target for communication with Diode server
         "diode_target_override": "grpc://host.docker.internal:8080/diode",
+
+        # Username associated with changes applied via plugin
+        "diode_username": "diode",
     }
 }

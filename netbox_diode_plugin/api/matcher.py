@@ -1,16 +1,13 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - API - Object matching utilities."""
 
-import copy
 import logging
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from typing import Type
 
 import netaddr
-from core.models import ObjectType as NetBoxType
-from django.conf import settings
 from django.contrib.contenttypes.fields import ContentType
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
@@ -20,7 +17,7 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 from extras.models.customfields import CustomField
 
-from .common import _TRACE, AutoSlug, UnresolvedReference
+from .common import _TRACE, UnresolvedReference
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model
 
 logger = logging.getLogger(__name__)

@@ -1,31 +1,22 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Tests."""
 
 import uuid
+from types import SimpleNamespace
+from unittest import mock
 
-from dcim.models import (
-    Device,
-    DeviceRole,
-    DeviceType,
-    Interface,
-    Manufacturer,
-    Rack,
-    Site,
-)
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Rack, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from ipam.models import ASN, RIR, IPAddress, Prefix
 from netaddr import IPNetwork
 from rest_framework import status
-from users.models import Token
 from utilities.testing import APITestCase
-from virtualization.models import (
-    Cluster,
-    ClusterType,
-    VirtualMachine,
-    VMInterface,
-)
+from virtualization.models import Cluster, ClusterType, VirtualMachine
+
+from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
+from netbox_diode_plugin.plugin_config import get_diode_user
 
 User = get_user_model()
 
@@ -37,11 +28,19 @@ class BaseApplyChangeSet(APITestCase):
 
     def setUp(self):
         """Set up test."""
-        self.user = User.objects.create_user(username="testcommonuser")
-        self.add_permissions("netbox_diode_plugin.add_diode")
-        self.user_token = Token.objects.create(user=self.user)
+        self.authorization_header = {"HTTP_AUTHORIZATION": "Bearer mocked_oauth_token"}
+        self.diode_user = SimpleNamespace(
+            user = get_diode_user(),
+            token_scopes=["netbox:read", "netbox:write"],
+            token_data={"scope": "netbox:read netbox:write"}
+        )
 
-        self.user_header = {"HTTP_AUTHORIZATION": f"Token {self.user_token.key}"}
+        self.introspect_patcher = mock.patch.object(
+            DiodeOAuth2Authentication,
+            '_introspect_token',
+            return_value=self.diode_user
+        )
+        self.introspect_patcher.start()
 
         rir = RIR.objects.create(name="RFC 6996", is_private=True)
         self.asns = [ASN(asn=65000 + i, rir=rir) for i in range(8)]
@@ -165,10 +164,18 @@ class BaseApplyChangeSet(APITestCase):
 
         self.url = "/netbox/api/plugins/diode/apply-change-set/"
 
+    def tearDown(self):
+        """Clean up after tests."""
+        self.introspect_patcher.stop()
+        super().tearDown()
+
     def send_request(self, payload, status_code=status.HTTP_200_OK):
         """Post the payload to the url and return the response."""
         response = self.client.post(
-            self.url, data=payload, format="json", **self.user_header
+            self.url,
+            data=payload,
+            format="json",
+            **self.authorization_header
         )
         self.assertEqual(response.status_code, status_code)
         return response
@@ -262,7 +269,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         }
 
         _ = self.client.post(
-            self.url, payload, format="json", **self.user_header
+            self.url, payload, format="json", **self.authorization_header
         )
 
         site_updated = Site.objects.get(id=20)
@@ -580,7 +587,7 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         }
 
         response = self.client.post(
-            self.url, payload, format="json", **self.user_header
+            self.url, payload, format="json", **self.authorization_header
         )
 
         site_updated = Site.objects.get(id=20)
