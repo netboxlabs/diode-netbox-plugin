@@ -48,11 +48,6 @@ def get_diode_auth_introspect_url():
 def get_diode_user():
     """Returns the Diode user."""
     diode_username = get_plugin_config("netbox_diode_plugin", "diode_username")
-    diode_username_override = get_plugin_config(
-        "netbox_diode_plugin", "diode_username_override"
-    )
-
-    diode_username = diode_username_override or diode_username
 
     try:
         diode_user = User.objects.get(username=diode_username)
