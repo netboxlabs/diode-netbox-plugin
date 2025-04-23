@@ -216,7 +216,10 @@ def _ensure_snake_case(proto_json: dict, object_type: str) -> dict:
             out[snake_key] = v
         else:
             # error?
-            logger.warning(f"Unknown field {k}/{snake_key} is not legal for {object_type}, skipping...")
+            sanitized_k = k.replace('\n', '').replace('\r', '')
+            sanitized_snake_key = snake_key.replace('\n', '').replace('\r', '')
+            sanitized_object_type = object_type.replace('\n', '').replace('\r', '')
+            logger.warning(f"Unknown field {sanitized_k}/{sanitized_snake_key} is not legal for {sanitized_object_type}, skipping...")
     return out
 
 
