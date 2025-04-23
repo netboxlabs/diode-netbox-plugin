@@ -17,7 +17,7 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 from extras.models.customfields import CustomField
 
-from .common import _TRACE, UnresolvedReference
+from .common import UnresolvedReference
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model
 
 logger = logging.getLogger(__name__)
@@ -299,7 +299,6 @@ class ObjectMatchCriteria:
     def _check_condition_1(self, data, condition) -> bool:
         if condition is None:
             return True
-        if _TRACE: logger.debug(f"checking condition {condition}") # noqa: E701
         if isinstance(condition, tuple):
             return self._check_simple_condition(data, condition)
 
@@ -310,7 +309,6 @@ class ObjectMatchCriteria:
                     result = False
                     break
             if condition.negated:
-                if _TRACE: logger.debug(f"negated condition {condition} => {not result}") # noqa: E701
                 return not result
             return result
         # TODO handle OR ?
@@ -322,15 +320,12 @@ class ObjectMatchCriteria:
             return True
 
         k, v = condition
-        if _TRACE: logger.debug(f"checking simple condition {k} => {v}") # noqa: E701
         result = False
         if k.endswith("__isnull"):
             k = k[:-8]
             is_null = k not in data or data[k] is None
-            if _TRACE: logger.debug(f"checking isnull {k}? ({is_null}) want {v}") # noqa: E701
             result = is_null == v
         else:
-            if _TRACE: logger.debug(f"checking equality {k} => {data.get(k)} == {v}") # noqa: E701
             result = k in data and data[k] == v
 
         return result
@@ -346,7 +341,6 @@ class ObjectMatchCriteria:
     def _build_fields_queryset(self, data) -> models.QuerySet: # noqa: C901
         """Builds a queryset for a simple set-of-fields constraint."""
         if not self._check_condition(data):
-            if _TRACE: logger.debug(f"  * cannot build fields queryset for {self.name} (condition not met)") # noqa: E701
             return None
 
         data = self._prepare_data(data)
@@ -354,14 +348,11 @@ class ObjectMatchCriteria:
         for field_name in self.fields:
             field = self.model_class._meta.get_field(field_name)
             if field_name not in data:
-                if _TRACE: logger.debug(f"  * cannot build fields queryset for {self.name} (missing field {field_name})") # noqa: E701
                 return None  # cannot match, missing field data
             lookup_value = data.get(field_name)
             if isinstance(lookup_value, UnresolvedReference):
-                if _TRACE: logger.debug(f"  * cannot build fields queryset for {self.name} ({field_name} is unresolved reference)") # noqa: E701
                 return None  # cannot match, missing field data
             if isinstance(lookup_value, dict):
-                if _TRACE: logger.debug(f"  * cannot build fields queryset for {self.name} ({field_name} is dict)") # noqa: E701
                 return None  # cannot match, missing field data
             lookup_kwargs[field.name] = lookup_value
 
@@ -386,10 +377,8 @@ class ObjectMatchCriteria:
             refs = [F(ref) for ref in _get_refs(expr)]
             for ref in refs:
                 if ref not in replacements:
-                    if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (missing field {ref})") # noqa: E701
                     return None  # cannot match, missing field data
                 if isinstance(replacements[ref], UnresolvedReference):
-                    if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} ({ref} is unresolved reference)") # noqa: E701
                     return None  # cannot match, missing field data
 
             rhs = expr.replace_expressions(replacements)
@@ -497,11 +486,9 @@ class GlobalIPNetworkIPMatcher:
     def build_queryset(self, data: dict) -> models.QuerySet:
         """Build a queryset for the custom field."""
         if not self.has_required_fields(data):
-            if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (missing field {self.ip_field})") # noqa: E701
             return None
 
         if not self._check_condition(data):
-            if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (condition not met)") # noqa: E701
             return None
 
         filter = {
@@ -510,7 +497,6 @@ class GlobalIPNetworkIPMatcher:
         for field in self.ip_fields:
             value = self.ip_value(data, field)
             if value is None:
-                if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (ip value is None)") # noqa: E701
                 return None
             filter[f'{field}__net_host'] = value
 
@@ -562,24 +548,20 @@ class VRFIPNetworkIPMatcher:
     def build_queryset(self, data: dict) -> models.QuerySet:
         """Build a queryset for the custom field."""
         if not self.has_required_fields(data):
-            if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (missing field {self.ip_field})") # noqa: E701
             return None
 
         if not self._check_condition(data):
-            if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (condition not met)") # noqa: E701
             return None
 
         filter = {}
         for field in self.ip_fields:
             value = self.ip_value(data, field)
             if value is None:
-                if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} (ip value is None)") # noqa: E701
                 return None
             filter[f'{field}__net_host'] = value
 
         vrf_id = data[self.vrf_field]
         if isinstance(vrf_id, UnresolvedReference):
-            if _TRACE: logger.debug(f"  * cannot build expr queryset for {self.name} ({self.vrf_field} is unresolved reference)") # noqa: E701
             return None
         filter[f'{self.vrf_field}'] = vrf_id
 
@@ -794,11 +776,7 @@ def fingerprints(data: dict, object_type: str) -> list[str]:
         fp = matcher.fingerprint(data)
         if fp is not None:
             fps.append(fp)
-            if _TRACE: logger.debug(f"  ** matcher {matcher.name} gave fingerprint {fp}") # noqa: E701
-        else:
-            if _TRACE: logger.debug(f"  ** skipped matcher {matcher.name}") # noqa: E701
     fp = _fingerprint_all(data)
-    if _TRACE: logger.debug(f"  ** matcher _fingerprint_all gave fingerprint {fp}") # noqa: E701
     fps.append(fp)
     return fps
 
@@ -811,21 +789,14 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
 
     Returns the object if found, otherwise None.
     """
-    if _TRACE: logger.debug(f"resolving {data}") # noqa: E701
     model_class = get_object_type_model(object_type)
     for matcher in get_model_matchers(model_class):
         if not matcher.has_required_fields(data):
-            if _TRACE: logger.debug(f"  * skipped matcher {matcher.name} (missing fields)") # noqa: E701
             continue
         q = matcher.build_queryset(data)
         if q is None:
-            if _TRACE: logger.debug(f"  * skipped matcher {matcher.name} (no queryset)") # noqa: E701
             continue
-        if _TRACE: logger.debug(f"  * trying query {q.query}") # noqa: E701
         existing = q.order_by('pk').first()
         if existing is not None:
-            if _TRACE: logger.debug(f"      -> Found object {existing} via {matcher.name}") # noqa: E701
             return existing
-        if _TRACE: logger.debug(f"      -> No object found for matcher {matcher.name}") # noqa: E701
-    if _TRACE: logger.debug("  * No matchers found an existing object") # noqa: E701
     return None

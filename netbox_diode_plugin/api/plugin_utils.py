@@ -1209,6 +1209,7 @@ def apply_format_transformations(data: dict, object_type: str):
         except ValidationError:
             raise
         except ValueError as e:
-            raise ValidationError(f'Invalid value {val} for field {key} in {object_type}: {e}')
+            logger.error(f"Error processing field {key} in {object_type} with value {val}: {e}")
+            raise ValidationError(f"Invalid value for field {key} in {object_type}.")
         except Exception as e:
-            raise ValidationError(f'Invalid value {val} for field {key} in {object_type}')
+            raise ValidationError(f'Invalid value for field {key} in {object_type}')
