@@ -4112,6 +4112,36 @@
         }
     },
     {
+        "name": "dcim_rackrole_1",
+        "object_type": "dcim.rackrole",
+        "lookup": {"name": "Network Equipment"},
+        "create_expect": {
+            "name": "Network Equipment",
+            "description": "Dedicated racks for network infrastructure"
+        },
+        "create": {
+            "rack_role": {
+                "name": "Network Equipment",
+                "slug": "network-equipment",
+                "color": "0000ff",
+                "description": "Dedicated racks for network infrastructure",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update": {
+            "rack_role": {
+                "name": "Network Equipment",
+                "slug": "network-equipment",
+                "color": "0000ff",
+                "description": "Dedicated racks for network infrastructure Updated",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update_expect": {
+            "description": "Dedicated racks for network infrastructure Updated"
+        }
+    },
+    {
         "name": "dcim_racktype_1",
         "object_type": "dcim.racktype",
         "lookup": {
