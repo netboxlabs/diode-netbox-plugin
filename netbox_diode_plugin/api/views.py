@@ -20,8 +20,8 @@ from netbox_diode_plugin.api.common import (
 )
 from netbox_diode_plugin.api.differ import generate_changeset
 from netbox_diode_plugin.api.permissions import (
-    NETBOX_READ_SCOPE,
-    NETBOX_WRITE_SCOPE,
+    SCOPE_NETBOX_READ,
+    SCOPE_NETBOX_WRITE,
     IsAuthenticated,
     require_scopes,
 )
@@ -60,7 +60,7 @@ class GenerateDiffView(views.APIView):
     """GenerateDiff view."""
 
     authentication_classes = [DiodeOAuth2Authentication]
-    permission_classes = [IsAuthenticated, require_scopes(NETBOX_READ_SCOPE)]
+    permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_READ)]
 
     def post(self, request, *args, **kwargs):
         """Generate diff for entity."""
@@ -120,7 +120,7 @@ class ApplyChangeSetView(views.APIView):
     """ApplyChangeSet view."""
 
     authentication_classes = [DiodeOAuth2Authentication]
-    permission_classes = [IsAuthenticated, require_scopes(NETBOX_WRITE_SCOPE)]
+    permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_WRITE)]
 
     def post(self, request, *args, **kwargs):
         """Apply change set for entity."""

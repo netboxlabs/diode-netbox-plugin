@@ -4,8 +4,8 @@
 
 from rest_framework.permissions import BasePermission
 
-NETBOX_READ_SCOPE = "netbox:read"
-NETBOX_WRITE_SCOPE = "netbox:write"
+SCOPE_NETBOX_READ = "netbox:read"
+SCOPE_NETBOX_WRITE = "netbox:write"
 
 
 class IsAuthenticated(BasePermission):
@@ -21,7 +21,7 @@ class HasScope(BasePermission):
     Require one or more OAuth2 token scopes to access a view.
 
     Example usage:
-        permission_classes = [IsAuthenticated, HasScope("netbox:write")]
+        permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_WRITE)]
     """
 
     def __init__(self, *required_scopes):
