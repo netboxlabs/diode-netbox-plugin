@@ -4,13 +4,17 @@
 
 import hashlib
 import logging
+from types import SimpleNamespace
 
 import requests
 from django.core.cache import cache
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 
-from netbox_diode_plugin.plugin_config import get_diode_auth_introspect_url, get_diode_user
+from netbox_diode_plugin.plugin_config import (
+    get_diode_auth_introspect_url,
+    get_diode_user,
+)
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -30,7 +34,11 @@ class DiodeOAuth2Authentication(BaseAuthentication):
         if not diode_user:
             raise AuthenticationFailed("Invalid token")
 
-        return (diode_user, None)
+        request.user = diode_user.user
+        request.token_scopes = diode_user.token_scopes
+        request.token_data = diode_user.token_data
+
+        return (diode_user.user, None)
 
     def _introspect_token(self, token: str):
         """Introspect the token and return the client info."""
@@ -57,19 +65,11 @@ class DiodeOAuth2Authentication(BaseAuthentication):
             return None
 
         if data.get("active"):
-            # Check if token has the required scope
-            scopes = data.get("scope", "").split()
-            has_diode_to_netbox_scope = any(
-                scope.endswith(":diode:netbox") for scope in scopes
+            diode_user = SimpleNamespace(
+                user=get_diode_user(),
+                token_scopes=data.get("scope", "").split(),
+                token_data=data,
             )
-
-            if not has_diode_to_netbox_scope:
-                logger.warning(
-                    f"Diode Auth token with insufficient scopes: {scopes}"
-                )
-                return None
-
-            diode_user = get_diode_user()
 
             expires_in = (
                 data.get("exp") - data.get("iat")

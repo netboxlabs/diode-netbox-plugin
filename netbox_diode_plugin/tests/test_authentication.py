@@ -2,6 +2,7 @@
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Authentication Tests."""
 
+from types import SimpleNamespace
 from unittest import mock
 
 from django.core.cache import cache
@@ -20,7 +21,11 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         """Set up test case."""
         self.auth = DiodeOAuth2Authentication()
         self.factory = APIRequestFactory()
-        self.diode_user = get_diode_user()
+        self.diode_user = SimpleNamespace(
+            user = get_diode_user(),
+            token_scopes=["netbox:read", "netbox:write"],
+            token_data={"scope": "netbox:read netbox:write"}
+        )
         self.valid_token = "valid_oauth_token"
         self.invalid_token = "invalid_oauth_token"
         self.token_without_scope = "token_without_scope"
@@ -69,7 +74,7 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         request = self.factory.get('/', HTTP_AUTHORIZATION=f'Bearer {self.valid_token}')
 
         user, _ = self.auth.authenticate(request)
-        self.assertEqual(user, self.diode_user)
+        self.assertEqual(user, self.diode_user.user)
         self.cache_get_mock.assert_called_once()
 
     def test_authenticate_invalid_token(self):
@@ -82,25 +87,12 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         with self.assertRaises(AuthenticationFailed):
             self.auth.authenticate(request)
 
-    def test_authenticate_token_without_required_scope(self):
-        """Test authentication with token missing required scope."""
-        self.cache_get_mock.return_value = None
-        self.requests_mock.return_value.json.return_value = {
-            'active': True,
-            'scope': 'other:scope'
-        }
-
-        request = self.factory.get('/', HTTP_AUTHORIZATION=f'Bearer {self.token_without_scope}')
-
-        with self.assertRaises(AuthenticationFailed):
-            self.auth.authenticate(request)
-
     def test_authenticate_token_with_required_scope(self):
         """Test authentication with token having required scope."""
         self.cache_get_mock.return_value = None
         self.requests_mock.return_value.json.return_value = {
             'active': True,
-            'scope': 'default:diode:netbox',
+            'scope': 'netbox:read netbox:write',
             'exp': 1000,
             'iat': 500
         }
@@ -108,7 +100,7 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         request = self.factory.get('/', HTTP_AUTHORIZATION=f'Bearer {self.token_with_scope}')
 
         user, _ = self.auth.authenticate(request)
-        self.assertEqual(user, self.diode_user)
+        self.assertEqual(user, self.diode_user.user)
         self.cache_set_mock.assert_called_once()
 
     def test_authenticate_token_introspection_failure(self):
@@ -126,13 +118,13 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         self.cache_get_mock.return_value = None
         self.requests_mock.return_value.json.return_value = {
             'active': True,
-            'scope': 'default:diode:netbox'
+            'scope': 'netbox:read netbox:write'
         }
 
         request = self.factory.get('/', HTTP_AUTHORIZATION=f'Bearer {self.token_with_scope}')
 
         user, _ = self.auth.authenticate(request)
-        self.assertEqual(user, self.diode_user)
+        self.assertEqual(user, self.diode_user.user)
 
         self.cache_set_mock.assert_called_once()
 
@@ -146,7 +138,8 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         self.assertTrue(cache_key.startswith('diode:oauth2:introspect:'))
 
         # The cached value should be the diode user
-        self.assertEqual(call_args.args[1], self.diode_user)
+        self.assertEqual(call_args.args[1].user, self.diode_user.user)
+        self.assertEqual(call_args.args[1].token_scopes, self.diode_user.token_scopes)
 
         # The timeout should be 300 (default)
         self.assertEqual(call_args.kwargs['timeout'], 300)

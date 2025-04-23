@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - Tests."""
 
 import uuid
+from types import SimpleNamespace
 from unittest import mock
 
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Rack, Site
@@ -27,14 +28,19 @@ class BaseApplyChangeSet(APITestCase):
 
     def setUp(self):
         """Set up test."""
-        self.authorization_header = {"Authorization": "Bearer mocked_oauth_token"}
-        self.diode_user = get_diode_user()
-        self.auth_patcher = mock.patch.object(
-            DiodeOAuth2Authentication,
-            'authenticate',
-            return_value=(self.diode_user, None)
+        self.authorization_header = {"HTTP_AUTHORIZATION": "Bearer mocked_oauth_token"}
+        self.diode_user = SimpleNamespace(
+            user = get_diode_user(),
+            token_scopes=["netbox:read", "netbox:write"],
+            token_data={"scope": "netbox:read netbox:write"}
         )
-        self.auth_patcher.start()
+
+        self.introspect_patcher = mock.patch.object(
+            DiodeOAuth2Authentication,
+            '_introspect_token',
+            return_value=self.diode_user
+        )
+        self.introspect_patcher.start()
 
         rir = RIR.objects.create(name="RFC 6996", is_private=True)
         self.asns = [ASN(asn=65000 + i, rir=rir) for i in range(8)]
@@ -160,13 +166,16 @@ class BaseApplyChangeSet(APITestCase):
 
     def tearDown(self):
         """Clean up after tests."""
-        self.auth_patcher.stop()
+        self.introspect_patcher.stop()
         super().tearDown()
 
     def send_request(self, payload, status_code=status.HTTP_200_OK):
         """Post the payload to the url and return the response."""
         response = self.client.post(
-            self.url, data=payload, format="json", **self.authorization_header
+            self.url,
+            data=payload,
+            format="json",
+            **self.authorization_header
         )
         self.assertEqual(response.status_code, status_code)
         return response

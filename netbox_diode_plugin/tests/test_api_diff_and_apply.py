@@ -6,6 +6,7 @@ import copy
 import datetime
 import decimal
 import logging
+from types import SimpleNamespace
 from unittest import mock
 from uuid import uuid4
 
@@ -36,14 +37,19 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.diff_url = "/netbox/api/plugins/diode/generate-diff/"
         self.apply_url = "/netbox/api/plugins/diode/apply-change-set/"
 
-        self.authorization_header = {"Authorization": "Bearer mocked_oauth_token"}
-        self.diode_user = get_diode_user()
-        self.auth_patcher = mock.patch.object(
-            DiodeOAuth2Authentication,
-            'authenticate',
-            return_value=(self.diode_user, None)
+        self.authorization_header = {"HTTP_AUTHORIZATION": "Bearer mocked_oauth_token"}
+        self.diode_user = SimpleNamespace(
+            user = get_diode_user(),
+            token_scopes=["netbox:read", "netbox:write"],
+            token_data={"scope": "netbox:read netbox:write"}
         )
-        self.auth_patcher.start()
+
+        self.introspect_patcher = mock.patch.object(
+            DiodeOAuth2Authentication,
+            '_introspect_token',
+            return_value=self.diode_user
+        )
+        self.introspect_patcher.start()
 
         self.object_type = ObjectType.objects.get_for_model(Site)
 
@@ -94,7 +100,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
 
     def tearDown(self):
         """Clean up after tests."""
-        self.auth_patcher.stop()
+        self.introspect_patcher.stop()
         super().tearDown()
 
     def test_generate_diff_and_apply_create_interface_with_tags(self):

@@ -6,6 +6,7 @@ import inspect
 import json
 import logging
 import os
+from types import SimpleNamespace
 from unittest import mock
 
 from rest_framework import status
@@ -109,18 +110,23 @@ class ApplyUpdatesTestCase(APITestCase):
         """Set up the test case."""
         self.diff_url = "/netbox/api/plugins/diode/generate-diff/"
         self.apply_url = "/netbox/api/plugins/diode/apply-change-set/"
-        self.authorization_header = {"Authorization": "Bearer mocked_oauth_token"}
-        self.diode_user = get_diode_user()
-        self.auth_patcher = mock.patch.object(
-            DiodeOAuth2Authentication,
-            'authenticate',
-            return_value=(self.diode_user, None)
+        self.authorization_header = {"HTTP_AUTHORIZATION": "Bearer mocked_oauth_token"}
+        self.diode_user = SimpleNamespace(
+            user = get_diode_user(),
+            token_scopes=["netbox:read", "netbox:write"],
+            token_data={"scope": "netbox:read netbox:write"}
         )
-        self.auth_patcher.start()
+
+        self.introspect_patcher = mock.patch.object(
+            DiodeOAuth2Authentication,
+            '_introspect_token',
+            return_value=self.diode_user
+        )
+        self.introspect_patcher.start()
 
     def tearDown(self):
         """Clean up after tests."""
-        self.auth_patcher.stop()
+        self.introspect_patcher.stop()
         super().tearDown()
 
     def _follow_path(self, obj, path):
