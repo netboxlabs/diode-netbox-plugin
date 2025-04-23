@@ -16,27 +16,6 @@ class IsAuthenticated(BasePermission):
         return bool(getattr(request.user, "is_authenticated", False))
 
 
-class HasScope(BasePermission):
-    """
-    Require one or more OAuth2 token scopes to access a view.
-
-    Example usage:
-        permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_WRITE)]
-    """
-
-    def __init__(self, *required_scopes):
-        """Initialize the permission."""
-        self.required_scopes = required_scopes
-
-    def has_permission(self, request, view):
-        """Check if the request has the required scopes."""
-        token_scopes = getattr(request, "token_scopes", [])
-        if not token_scopes:
-            return False
-
-        return all(scope in token_scopes for scope in self.required_scopes)
-
-
 def require_scopes(*required_scopes):
     """Require one or more OAuth2 token scopes to access a view."""
 
