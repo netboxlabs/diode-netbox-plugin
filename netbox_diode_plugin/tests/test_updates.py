@@ -9,6 +9,7 @@ import os
 from types import SimpleNamespace
 from unittest import mock
 
+from django.db.models import QuerySet
 from rest_framework import status
 from utilities.testing import APITestCase
 
@@ -20,15 +21,24 @@ from netbox_diode_plugin.plugin_config import get_diode_user
 logger = logging.getLogger(__name__)
 
 
+def _harmonize_formats(data):
+    data = harmonize_formats(data)
+    return _tuples_to_lists(data)
+
+def _tuples_to_lists(data):
+    if isinstance(data, (tuple, list)):
+        return [_tuples_to_lists(d) for d in data]
+    if isinstance(data, dict):
+        return {k: _tuples_to_lists(v) for k, v in data.items()}
+    return data
+
 def load_test_cases(cls):
     """Class decorator to load test cases and create test methods."""
-    logger.error("**** Loading test cases")
+    logger.debug("Loading apply updates test cases")
     current_dir = os.path.dirname(os.path.abspath(__file__))
     test_data_path = os.path.join(current_dir, "test_updates_cases.json")
-    logger.error(f"**** Looking for test data at {test_data_path}")
 
     if not os.path.exists(test_data_path):
-        logger.error(f"**** Test data file not found at {test_data_path}")
         raise FileNotFoundError(f"Test data file not found at {test_data_path}")
 
     def _create_and_update_test_case(case):
@@ -92,7 +102,7 @@ def load_test_cases(cls):
         test_cases = json.load(f)
         for case in test_cases:
             t = _create_and_update_test_case(case)
-            logger.error(f"**** Creating test case {t.__name__}")
+            logger.debug(f"Creating test case {t.__name__}")
             setattr(cls, t.__name__, t)
 
     return cls
@@ -146,7 +156,9 @@ class ApplyUpdatesTestCase(APITestCase):
                         cur = cur()
                 except ValueError:
                     pass
-        return harmonize_formats(cur)
+            if isinstance(cur, QuerySet):
+                cur = list(cur)
+        return cur
 
     def _check_set_by(self, obj, path, value):
         key = path[-1][len("__by_"):]
@@ -158,11 +170,12 @@ class ApplyUpdatesTestCase(APITestCase):
         else:
             vals = {value}
 
-        cvals = {harmonize_formats(getattr(c, key)) for c in cur}
+        cvals = {_harmonize_formats(getattr(c, key)) for c in cur}
         self.assertEqual(cvals, vals)
 
     def _check_equals(self, obj, path, value):
         cur = self._follow_path(obj, path)
+        cur = _harmonize_formats(cur)
         self.assertEqual(cur, value)
 
     def _check_expect(self, obj, expect):

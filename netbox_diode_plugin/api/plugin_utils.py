@@ -1025,7 +1025,7 @@ def ip_network_defaulting(value: str) -> str:
 def collect_integer_pairs(value: list[int]) -> list[tuple[int, int]]:
     if len(value) % 2 != 0:
         raise ValueError('Array must have an even number of elements')
-    return [(value[i], value[i+1]) for i in range(0, len(value), 2)]
+    return sorted([(value[i], value[i+1]) for i in range(0, len(value), 2)])
 
 def for_all(transform):
     def wrapper(value):

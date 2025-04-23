@@ -110,7 +110,8 @@ def _pre_apply(model_class: models.Model, change: Change, created: dict):
     allowed_fields = legal_fields(model_class)
     for key in list(data.keys()):
         if key not in allowed_fields:
-            logger.warning(f"Field {key} is not in the diode data model, ignoring.")
+            if key != "id":
+                logger.warning(f"Field {key} is not in the diode data model, ignoring.")
             data.pop(key)
 
     return data

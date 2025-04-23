@@ -16,7 +16,7 @@ from django.utils.text import slugify
 from extras.models.customfields import CustomField
 from rest_framework import serializers
 
-from .common import NON_FIELD_ERRORS, AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats
+from .common import NON_FIELD_ERRORS, AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats, sort_ints_first
 from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -514,17 +514,20 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
     return resolved
 
 def _update_resolved_refs(data, new_refs):
-    for k, v in data.items():
+    for k, v in list(data.items()):
         if isinstance(v, UnresolvedReference) and v.uuid in new_refs:
             data[k] = new_refs[v.uuid]
         elif isinstance(v, (list, tuple)):
             new_items = []
+            has_refs = False
             for item in v:
                 if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
                     new_items.append(new_refs[item.uuid])
+                    has_refs = True
                 else:
                     new_items.append(item)
-            data[k] = sorted(new_items)
+            if has_refs:
+                data[k] = sort_ints_first(new_items)
         elif isinstance(v, dict):
             _update_resolved_refs(v, new_refs)
 

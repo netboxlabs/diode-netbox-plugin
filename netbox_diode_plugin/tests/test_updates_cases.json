@@ -1911,8 +1911,7 @@
         "create_expect": {
             "name": "GigabitEthernet1/0/1",
             "label": "Core Link 1",
-            "tagged_vlans.all.0.vid": 101,
-            "tagged_vlans.all.1.vid": 102
+            "tagged_vlans.all.__by_vid": [101, 102]
         },
         "create": {
             "interface": {
@@ -2168,7 +2167,7 @@
         },
         "update_expect": {
             "tags.all.__by_name": ["Tag 1", "Tag 2", "Tag 3"]
-       }
+        }
     },
     {
         "name": "dcim_interface_2",
@@ -2442,7 +2441,7 @@
         },
         "update_expect": {
             "tags.all.__by_name": ["Tag 1", "Tag 2", "Tag 3"]
-       }
+        }
     },
     {
         "name": "dcim_interface_3",
@@ -2688,7 +2687,7 @@
         },
         "update_expect": {
             "tags.all.__by_name": ["Tag 1", "Tag 2", "Tag 3"]
-       }
+        }
     },
     {
         "name": "vpn_l2vpn_1",
@@ -4946,6 +4945,7 @@
                     "slug": "dc-west",
                     "status": "active"
                 },
+                "vid_ranges": [101, 102, 99, 100],
                 "description": "Core network VLANs for data center infrastructure",
                 "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
             }    
@@ -4959,12 +4959,14 @@
                     "slug": "dc-west",
                     "status": "active"
                 },
+                "vid_ranges": [101, 102, 99, 100],
                 "description": "Core network VLANs for data center infrastructure Updated",
                 "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
             }    
         },
         "update_expect": {
-            "description": "Core network VLANs for data center infrastructure Updated"
+            "description": "Core network VLANs for data center infrastructure Updated",
+            "vid_ranges": [[99, 100], [101, 102]]
         }
     },
     {

@@ -19,6 +19,7 @@ from .common import (
     ChangeType,
     error_from_validation_error,
     harmonize_formats,
+    sort_ints_first,
 )
 from .plugin_utils import get_primary_value, legal_fields
 from .supported_models import extract_supported_models
@@ -251,6 +252,4 @@ def _merge_reference_list(prechange_list: list, postchange_list: list) -> list:
     """Merge reference lists rather than replacing the full value."""
     result = set(prechange_list)
     result.update(postchange_list)
-    return sorted(result, key=str)
-
-
+    return sort_ints_first(result)

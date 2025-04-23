@@ -283,3 +283,7 @@ def harmonize_formats(data):
         case _:
             logger.warning(f"Unknown type in harmonize_formats: {type(data)}")
             return data
+
+def sort_ints_first(data):
+  """Sort a mixed list of ints and other types, putting ints first."""
+  return sorted(data, key=lambda x: (not isinstance(x, int), x))
