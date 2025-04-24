@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - Tests."""
 
 import logging
+from collections import defaultdict
 from types import SimpleNamespace
 from unittest import mock
 from uuid import uuid4
@@ -377,6 +378,39 @@ class GenerateDiffTestCase(APITestCase):
         }
         _ = self.send_request(payload)
 
+    def test_generate_diff_dedupe_different_object_types(self):
+        """Test generate diff dedupe different object types with same values."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": "Cat8000V",
+                    "role": {"name": "undefined"},
+                    "site": {"name": "undefined"},
+                    "serial": "9OBXJHNNU5V",
+                    "status": "active",
+                    "platform": {"name": "ios", "manufacturer": {"name": "undefined"}},
+                    "device_type": {"model": "C8000V", "manufacturer": {"name": "undefined"}}
+                },
+            },
+        }
+        response = self.send_request(payload)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        cs = response.json().get("change_set", {})
+        self.assertIsNotNone(cs.get("id"))
+        changes = cs.get("changes", [])
+        self.assertEqual(len(changes), 6)
+        by_object_type = defaultdict(int)
+        for change in changes:
+            by_object_type[change.get("object_type")] += 1
+
+        self.assertEqual(by_object_type["dcim.device"], 1)
+        self.assertEqual(by_object_type["dcim.manufacturer"], 1)
+        self.assertEqual(by_object_type["dcim.platform"], 1)
+        self.assertEqual(by_object_type["dcim.devicetype"], 1)
+        self.assertEqual(by_object_type["dcim.site"], 1)
+        self.assertEqual(by_object_type["dcim.devicerole"], 1)
 
     def send_request(self, payload, status_code=status.HTTP_200_OK):
         """Post the payload to the url and return the response."""
