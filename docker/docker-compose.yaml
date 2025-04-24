@@ -27,6 +27,8 @@ services:
       - netbox-media-files:/opt/netbox/netbox/media:rw
       - netbox-reports-files:/opt/netbox/netbox/reports:rw
       - netbox-scripts-files:/opt/netbox/netbox/scripts:rw
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8080"
   
