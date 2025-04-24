@@ -11,6 +11,7 @@ from django.db.utils import IntegrityError
 from rest_framework.exceptions import ValidationError as ValidationError
 
 from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
+from .matcher import find_existing_object
 from .plugin_utils import get_object_type_model, legal_fields
 from .supported_models import get_serializer_for_model
 
@@ -58,8 +59,13 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
     change_type = change.change_type
     if change_type == ChangeType.CREATE.value:
         serializer = serializer_class(data=data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
-        instance = serializer.save()
+        try:
+            serializer.is_valid(raise_exception=True)
+            instance = serializer.save()
+        except ValidationError as e:
+            instance = find_existing_object(data, change.object_type)
+            if not instance:
+                raise e
         created[change.ref_id] = instance
 
     elif change_type == ChangeType.UPDATE.value:
