@@ -1062,3 +1062,46 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
         }
         _ = self.send_request(payload)
         self.assertEqual(VirtualMachine.objects.get(name="VM foobar", site_id=self.sites[0].id).cluster.scope, self.sites[0])
+
+    def test_apply_two_changes_that_create_the_same_object_return_200(self):
+        """Test apply two changes that create the same object return 200."""
+        site_name = uuid.uuid4()
+        payload1 = {
+            "id": str(uuid.uuid4()),
+            "changes": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.site",
+                    "object_id": None,
+                    "ref_id": "1",
+                    "data": {
+                        "name": f"Site {site_name}",
+                        "slug": f"site-{site_name}",
+                        "comments": "comment 1",
+                    },
+                },
+            ],
+        }
+        _ = self.send_request(payload1)
+
+        payload2 = {
+            "id": str(uuid.uuid4()),
+            "changes": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.site",
+                    "object_id": None,
+                    "ref_id": "1",
+                    "data": {
+                        "name": f"Site {site_name}",
+                        "slug": f"site-{site_name}",
+                        "comments": "comment 1",
+                    },
+                },
+            ],
+        }
+        _ = self.send_request(payload2)
