@@ -1,37 +1,23 @@
 # !/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Models."""
+from urllib.parse import urlparse
 
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.urls import reverse
 from netbox.models import NetBoxModel
 
-from netbox_diode_plugin.reconciler.sdk.client import parse_target
-
 
 def diode_target_validator(target):
     """Diode target validator."""
     try:
-        _, _, _ = parse_target(target)
+        parsed_target = urlparse(target)
+
+        if parsed_target.scheme not in ["grpc", "grpcs"]:
+            raise ValueError("target should start with grpc:// or grpcs://")
     except ValueError as exc:
         raise ValidationError(exc)
-
-
-class Diode(models.Model):
-    """Dummy model used to generate permissions for Diode NetBox Plugin. Does not exist in the database."""
-
-    class Meta:
-        """Meta class."""
-
-        managed = False
-
-        default_permissions = ()
-
-        permissions = (
-            ("view_diode", "Can view Diode"),
-            ("add_diode", "Can apply change sets from Diode"),
-        )
 
 
 class Setting(NetBoxModel):
