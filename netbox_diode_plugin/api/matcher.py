@@ -735,7 +735,7 @@ def _get_refs(expr) -> set[str]:
         logger.warning(f"Unhandled expression type for _get_refs: {type(expr)}")
     return refs
 
-def _fingerprint_all(data: dict) -> str:
+def _fingerprint_all(data: dict, object_type: str|None = None) -> str:
     """
     Returns a fingerprint of the data based on all fields.
 
@@ -745,7 +745,7 @@ def _fingerprint_all(data: dict) -> str:
     if data is None:
         return None
 
-    values = []
+    values = ["object_type", object_type]
     for k, v in sorted(data.items()):
         if k.startswith("_"):
             continue
@@ -776,7 +776,7 @@ def fingerprints(data: dict, object_type: str) -> list[str]:
         fp = matcher.fingerprint(data)
         if fp is not None:
             fps.append(fp)
-    fp = _fingerprint_all(data)
+    fp = _fingerprint_all(data, object_type)
     fps.append(fp)
     return fps
 
