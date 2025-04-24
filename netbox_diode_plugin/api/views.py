@@ -103,15 +103,15 @@ class GenerateDiffView(views.APIView):
             )
             return Response(result.to_dict(), status=result.get_status_code())
 
-        branch_id = request.headers.get("X-NetBox-Branch")
+        branch_schema_id = request.headers.get("X-NetBox-Branch")
 
-        # If branch ID is provided and branching plugin is installed, get branch name
-        if branch_id and Branch is not None:
+        # If branch schema ID is provided and branching plugin is installed, get branch name
+        if branch_schema_id and Branch is not None:
             try:
-                branch = Branch.objects.get(id=branch_id)
-                result.branch = {"id": branch.id, "name": branch.name}
+                branch = Branch.objects.get(schema_id=branch_schema_id)
+                result.change_set.branch = {"id": branch.schema_id, "name": branch.name}
             except Branch.DoesNotExist:
-                sanitized_branch_id = branch_id.replace('\n', '').replace('\r', '')
+                sanitized_branch_id = branch_schema_id.replace('\n', '').replace('\r', '')
                 logger.warning(f"Branch with ID {sanitized_branch_id} does not exist")
 
         return Response(result.to_dict(), status=result.get_status_code())
