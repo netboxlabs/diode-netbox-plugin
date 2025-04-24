@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin."""
 
 from netbox.plugins import PluginConfig
@@ -15,18 +15,13 @@ class NetBoxDiodePluginConfig(PluginConfig):
     description = "Diode plugin for NetBox."
     version = version_semver()
     base_url = "diode"
-    min_version = "3.7.2"
+    min_version = "4.2.3"
     default_settings = {
-        # Auto-provision users for Diode plugin
-        "auto_provision_users": False,
         # Default Diode gRPC target for communication with Diode server
         "diode_target": "grpc://localhost:8080/diode",
-        # User allowed for Diode to NetBox communication
-        "diode_to_netbox_username": "diode-to-netbox",
-        # User allowed for NetBox to Diode communication
-        "netbox_to_diode_username": "netbox-to-diode",
-        # User allowed for data ingestion
-        "diode_username": "diode-ingestion",
+
+        # Default username associated with changes applied via plugin
+        "diode_username": "diode",
     }
 
 

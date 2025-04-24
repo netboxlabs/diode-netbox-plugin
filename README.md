@@ -16,6 +16,7 @@ at [https://netboxlabs.com/blog/introducing-diode-streamlining-data-ingestion-in
 |:--------------:|:--------------:|
 |    >= 3.7.2    |     0.1.0      |
 |    >= 4.1.0    |     0.4.0      |
+|    >= 4.2.3    |     1.0.0      |
 
 ## Installation
 
@@ -46,31 +47,17 @@ Also in your `configuration.py` file, in order to customise the plugin settings,
 ```python
 PLUGINS_CONFIG = {
     "netbox_diode_plugin": {
-        # Auto-provision users for Diode plugin
-        "auto_provision_users": False,
-
         # Diode gRPC target for communication with Diode server
         "diode_target_override": "grpc://localhost:8080/diode",
 
-        # User allowed for Diode to NetBox communication
-        "diode_to_netbox_username": "diode-to-netbox",
-
-        # User allowed for NetBox to Diode communication
-        "netbox_to_diode_username": "netbox-to-diode",
-
-        # User allowed for data ingestion
-        "diode_username": "diode-ingestion",
+        # Username associated with changes applied via plugin
+        "diode_username": "diode",
     },
 }
 ```
 
 Note: Once you customise usernames with PLUGINS_CONFIG during first installation, you should not change or remove them
 later on. Doing so will cause the plugin to stop working properly.
-
-`auto_provision_users` is a boolean flag (default: `False`) that determines whether the plugin should automatically
-create the users during
-migration. If set to `False`, you will need to provision Diode users with their API keys manually via the plugin's setup
-page in the NetBox UI.
 
 Restart NetBox services to load the plugin:
 
@@ -89,28 +76,6 @@ cd /opt/netbox
 source venv/bin/activate
 ```
 
-Three API keys will be needed (these are random 40 character long alphanumeric strings). They can be generated and set
-to the appropriate environment variables with the following commands:
-
-```shell
-# API key for the Diode service to interact with NetBox
-export DIODE_TO_NETBOX_API_KEY=$(head -c20 </dev/urandom|xxd -p); env | grep DIODE_TO_NETBOX_API_KEY
-# API key for the NetBox service to interact with Diode
-export NETBOX_TO_DIODE_API_KEY=$(head -c20 </dev/urandom|xxd -p); env | grep NETBOX_TO_DIODE_API_KEY
-# API key for Diode SDKs to ingest data into Diode
-export DIODE_API_KEY=$(head -c20 </dev/urandom|xxd -p); env | grep DIODE_API_KEY
-```
-
-**Note:** store these API key strings in a safe place as they will be needed later to configure the Diode server.
-
-If you don't set these environment variables, the plugin will generate random API keys for you either during the
-migration process (with `auto_provision_users` set to `True`) or when you manually create the users in the plugin's
-setup page in the NetBox UI.
-
-It's important to note that environment variables with API keys should be populated in the Diode server's
-environment variables (see [docs](https://github.com/netboxlabs/diode/tree/develop/diode-server#running-the-diode-server)) 
-as well to ensure proper communication between the Diode SDK, Diode server and the NetBox plugin.
-
 Run migrations to create all necessary resources:
 
 ```shell
@@ -126,7 +91,7 @@ make docker-compose-netbox-plugin-test
 
 ## License
 
-Distributed under the PolyForm Shield License 1.0.0 License. See [LICENSE.md](./LICENSE.md) for more information.
+Distributed under the NetBox Limited Use License 1.0. See [LICENSE.md](./LICENSE.md) for more information.
 
 ## Required Notice
 

@@ -1,7 +1,7 @@
 name: diode-netbox-plugin
 services:
-  netbox:
-    image: netboxcommunity/netbox:v4.1-3.0.1-diode-netbox-plugin
+  netbox: &netbox
+    image: netboxcommunity/netbox:v4.2.3-3.1.1-diode-netbox-plugin
     build:
       context: .
       dockerfile: Dockerfile-diode-netbox-plugin
@@ -22,13 +22,32 @@ services:
       - ./netbox/nginx-unit.json:/opt/netbox/nginx-unit.json:z,ro
       - ../netbox_diode_plugin:/opt/netbox/netbox/netbox_diode_plugin:ro
       - ./netbox/launch-netbox.sh:/opt/netbox/launch-netbox.sh:z,ro
+      - ./netbox/plugins_dev.py:/etc/netbox/config/plugins.py:z,ro
       - ./coverage:/opt/netbox/netbox/coverage:z,rw
       - netbox-media-files:/opt/netbox/netbox/media:rw
       - netbox-reports-files:/opt/netbox/netbox/reports:rw
       - netbox-scripts-files:/opt/netbox/netbox/scripts:rw
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8080"
-
+  
+  netbox-worker:
+    <<: *netbox
+    depends_on:
+      netbox:
+        condition: service_healthy
+    command:
+      - /opt/netbox/venv/bin/python
+      - /opt/netbox/netbox/manage.py
+      - rqworker
+    healthcheck:
+      test: ps -aux | grep -v grep | grep -q rqworker || exit 1
+      start_period: 20s
+      timeout: 3s
+      interval: 15s
+    ports: []
+  
   # postgres
   netbox-postgres:
     image: docker.io/postgres:16-alpine

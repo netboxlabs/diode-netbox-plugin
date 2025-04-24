@@ -9,11 +9,15 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GH_TOKEN: ${{ secrets.ORB_CI_GH_TOKEN }}
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
   PYTHON_RUNTIME_VERSION: "3.11"
   APP_NAME: diode-netbox-plugin
-  PYTHON_PACKAGE_NAME: netboxlabs-diode-netbox-plugin
+  PYTHON_PACKAGE_NAME: netboxlabs_diode_netbox_plugin
+
+permissions:
+  id-token: write
+  contents: write
 
 jobs:
   get-python-package-name:
@@ -38,7 +42,7 @@ jobs:
         with:
           node-version: "lts/*"
       - name: Write package.json
-        uses: DamianReeves/write-file-action@master
+        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 # v1.3
         with:
           path: ./package.json
           write-mode: overwrite
@@ -52,7 +56,7 @@ jobs:
               }
             }
       - name: Write .releaserc.json
-        uses: DamianReeves/write-file-action@master
+        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 # v1.3
         with:
           path: ./.releaserc.json
           write-mode: overwrite
@@ -104,8 +108,10 @@ jobs:
         run: echo "::set-output name=short-sha::${GITHUB_SHA::7}"
       - name: Set release version
         id: release-version
+        env:
+          NEXT_RELEASE_VERSION: ${{ steps.get-next-version.outputs.new-release-version }}
         run: |
-          echo "::set-output name=release-version::`echo ${{ steps.get-next-version.outputs.new-release-version }} | sed 's/v//g'`"
+          echo "release-version=`echo $NEXT_RELEASE_VERSION | sed 's/v//g'`" >> $GITHUB_OUTPUT
     outputs:
       new-release-published: ${{ steps.get-next-version.outputs.new-release-published }}
       new-release-version: ${{ steps.release-version.outputs.release-version }}
@@ -119,16 +125,17 @@ jobs:
     if: needs.get-next-version.outputs.new-release-published == 'true'
     steps:
       - uses: actions/checkout@v4
-      - run: echo "The new release version is ${{ needs.get-next-version.outputs.new-release-version }} commit ${{ needs.get-next-version.outputs.short-sha }}"
+      - name: Confirm version
+        env:
+          NEXT_RELEASE_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
+          NEXT_RELEASE_SHORT_SHA: ${{ needs.get-next-version.outputs.short-sha }}
+        run: echo "The new release version is $NEXT_RELEASE_VERSION commit $NEXT_RELEASE_SHORT_SHA"
 
   build:
     name: Build
     needs: [ get-python-package-name, get-next-version ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    permissions:
-      id-token: write
-      contents: read
     env:
       BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
       BUILD_TRACK: release
@@ -165,7 +172,7 @@ jobs:
           retention-days: 30
           if-no-files-found: error
       - name: Publish release distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@67339c736fd9354cd4f8cb0b744f2b82a74b5c70 # v.1.12.3
         with:
           packages-dir: dist
 
@@ -180,7 +187,7 @@ jobs:
         with:
           node-version: "lts/*"
       - name: Write package.json
-        uses: DamianReeves/write-file-action@master
+        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 # v1.3
         with:
           path: ./package.json
           write-mode: overwrite
@@ -194,7 +201,7 @@ jobs:
               }
             }
       - name: Write .releaserc.json
-        uses: DamianReeves/write-file-action@master
+        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 # v1.3
         with:
           path: ./.releaserc.json
           write-mode: overwrite

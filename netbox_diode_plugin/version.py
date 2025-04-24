@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2024 NetBox Labs Inc
+# Copyright 2025 NetBox Labs, Inc.
 """Version stamp."""
 
 # These properties are injected at build time by the build process.

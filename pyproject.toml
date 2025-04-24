@@ -4,7 +4,7 @@ version = "0.0.1"  # Overwritten during the build process
 description = "NetBox Labs, Diode NetBox plugin"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "PolyForm Shield License 1.0.0" }
+license = { text = "NetBox Limited Use License 1.0" }
 authors = [
     {name = "NetBox Labs", email = "support@netboxlabs.com" }
 ]
@@ -25,10 +25,10 @@ classifiers = [
 ]
 
 dependencies = [
-    "Brotli==1.1.0",
-    "certifi==2024.7.4",
-    "grpcio==1.62.1",
-    "protobuf==5.28.1",
+    "Brotli>=1.1.0",
+    "certifi>=2024.7.4",
+    "grpcio>=1.68.1",
+    "protobuf>=5.28.1",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +56,8 @@ build-backend = "setuptools.build_meta"
 line-length = 140
 exclude = [
     "*_pb2*",
+    "netbox_diode_plugin/api/plugin_utils.py",
+    "docker/*",
 ]
 
 [tool.ruff.format]
