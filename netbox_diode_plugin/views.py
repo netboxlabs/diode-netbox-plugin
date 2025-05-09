@@ -19,6 +19,7 @@ from utilities.views import register_model_view
 from netbox_diode_plugin.forms import SettingsForm
 from netbox_diode_plugin.models import ClientCredentials, Setting
 from netbox_diode_plugin.tables import ClientCredentialsTable
+from netbox_diode_plugin.client import list_clients, create_client, delete_client
 
 User = get_user_model()
 
@@ -118,6 +119,21 @@ class SettingsEditView(generic.ObjectEditView):
         return super().post(request, *args, **kwargs)
 
 
+class GetReturnURLMixin:
+
+    def get_return_url(self, request):
+
+        # First, see if `return_url` was specified as a query parameter or form data. Use this URL only if it's
+        # considered safe.
+        return_url = request.GET.get("return_url") or request.POST.get("return_url")
+        if return_url and url_has_allowed_host_and_scheme(
+            return_url, allowed_hosts=None
+        ):
+            return return_url
+
+        return None
+
+
 class BaseDiodeView(View):
 
     def check_authentication(self, request):
@@ -131,17 +147,15 @@ class BaseDiodeView(View):
     def get_required_permission(self):
         return get_permission_for_model(self.model, "view")
 
-class ClientCredentialsListView(BaseDiodeView):
+class ClientCredentialListView(BaseDiodeView):
     table = ClientCredentialsTable
-    template_name = "diode/client_credentials_list.html"
+    template_name = "diode/client_credential_list.html"
     model = ClientCredentials
 
     def get_table_data(self):
-        data = []
-        total = 0
         try:
-            # make API call
-            pass
+            data = list_clients()
+            total = len(data)
         except Exception as e:
             logger.debug(f"Error loading client credentials error: {str(e)}")
             messages.error(self.request, str(e))
@@ -180,17 +194,65 @@ class ClientCredentialsListView(BaseDiodeView):
 
         return render(request, self.template_name, context)
 
-class ClientCredentialsDetailView(BaseDiodeView):
 
-    def get(self, request, client_credentials_id):
+class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
+    template_name = "diode/client_credential_delete.html"
+
+    def get(self, request, deviation_id):
         if ret := self.check_authentication(request):
             return ret
 
-        # make API call
-        data = None
+        data = get_deviation_from_id(request, deviation_id)
 
-        context = {
-            "object": data,
-        }
-        return render(request, "diode/client_credentials_detail.html", context)
+        form = self.init_branch_form(request, data)
 
+        return render(
+            request,
+            self.template_name,
+            {
+                "object": data,
+                "form": form,
+                "return_url": self.get_return_url(request),
+            },
+        )
+
+    def post(self, request, deviation_id):
+        if ret := self.check_authentication(request):
+            return ret
+
+        form = BranchSelectForm(request.POST)
+
+        if form.is_valid():
+            branch_id = None
+            if "branch" in form.cleaned_data:
+                branch_id = form.cleaned_data.get("branch")
+
+            try:
+                diode_api.deviation_rediff(deviation_id, branch_id)
+                messages.success(request, _("Deviation Rediffed"))
+            except ReconcilerClientError as e:
+                sanitized_deviation_id = deviation_id.replace("\n", "").replace(
+                    "\r", ""
+                )
+                logger.error(
+                    f"Error rediffing deviation: {sanitized_deviation_id} error: {str(e)}"
+                )
+                messages.error(request, str(e))
+
+            return redirect(
+                reverse(
+                    "plugins:netbox_assurance_plugin:deviation",
+                    kwargs={"deviation_id": deviation_id},
+                )
+            )
+
+        data = get_deviation_from_id(request, deviation_id)
+        return render(
+            request,
+            self.template_name,
+            {
+                "object": data,
+                "form": form,
+                "return_url": self.get_return_url(request),
+            },
+        )

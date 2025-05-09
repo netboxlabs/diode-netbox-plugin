@@ -9,10 +9,6 @@ from . import views
 urlpatterns = (
     path("settings/", views.SettingsView.as_view(), name="settings"),
     path("settings/edit/", views.SettingsEditView.as_view(), name="settings_edit"),
-    path("credentials/", views.ClientCredentialsListView.as_view(), name="client_credentials_list"),
-    path(
-        "credentials/<int:client_credentials_id>/", 
-        views.ClientCredentialsDetailView.as_view(),
-        name="client_credentials_detail"
-    ),
+    path("credentials/", views.ClientCredentialListView.as_view(), name="client_credential_list"),
+    path("credentials/delete/<str:client_credential_id>/", views.ClientCredentialDeleteView.as_view(), name="client_credential_delete"),
 )

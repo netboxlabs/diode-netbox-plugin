@@ -12,7 +12,7 @@ _diode_menu_items = (
         staff_only= True,
     ),
     PluginMenuItem(
-        link="plugins:netbox_diode_plugin:client_credentials_list",
+        link="plugins:netbox_diode_plugin:client_credential_list",
         link_text=_("Client Credentials"),
         staff_only= True,
     ),
