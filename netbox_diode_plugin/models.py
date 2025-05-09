@@ -40,4 +40,20 @@ class Setting(NetBoxModel):
         return reverse("plugins:netbox_diode_plugin:settings")
 
 
+class ClientCredentials(models.Model):
+    """
+    Dummy model to allow for permissions, saved filters, etc..
+    """
+
+    class Meta:
+        """Meta class."""
+
+        managed = False
+
+        default_permissions = ()
+
+        permissions = (
+            ("view_clientcredentials", "Can view Client Credentials"),
+            ("add_clientcredentials", "Can perform actions on Client Credentials"),
+        )
 

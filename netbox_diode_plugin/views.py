@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Views."""
+import logging
+
 from django.conf import settings as netbox_settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -10,13 +12,18 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import View
 from netbox.plugins import get_plugin_config
 from netbox.views import generic
+from utilities.htmx import htmx_partial
+from utilities.permissions import get_permission_for_model
 from utilities.views import register_model_view
 
 from netbox_diode_plugin.forms import SettingsForm
-from netbox_diode_plugin.models import Setting
+from netbox_diode_plugin.models import ClientCredentials, Setting
+from netbox_diode_plugin.tables import ClientCredentialsTable
 
 User = get_user_model()
 
+
+logger = logging.getLogger(__name__)
 
 def redirect_to_login(request):
     """Redirect to login view."""
@@ -109,3 +116,81 @@ class SettingsEditView(generic.ObjectEditView):
         kwargs["pk"] = settings.pk
 
         return super().post(request, *args, **kwargs)
+
+
+class BaseDiodeView(View):
+
+    def check_authentication(self, request):
+        if not request.user.is_authenticated or not request.user.is_staff:
+            next_url = request.path
+            if not url_has_allowed_host_and_scheme(next_url, allowed_hosts=None):
+                next_url = "/"
+
+            return redirect(f"{netbox_settings.LOGIN_URL}?next={next_url}")
+
+    def get_required_permission(self):
+        return get_permission_for_model(self.model, "view")
+
+class ClientCredentialsListView(BaseDiodeView):
+    table = ClientCredentialsTable
+    template_name = "diode/client_credentials_list.html"
+    model = ClientCredentials
+
+    def get_table_data(self):
+        data = []
+        total = 0
+        try:
+            # make API call
+            pass
+        except Exception as e:
+            logger.debug(f"Error loading client credentials error: {str(e)}")
+            messages.error(self.request, str(e))
+            data = []
+            total = 0
+
+        return total, data
+
+    def get(self, request):
+        if ret := self.check_authentication(request):
+            return ret
+
+        total, data = self.get_table_data()
+        table = self.table(data=data)  # Pass the data to the table
+
+        # If this is an HTMX request, return only the rendered table HTML
+        if htmx_partial(request):
+            if request.GET.get("embedded", False):
+                table.embedded = True
+                # Hide selection checkboxes
+                if "pk" in table.base_columns:
+                    table.columns.hide("pk")
+            return render(
+                request,
+                "htmx/table.html",
+                {
+                    "model": ClientCredentials,
+                    "table": table,
+                },
+            )
+
+        context = {
+            "model": ClientCredentials,
+            "table": table,
+        }
+
+        return render(request, self.template_name, context)
+
+class ClientCredentialsDetailView(BaseDiodeView):
+
+    def get(self, request, client_credentials_id):
+        if ret := self.check_authentication(request):
+            return ret
+
+        # make API call
+        data = None
+
+        context = {
+            "object": data,
+        }
+        return render(request, "diode/client_credentials_detail.html", context)
+
