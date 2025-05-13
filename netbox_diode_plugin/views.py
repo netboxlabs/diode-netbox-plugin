@@ -8,18 +8,21 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect, render
+from django.urls import reverse
+from django.utils.translation import gettext as _
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.generic import View
 from netbox.plugins import get_plugin_config
 from netbox.views import generic
 from utilities.htmx import htmx_partial
 from utilities.permissions import get_permission_for_model
+from utilities.forms import ConfirmationForm
 from utilities.views import register_model_view
 
 from netbox_diode_plugin.forms import SettingsForm
 from netbox_diode_plugin.models import ClientCredentials, Setting
 from netbox_diode_plugin.tables import ClientCredentialsTable
-from netbox_diode_plugin.client import list_clients, create_client, delete_client
+from netbox_diode_plugin.client import list_clients, get_client, delete_client
 
 User = get_user_model()
 
@@ -152,9 +155,9 @@ class ClientCredentialListView(BaseDiodeView):
     template_name = "diode/client_credential_list.html"
     model = ClientCredentials
 
-    def get_table_data(self):
+    def get_table_data(self, request):
         try:
-            data = list_clients()
+            data = list_clients(request)
             total = len(data)
         except Exception as e:
             logger.debug(f"Error loading client credentials error: {str(e)}")
@@ -168,7 +171,7 @@ class ClientCredentialListView(BaseDiodeView):
         if ret := self.check_authentication(request):
             return ret
 
-        total, data = self.get_table_data()
+        total, data = self.get_table_data(request)
         table = self.table(data=data)  # Pass the data to the table
 
         # If this is an HTMX request, return only the rendered table HTML
@@ -198,60 +201,51 @@ class ClientCredentialListView(BaseDiodeView):
 class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
     template_name = "diode/client_credential_delete.html"
 
-    def get(self, request, deviation_id):
+    def get(self, request, client_credential_id):
         if ret := self.check_authentication(request):
             return ret
 
-        data = get_deviation_from_id(request, deviation_id)
-
-        form = self.init_branch_form(request, data)
+        data = get_client(request, client_credential_id)
 
         return render(
             request,
             self.template_name,
             {
                 "object": data,
-                "form": form,
+                "object_type": "Client Credential",
                 "return_url": self.get_return_url(request),
             },
         )
 
-    def post(self, request, deviation_id):
+    def post(self, request, client_credential_id):
         if ret := self.check_authentication(request):
             return ret
 
-        form = BranchSelectForm(request.POST)
-
+        form = ConfirmationForm(initial=request.GET)
         if form.is_valid():
-            branch_id = None
-            if "branch" in form.cleaned_data:
-                branch_id = form.cleaned_data.get("branch")
 
             try:
-                diode_api.deviation_rediff(deviation_id, branch_id)
-                messages.success(request, _("Deviation Rediffed"))
-            except ReconcilerClientError as e:
-                sanitized_deviation_id = deviation_id.replace("\n", "").replace(
-                    "\r", ""
-                )
+                delete_client(request, client_credential_id)
+                messages.success(request, _("Client deleted successfully"))
+            except Exception as e:
                 logger.error(
-                    f"Error rediffing deviation: {sanitized_deviation_id} error: {str(e)}"
+                    f"Error deleting client: {client_credential_id} error: {str(e)}"
                 )
                 messages.error(request, str(e))
 
             return redirect(
                 reverse(
-                    "plugins:netbox_assurance_plugin:deviation",
-                    kwargs={"deviation_id": deviation_id},
+                    "plugins:netbox_diode_plugin:client_credential_list",
                 )
             )
 
-        data = get_deviation_from_id(request, deviation_id)
+        data = get_client(request, client_credential_id)
         return render(
             request,
             self.template_name,
             {
                 "object": data,
+                "object_type": "Client Credential",
                 "form": form,
                 "return_url": self.get_return_url(request),
             },

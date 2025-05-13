@@ -1,8 +1,8 @@
 
 
-def create_client(client_name, scope    ):
+def create_client(request, client_name, scope):
     ret = {
-        "client_name": "client_name",
+        "client_name": "client_name1",
         "client_id": "client_id",
         "client_secret": "client_secret",
         "scope": "scope",
@@ -11,11 +11,22 @@ def create_client(client_name, scope    ):
     return ret
 
 
-def delete_client(client_id):
+def delete_client(request, client_id):
     pass
 
 
-def list_clients():
+def get_client(request, client_id):
+    ret = {
+        "client_name": "client_name1",
+        "client_id": "client_id",
+        "client_secret": "client_secret",
+        "scope": "scope",
+        "created_at": "2025-03-14T15:16:17Z"
+    }
+    return ret
+
+
+def list_clients(request):
     ret = {
         "data": [
             {
