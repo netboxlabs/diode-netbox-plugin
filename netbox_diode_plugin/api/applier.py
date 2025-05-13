@@ -131,7 +131,7 @@ def _validate_change_set(change_set: ChangeSet):
     for change in change_set.changes:
         if change.object_id is None and change.ref_id is None:
             raise _err("Object ID or Ref ID must be provided", change.object_type, NON_FIELD_ERRORS)
-        if change.change_type not in ChangeType:
+        if change.change_type not in [ct.value for ct in ChangeType]:
             raise _err(f"Unsupported change type '{change.change_type}'", change.object_type, "change_type")
 
 def _err(message, object_name, field):
