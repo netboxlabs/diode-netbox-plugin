@@ -80,7 +80,7 @@ class ClientAPI:
                     "scope": scope,
                 }
                 response = requests.post(url, json=data, headers=headers)
-                if response.status_code != 200:
+                if response.status_code != 201:
                     raise ClientAPIError("Failed to create client", response.status_code)
                 return response.json()
             except ClientAPIError as e:
@@ -122,9 +122,7 @@ class ClientAPI:
                 url = self.base_url + f"/clients/{client_id}"
                 headers = {"Authorization": f"Bearer {token}"}
                 response = requests.delete(url, headers=headers)
-                if response.status_code == 401 or response.status_code == 403:
-                    raise ClientAPIError(f"Failed to delete client {client_id}", response.status_code)
-                if response.status_code != 200:
+                if response.status_code != 204:
                     raise ClientAPIError(f"Failed to delete client {client_id}", response.status_code)
                 return response.json()
             except ClientAPIError as e:
@@ -150,8 +148,6 @@ class ClientAPI:
                 if page_size:
                     params["page_size"] = page_size
                 response = requests.get(url, headers=headers, params=params)
-                if response.status_code == 401 or response.status_code == 403:
-                    raise ClientAPIError("Failed to get clients", response.status_code)
                 if response.status_code != 200:
                     raise ClientAPIError("Failed to get clients", response.status_code)
                 return response.json()

@@ -278,7 +278,7 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
         form = self.form_class(request.POST)
         if form.is_valid():
             try:
-                create_client(request, form.cleaned_data["client_name"], "diode-ingest")
+                create_client(request, form.cleaned_data["client_name"], "diode:ingest")
                 messages.success(request, _("Client created successfully"))
                 return redirect(
                     reverse(
