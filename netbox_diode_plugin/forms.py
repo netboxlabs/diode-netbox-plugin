@@ -50,5 +50,6 @@ class ClientCredentialForm(forms.Form):
     client_name = forms.CharField(
         label=_("Client Name"),
         required=True,
+        help_text=_("Create a unique Client ID/Client Secret pair as client authentication credentials for the Diode ingestion service."),
         widget=forms.TextInput(attrs={"class": "form-control"}),
     )
