@@ -3,14 +3,13 @@
 
 <form action="{{ form_url }}" method="post">
   {% csrf_token %}
+  <input type="hidden" name="confirm" value="true">
   <div class="modal-header">
     <h5 class="modal-title">{% trans "Confirm Deletion" %}</h5>
   </div>
   <div class="modal-body">
     <p>
-      {% blocktrans trimmed %}
         Are you sure you want to <strong class="text-danger">delete</strong> {{ object_type }} <strong>{{ object.client_name }}</strong>?
-      {% endblocktrans %}
     </p>
     {% render_form form %}
   </div>

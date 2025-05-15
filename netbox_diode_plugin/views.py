@@ -218,12 +218,12 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
         )
 
     def post(self, request, client_credential_id):
+        logger.info(f"Deleting client {client_credential_id}")
         if ret := self.check_authentication(request):
             return ret
 
-        form = ConfirmationForm(initial=request.GET)
+        form = ConfirmationForm(request.POST)
         if form.is_valid():
-
             try:
                 delete_client(request, client_credential_id)
                 messages.success(request, _("Client deleted successfully"))
@@ -233,11 +233,11 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
                 )
                 messages.error(request, str(e))
 
-            return redirect(
-                reverse(
-                    "plugins:netbox_diode_plugin:client_credential_list",
-                )
+        return redirect(
+            reverse(
+                "plugins:netbox_diode_plugin:client_credential_list",
             )
+        )
 
         data = get_client(request, client_credential_id)
         return render(
@@ -329,7 +329,9 @@ class ClientCredentialSecretView(BaseDiodeView):
             request,
             self.template_name,
             {
-                "client_secret": client_secret,
-                "client_name": client_name,
+                "object": {
+                    "client_name": client_name,
+                    "client_secret": client_secret,
+                }
             },
         )
