@@ -202,6 +202,7 @@ class ClientCredentialListView(BaseDiodeView):
 
 class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
     template_name = "diode/client_credential_delete.html"
+    default_return_url = "plugins:netbox_diode_plugin:client_credential_list"
 
     def get(self, request, client_credential_id):
         if ret := self.check_authentication(request):
@@ -215,7 +216,7 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
             {
                 "object": data,
                 "object_type": "Client Credential",
-                "return_url": self.get_return_url(request),
+                "return_url": self.get_return_url(request) or reverse(self.default_return_url),
             },
         )
 
@@ -239,18 +240,6 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
             reverse(
                 "plugins:netbox_diode_plugin:client_credential_list",
             )
-        )
-
-        data = get_client(request, client_credential_id)
-        return render(
-            request,
-            self.template_name,
-            {
-                "object": data,
-                "object_type": "Client Credential",
-                "form": form,
-                "return_url": self.get_return_url(request),
-            },
         )
 
 
