@@ -124,7 +124,7 @@ class ClientAPI:
                 response = requests.delete(url, headers=headers)
                 if response.status_code != 204:
                     raise ClientAPIError(f"Failed to delete client {client_id}", response.status_code)
-                return response.json()
+                return
             except ClientAPIError as e:
                 if e.is_auth_error() and attempt < self._max_auth_retries - 1:
                     logger.info(f"Retrying delete_client due to unauthenticated error, attempt {attempt + 1}")
