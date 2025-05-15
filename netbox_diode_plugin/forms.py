@@ -48,7 +48,7 @@ class SettingsForm(NetBoxModelForm):
 class ClientCredentialForm(forms.Form):
     """Form for adding client credentials."""
     client_name = forms.CharField(
-        label=_("Client Name"),
+        label=_("Client ID"),
         required=True,
         widget=forms.TextInput(attrs={"class": "form-control"}),
     )

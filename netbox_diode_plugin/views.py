@@ -278,11 +278,13 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
         form = self.form_class(request.POST)
         if form.is_valid():
             try:
-                create_client(request, form.cleaned_data["client_name"], "diode:ingest")
-                messages.success(request, _("Client created successfully"))
+                response = create_client(request, form.cleaned_data["client_name"], "diode:ingest")
+                # Store the client secret in session
+                request.session['client_secret'] = response.get('client_secret')
+                request.session['client_name'] = form.cleaned_data["client_name"]
                 return redirect(
                     reverse(
-                        "plugins:netbox_diode_plugin:client_credential_list",
+                        "plugins:netbox_diode_plugin:client_credential_secret",
                     )
                 )
             except Exception as e:
@@ -295,5 +297,39 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
             {
                 "form": form,
                 "return_url": self.get_return_url(request),
+            },
+        )
+
+
+class ClientCredentialSecretView(BaseDiodeView):
+    """View for displaying client secret."""
+    template_name = "diode/client_credential_secret.html"
+
+    def get(self, request):
+        if ret := self.check_authentication(request):
+            return ret
+
+        # Get the client secret from session
+        client_secret = request.session.get('client_secret')
+        client_name = request.session.get('client_name')
+
+        if not client_secret:
+            messages.error(request, _("No client secret found. Please create a new client."))
+            return redirect(
+                reverse(
+                    "plugins:netbox_diode_plugin:client_credential_list",
+                )
+            )
+
+        # Clear the session data after retrieving it
+        request.session.pop('client_secret', None)
+        request.session.pop('client_name', None)
+
+        return render(
+            request,
+            self.template_name,
+            {
+                "client_secret": client_secret,
+                "client_name": client_name,
             },
         )
