@@ -1,49 +1,18 @@
+# !/usr/bin/env python
+# Copyright 2025 NetBox Labs, Inc.
+"""Diode NetBox Plugin - Client."""
 
+from netbox_diode_plugin.diode.clients import get_api_client
 
 def create_client(request, client_name, scope):
-    ret = {
-        "client_name": "client_name1",
-        "client_id": "client_id",
-        "client_secret": "client_secret",
-        "scope": "scope",
-        "created_at": "2025-03-14T15:16:17Z"
-    }
-    return ret
-
+    return get_api_client().create_client(client_name, scope)
 
 def delete_client(request, client_id):
-    pass
-
-
-def get_client(request, client_id):
-    ret = {
-        "client_name": "client_name1",
-        "client_id": "client_id",
-        "client_secret": "client_secret",
-        "scope": "scope",
-        "created_at": "2025-03-14T15:16:17Z"
-    }
-    return ret
-
+    return get_api_client().delete_client(client_id)
 
 def list_clients(request):
-    ret = {
-        "data": [
-            {
-                "client_name": "My Agent 1",
-                "client_id": "my-agent-1-a038dfef",
-                "scope": "diode:ingest",
-                "created_at": "2025-03-14T15:16:17Z"
-            },
-            {
-                "client_name": "US East 12",
-                "client_id": "us-east-12-f00fa3cd",
-                "scope": "diode:ingest",
-                "created_at": "2025-04-15T10:11:00Z"
-            }
-        ],
-        "next_page_token": "3",
-    }
-    return ret["data"]
+    response = get_api_client().list_clients()
+    return response["data"]
 
-
+def get_client(request, client_id):
+    return get_api_client().get_client(client_id)

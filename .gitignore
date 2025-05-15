@@ -29,3 +29,5 @@ dist/
 # Docker
 docker/coverage
 !docker/netbox/env
+docker/oauth2/secrets/*
+!docker/oauth2/secrets/.gitkeep
