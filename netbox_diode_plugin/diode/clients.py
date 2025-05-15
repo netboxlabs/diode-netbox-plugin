@@ -79,7 +79,7 @@ class ClientAPI:
                     "client_name": name,
                     "scope": scope,
                 }
-                response = requests.post(url, data=data, headers=headers)
+                response = requests.post(url, json=data, headers=headers)
                 if response.status_code != 200:
                     raise ClientAPIError("Failed to create client", response.status_code)
                 return response.json()
