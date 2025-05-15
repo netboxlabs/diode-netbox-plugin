@@ -21,6 +21,7 @@ services:
       - ./netbox/docker-entrypoint.sh:/opt/netbox/docker-entrypoint.sh:z,ro
       - ./netbox/nginx-unit.json:/opt/netbox/nginx-unit.json:z,ro
       - ../netbox_diode_plugin:/opt/netbox/netbox/netbox_diode_plugin:z,rw
+      - ./oauth2/secrets:/run/secrets:z,ro
       - ./netbox/launch-netbox.sh:/opt/netbox/launch-netbox.sh:z,ro
       - ./netbox/plugins_dev.py:/etc/netbox/config/plugins.py:z,ro
       - ./coverage:/opt/netbox/netbox/coverage:z,rw

@@ -52,6 +52,9 @@ PLUGINS_CONFIG = {
 
         # Username associated with changes applied via plugin
         "diode_username": "diode",
+
+        # netbox-to-diode client_secret created during diode bootstrap.
+        "netbox_to_diode_client_secret": "..."
     },
 }
 ```
