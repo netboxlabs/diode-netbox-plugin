@@ -187,12 +187,14 @@ class ClientCredentialListView(BaseDiodeView):
                 {
                     "model": ClientCredentials,
                     "table": table,
+                    "total_count": len(data),
                 },
             )
 
         context = {
             "model": ClientCredentials,
             "table": table,
+            "total_count": len(data),
         }
 
         return render(request, self.template_name, context)
@@ -256,6 +258,7 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
     """View for adding client credentials."""
     template_name = "diode/client_credential_add.html"
     form_class = ClientCredentialForm
+    default_return_url = "plugins:netbox_diode_plugin:client_credential_list"
 
     def get(self, request):
         if ret := self.check_authentication(request):
@@ -267,7 +270,7 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
             self.template_name,
             {
                 "form": form,
-                "return_url": self.get_return_url(request),
+                "return_url": self.get_return_url(request) or reverse(self.default_return_url),
             },
         )
 
@@ -279,9 +282,10 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
         if form.is_valid():
             try:
                 response = create_client(request, form.cleaned_data["client_name"], "diode:ingest")
-                # Store the client secret in session
+                # Store the client credentials in session
                 request.session['client_secret'] = response.get('client_secret')
                 request.session['client_name'] = form.cleaned_data["client_name"]
+                request.session['client_id'] = response.get('client_id')
                 return redirect(
                     reverse(
                         "plugins:netbox_diode_plugin:client_credential_secret",
@@ -296,7 +300,7 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
             self.template_name,
             {
                 "form": form,
-                "return_url": self.get_return_url(request),
+                "return_url": self.get_return_url(request) or reverse(self.default_return_url),
             },
         )
 
@@ -312,6 +316,7 @@ class ClientCredentialSecretView(BaseDiodeView):
         # Get the client secret from session
         client_secret = request.session.get('client_secret')
         client_name = request.session.get('client_name')
+        client_id = request.session.get('client_id')
 
         if not client_secret:
             messages.error(request, _("No client secret found. Please create a new client."))
@@ -324,6 +329,7 @@ class ClientCredentialSecretView(BaseDiodeView):
         # Clear the session data after retrieving it
         request.session.pop('client_secret', None)
         request.session.pop('client_name', None)
+        request.session.pop('client_id', None)
 
         return render(
             request,
@@ -331,6 +337,7 @@ class ClientCredentialSecretView(BaseDiodeView):
             {
                 "object": {
                     "client_name": client_name,
+                    "client_id": client_id,
                     "client_secret": client_secret,
                 }
             },

@@ -6,22 +6,31 @@ import logging
 import django_tables2 as tables
 from django.urls import reverse
 from django.utils.safestring import mark_safe
+from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext_lazy as _
 from netbox.tables import BaseTable, columns
 
 
 class ClientCredentialsTable(BaseTable):
     label = tables.Column(
-        verbose_name=_("Label"),
+        verbose_name=_("Name"),
         accessor="client_name",
+        orderable=False,
     )
     client_id = tables.Column(
         verbose_name=_("Client ID"),
         accessor="client_id",
+        orderable=False,
+    )
+    created_at = columns.DateTimeColumn(
+        verbose_name=_("Created"),
+        accessor="created_at",
+        orderable=False,
     )
     client_secret = tables.Column(
         verbose_name=_("Client Secret"),
         empty_values=(),
+        orderable=False,
     )
     actions = tables.Column(
         verbose_name=_(""),
@@ -46,6 +55,7 @@ class ClientCredentialsTable(BaseTable):
         default_columns = (
             "label",
             "client_id",
+            "created_at",
             "client_secret",
             "actions",
         )
@@ -56,6 +66,10 @@ class ClientCredentialsTable(BaseTable):
     def render_client_secret(self, value):
         return "*****"
 
+    def render_created_at(self, value):
+        if value:
+            return parse_datetime(value)
+        return "-"
 
     def render_actions(self, record):
         delete_url = reverse(
