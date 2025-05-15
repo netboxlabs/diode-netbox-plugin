@@ -19,10 +19,10 @@ from utilities.permissions import get_permission_for_model
 from utilities.forms import ConfirmationForm
 from utilities.views import register_model_view
 
-from netbox_diode_plugin.forms import SettingsForm
+from netbox_diode_plugin.forms import SettingsForm, ClientCredentialForm
 from netbox_diode_plugin.models import ClientCredentials, Setting
 from netbox_diode_plugin.tables import ClientCredentialsTable
-from netbox_diode_plugin.client import list_clients, get_client, delete_client
+from netbox_diode_plugin.client import list_clients, get_client, delete_client, create_client
 
 User = get_user_model()
 
@@ -246,6 +246,53 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
             {
                 "object": data,
                 "object_type": "Client Credential",
+                "form": form,
+                "return_url": self.get_return_url(request),
+            },
+        )
+
+
+class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
+    """View for adding client credentials."""
+    template_name = "diode/client_credential_add.html"
+    form_class = ClientCredentialForm
+
+    def get(self, request):
+        if ret := self.check_authentication(request):
+            return ret
+
+        form = self.form_class()
+        return render(
+            request,
+            self.template_name,
+            {
+                "form": form,
+                "return_url": self.get_return_url(request),
+            },
+        )
+
+    def post(self, request):
+        if ret := self.check_authentication(request):
+            return ret
+
+        form = self.form_class(request.POST)
+        if form.is_valid():
+            try:
+                create_client(request, form.cleaned_data["client_name"], "diode-ingest")
+                messages.success(request, _("Client created successfully"))
+                return redirect(
+                    reverse(
+                        "plugins:netbox_diode_plugin:client_credential_list",
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Error creating client: {str(e)}")
+                messages.error(request, str(e))
+
+        return render(
+            request,
+            self.template_name,
+            {
                 "form": form,
                 "return_url": self.get_return_url(request),
             },
