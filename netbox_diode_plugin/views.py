@@ -234,7 +234,7 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
                 messages.success(request, _("Client deleted successfully"))
             except Exception as e:
                 logger.error(
-                    f"Error deleting client: {client_credential_id} error: {str(e)}"
+                    f"Error deleting client: {sanitized_client_credential_id} error: {str(e)}"
                 )
                 messages.error(request, str(e))
 
