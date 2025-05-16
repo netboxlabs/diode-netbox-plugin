@@ -9,6 +9,7 @@ import logging
 import requests
 import threading
 from urllib.parse import urlencode
+import re
 from netbox_diode_plugin.plugin_config import (
     get_diode_auth_base_url,
     get_diode_credentials,
@@ -20,6 +21,7 @@ SCOPE_DIODE_WRITE = "diode:write"
 
 logger = logging.getLogger("netbox.diode_data")
 
+valid_client_id_re = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 _client = None
 _client_lock = threading.Lock()
@@ -93,6 +95,9 @@ class ClientAPI:
 
     def get_client(self, client_id: str) -> dict:
         """Get a client."""
+        if not valid_client_id_re.match(client_id):
+            raise ClientAPIError(f"Invalid client ID: {client_id}")
+
         for attempt in range(self._max_auth_retries):
             token = None
             try:
@@ -115,6 +120,9 @@ class ClientAPI:
 
     def delete_client(self, client_id: str) -> None:
         """Delete a client."""
+        if not valid_client_id_re.match(client_id):
+            raise ClientAPIError(f"Invalid client ID: {client_id}")
+
         for attempt in range(self._max_auth_retries):
             token = None
             try:
