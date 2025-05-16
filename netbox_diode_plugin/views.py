@@ -144,12 +144,7 @@ class BaseDiodeView(View):
     def check_authentication(self, request):
         """Check authentication."""
         if not request.user.is_authenticated or not request.user.is_staff:
-            next_url = request.path
-            if not url_has_allowed_host_and_scheme(next_url, allowed_hosts=None):
-                next_url = "/"
-
-            safe_redirect_url = f"{netbox_settings.LOGIN_URL}?next={next_url}"
-            return redirect(safe_redirect_url)
+            return redirect_to_login(request)
         return None
 
     def get_required_permission(self):
