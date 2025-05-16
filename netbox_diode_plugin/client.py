@@ -14,7 +14,8 @@ def create_client(request, client_name: str, scope: str):
 
 
 def delete_client(request, client_id: str):
-    logger.info(f"Deleting client {client_id}")
+    sanitized_client_id = client_id.replace("\n", "").replace("\r", "")
+    logger.info(f"Deleting client {sanitized_client_id}")
     return get_api_client().delete_client(client_id)
 
 
