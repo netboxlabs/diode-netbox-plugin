@@ -221,7 +221,8 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
         )
 
     def post(self, request, client_credential_id):
-        logger.info(f"Deleting client {client_credential_id}")
+        sanitized_client_credential_id = client_credential_id.replace('\n', '').replace('\r', '')
+        logger.info(f"Deleting client {sanitized_client_credential_id}")
         if ret := self.check_authentication(request):
             return ret
 
