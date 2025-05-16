@@ -2,6 +2,8 @@
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Plugin Settings."""
 
+import logging
+import os
 from urllib.parse import urlparse
 
 from django.contrib.auth import get_user_model
@@ -14,6 +16,7 @@ __all__ = (
 
 User = get_user_model()
 
+logger = logging.getLogger("netbox.diode_data")
 
 def _parse_diode_target(target: str) -> tuple[str, str, bool]:
     """Parse the target into authority, path and tls_verify."""
@@ -31,6 +34,11 @@ def _parse_diode_target(target: str) -> tuple[str, str, bool]:
 
 def get_diode_auth_introspect_url():
     """Returns the Diode Auth introspect URL."""
+    diode_auth_base_url = get_diode_auth_base_url()
+    return f"{diode_auth_base_url}/introspect"
+
+def get_diode_auth_base_url():
+    """Returns the Diode Auth service base URL."""
     diode_target = get_plugin_config("netbox_diode_plugin", "diode_target")
     diode_target_override = get_plugin_config(
         "netbox_diode_plugin", "diode_target_override"
@@ -42,8 +50,34 @@ def get_diode_auth_introspect_url():
     scheme = "https" if tls_verify else "http"
     path = path.rstrip("/")
 
-    return f"{scheme}://{authority}{path}/auth/introspect"
+    return f"{scheme}://{authority}{path}/auth"
 
+def get_diode_credentials():
+    """Returns the Diode credentials."""
+    client_id = get_plugin_config("netbox_diode_plugin", "netbox_to_diode_client_id")
+    secrets_path = get_plugin_config("netbox_diode_plugin", "secrets_path")
+    secret_name = get_plugin_config("netbox_diode_plugin", "netbox_to_diode_client_secret_name")
+    client_secret = get_plugin_config("netbox_diode_plugin", "netbox_to_diode_client_secret")
+
+    if not client_secret:
+        secret_file = os.path.join(secrets_path, secret_name)
+        client_secret = _read_secret(secret_file, client_secret)
+
+    return client_id, client_secret
+
+def get_diode_max_auth_retries():
+    """Returns the Diode max auth retries."""
+    return get_plugin_config("netbox_diode_plugin", "diode_max_auth_retries")
+
+# Read secret from file
+def _read_secret(secret_file: str, default: str | None = None) -> str | None:
+    try:
+        f = open(secret_file, encoding='utf-8')
+    except OSError:
+        return default
+    else:
+        with f:
+            return f.readline().strip()
 
 def get_diode_user():
     """Returns the Diode user."""

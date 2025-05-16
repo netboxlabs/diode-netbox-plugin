@@ -22,6 +22,15 @@ class NetBoxDiodePluginConfig(PluginConfig):
 
         # Default username associated with changes applied via plugin
         "diode_username": "diode",
+
+        # client_id and client_secret for communication with Diode server.
+        # By default, the secret is read from a file /run/secrets/netbox_to_diode
+        # but may be specified directly as a string in netbox_to_diode_client_secret
+        "netbox_to_diode_client_id": "netbox-to-diode",
+        "netbox_to_diode_client_secret": None,
+        "secrets_path": "/run/secrets/",
+        "netbox_to_diode_client_secret_name": "netbox_to_diode",
+        "diode_max_auth_retries": 3,
     }
 
 

@@ -52,8 +52,16 @@ PLUGINS_CONFIG = {
 
         # Username associated with changes applied via plugin
         "diode_username": "diode",
+
+        # netbox-to-diode client_secret created during diode bootstrap.
+        "netbox_to_diode_client_secret": "..."
     },
 }
+```
+
+If you are running diode locally via the quickstart, the `netbox-to-diode` client_secret may be found in `/path/to/diode/oauth2/client/client-credentials.json`. eg:
+```
+echo $(jq -r '.[] | select(.client_id == "netbox-to-diode") | .client_secret' /path/to/diode/oauth2/client/client-credentials.json)
 ```
 
 Note: Once you customise usernames with PLUGINS_CONFIG during first installation, you should not change or remove them

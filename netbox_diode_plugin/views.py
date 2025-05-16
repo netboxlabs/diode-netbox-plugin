@@ -1,22 +1,33 @@
 #!/usr/bin/env python
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Views."""
+import logging
+
 from django.conf import settings as netbox_settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.translation import gettext as _
 from django.views.generic import View
 from netbox.plugins import get_plugin_config
 from netbox.views import generic
+from utilities.forms import ConfirmationForm
+from utilities.htmx import htmx_partial
+from utilities.permissions import get_permission_for_model
 from utilities.views import register_model_view
 
-from netbox_diode_plugin.forms import SettingsForm
-from netbox_diode_plugin.models import Setting
+from netbox_diode_plugin.client import create_client, delete_client, get_client, list_clients
+from netbox_diode_plugin.forms import ClientCredentialForm, SettingsForm
+from netbox_diode_plugin.models import ClientCredentials, Setting
+from netbox_diode_plugin.tables import ClientCredentialsTable
 
 User = get_user_model()
 
+
+logger = logging.getLogger(__name__)
 
 def redirect_to_login(request):
     """Redirect to login view."""
@@ -109,3 +120,229 @@ class SettingsEditView(generic.ObjectEditView):
         kwargs["pk"] = settings.pk
 
         return super().post(request, *args, **kwargs)
+
+
+class GetReturnURLMixin:
+    """Get return URL mixin."""
+
+    def get_return_url(self, request):
+        """Get return URL."""
+        # First, see if `return_url` was specified as a query parameter or form data. Use this URL only if it's
+        # considered safe.
+        return_url = request.GET.get("return_url") or request.POST.get("return_url")
+        if return_url and url_has_allowed_host_and_scheme(
+            return_url, allowed_hosts=None
+        ):
+            return return_url
+
+        return None
+
+
+class BaseDiodeView(View):
+    """Base diode view."""
+
+    def check_authentication(self, request):
+        """Check authentication."""
+        if not request.user.is_authenticated or not request.user.is_staff:
+            return redirect_to_login(request)
+        return None
+
+    def get_required_permission(self):
+        """Get required permission."""
+        return get_permission_for_model(self.model, "view")
+
+class ClientCredentialListView(BaseDiodeView):
+    """Client credential list view."""
+
+    table = ClientCredentialsTable
+    template_name = "diode/client_credential_list.html"
+    model = ClientCredentials
+
+    def get_table_data(self, request):
+        """Get table data."""
+        try:
+            data = list_clients(request)
+            total = len(data)
+        except Exception as e:
+            logger.debug(f"Error loading client credentials error: {str(e)}")
+            messages.error(self.request, str(e))
+            data = []
+            total = 0
+
+        return total, data
+
+    def get(self, request):
+        """GET request handler."""
+        if ret := self.check_authentication(request):
+            return ret
+
+        total, data = self.get_table_data(request)
+        table = self.table(data=data)  # Pass the data to the table
+
+        # If this is an HTMX request, return only the rendered table HTML
+        if htmx_partial(request):
+            if request.GET.get("embedded", False):
+                table.embedded = True
+                # Hide selection checkboxes
+                if "pk" in table.base_columns:
+                    table.columns.hide("pk")
+            return render(
+                request,
+                "htmx/table.html",
+                {
+                    "model": ClientCredentials,
+                    "table": table,
+                    "total_count": len(data),
+                },
+            )
+
+        context = {
+            "model": ClientCredentials,
+            "table": table,
+            "total_count": len(data),
+        }
+
+        return render(request, self.template_name, context)
+
+
+class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
+    """Client credential delete view."""
+
+    template_name = "diode/client_credential_delete.html"
+    default_return_url = "plugins:netbox_diode_plugin:client_credential_list"
+
+    def get(self, request, client_credential_id):
+        """GET request handler."""
+        if ret := self.check_authentication(request):
+            return ret
+
+        data = get_client(request, client_credential_id)
+
+        return render(
+            request,
+            self.template_name,
+            {
+                "object": data,
+                "object_type": "Client Credential",
+                "return_url": self.get_return_url(request) or reverse(self.default_return_url),
+            },
+        )
+
+    def post(self, request, client_credential_id):
+        """POST request handler."""
+        sanitized_client_credential_id = client_credential_id.replace('\n', '').replace('\r', '')
+        logger.info(f"Deleting client {sanitized_client_credential_id}")
+        if ret := self.check_authentication(request):
+            return ret
+
+        form = ConfirmationForm(request.POST)
+        if form.is_valid():
+            try:
+                delete_client(request, client_credential_id)
+                messages.success(request, _("Client deleted successfully"))
+            except Exception as e:
+                logger.error(
+                    f"Error deleting client: {sanitized_client_credential_id} error: {str(e)}"
+                )
+                messages.error(request, str(e))
+
+        return redirect(
+            reverse(
+                "plugins:netbox_diode_plugin:client_credential_list",
+            )
+        )
+
+
+class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
+    """View for adding client credentials."""
+
+    template_name = "diode/client_credential_add.html"
+    form_class = ClientCredentialForm
+    default_return_url = "plugins:netbox_diode_plugin:client_credential_list"
+
+    def get(self, request):
+        """GET request handler."""
+        if ret := self.check_authentication(request):
+            return ret
+
+        form = self.form_class()
+        return render(
+            request,
+            self.template_name,
+            {
+                "form": form,
+                "return_url": self.get_return_url(request) or reverse(self.default_return_url),
+            },
+        )
+
+    def post(self, request):
+        """POST request handler."""
+        if ret := self.check_authentication(request):
+            return ret
+
+        form = self.form_class(request.POST)
+        if form.is_valid():
+            try:
+                response = create_client(request, form.cleaned_data["client_name"], "diode:ingest")
+                # Store the client credentials in session
+                request.session['client_secret'] = response.get('client_secret')
+                request.session['client_name'] = form.cleaned_data["client_name"]
+                request.session['client_id'] = response.get('client_id')
+                return redirect(
+                    reverse(
+                        "plugins:netbox_diode_plugin:client_credential_secret",
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Error creating client: {str(e)}")
+                messages.error(request, str(e))
+
+        return render(
+            request,
+            self.template_name,
+            {
+                "form": form,
+                "return_url": self.get_return_url(request) or reverse(self.default_return_url),
+            },
+        )
+
+
+class ClientCredentialSecretView(BaseDiodeView):
+    """View for displaying client secret."""
+
+    template_name = "diode/client_credential_secret.html"
+
+    def get(self, request):
+        """Get request handler."""
+        if ret := self.check_authentication(request):
+            return ret
+
+        # Get the client secret from session
+        client_secret = request.session.get('client_secret')
+        client_name = request.session.get('client_name')
+        client_id = request.session.get('client_id')
+
+        if not client_secret:
+            messages.error(request, _("No client secret found. Please create a new client."))
+            return redirect(
+                reverse(
+                    "plugins:netbox_diode_plugin:client_credential_list",
+                )
+            )
+
+        # Clear the session data after retrieving it
+        request.session.pop('client_secret', None)
+        request.session.pop('client_name', None)
+        request.session.pop('client_id', None)
+
+        return render(
+            request,
+            self.template_name,
+            {
+                "object": {
+                    "client_name": client_name,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                }
+            },
+        )
