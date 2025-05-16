@@ -35,6 +35,12 @@ def get_api_client():
     with _client_lock:
         if _client is None:
             client_id, client_secret = get_diode_credentials()
+            if not client_id:
+                raise ClientAPIError(
+                    "Please update the plugin configuration to access this feature.\nMissing netbox to diode client id.", 500)
+            if not client_secret:
+                raise ClientAPIError(
+                    "Please update the plugin configuration to access this feature.\nMissing netbox to diode client secret.", 500)
             max_auth_retries = get_diode_max_auth_retries()
             _client = ClientAPI(
                 base_url=get_diode_auth_base_url(),
