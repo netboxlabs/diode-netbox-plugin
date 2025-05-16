@@ -2,24 +2,26 @@
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Navigation."""
 
+from django.utils.translation import gettext as _
 from netbox.plugins import PluginMenu, PluginMenuItem
 
-settings = {
-    "link": "plugins:netbox_diode_plugin:settings",
-    "link_text": "Settings",
-    "staff_only": True,
-}
-
+_diode_menu_items = (
+    PluginMenuItem(
+        link="plugins:netbox_diode_plugin:settings",
+        link_text=_("Settings"),
+        staff_only= True,
+    ),
+    PluginMenuItem(
+        link="plugins:netbox_diode_plugin:client_credential_list",
+        link_text=_("Client Credentials"),
+        staff_only= True,
+    ),
+)
 
 menu = PluginMenu(
     label="Diode",
     groups=(
-        (
-            "Diode",
-            (
-                PluginMenuItem(**settings),
-            ),
-        ),
+        (_("Diode"), _diode_menu_items),
     ),
     icon_class="mdi mdi-upload",
 )
