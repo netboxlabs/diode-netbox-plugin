@@ -2,14 +2,16 @@
 # Copyright 2025 NetBox Labs Inc
 """Diode NetBox Plugin - Diode - Auth."""
 
-from dataclasses import dataclass
 import datetime
 import json
 import logging
-import requests
-import threading
-from urllib.parse import urlencode
 import re
+import threading
+from dataclasses import dataclass
+from urllib.parse import urlencode
+
+import requests
+
 from netbox_diode_plugin.plugin_config import (
     get_diode_auth_base_url,
     get_diode_credentials,

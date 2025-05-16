@@ -5,13 +5,15 @@ import logging
 
 import django_tables2 as tables
 from django.urls import reverse
-from django.utils.safestring import mark_safe
 from django.utils.dateparse import parse_datetime
+from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from netbox.tables import BaseTable, columns
 
 
 class ClientCredentialsTable(BaseTable):
+    """Client credentials table."""
+
     label = tables.Column(
         verbose_name=_("Name"),
         accessor="client_name",
@@ -47,6 +49,8 @@ class ClientCredentialsTable(BaseTable):
     embedded = False
 
     class Meta:
+        """Meta class."""
+
         attrs = {
             "class": "table table-hover object-list",
             "td": {"class": "align-middle"},
@@ -64,26 +68,29 @@ class ClientCredentialsTable(BaseTable):
         footer = False
 
     def render_client_secret(self, value):
+        """Render client secret."""
         return "*****"
 
     def render_created_at(self, value):
+        """Render created at."""
         if value:
             return parse_datetime(value)
         return "-"
 
     def render_actions(self, record):
+        """Render actions."""
         delete_url = reverse(
             "plugins:netbox_diode_plugin:client_credential_delete",
             kwargs={"client_credential_id": record["client_id"]},
         )
 
         buttons = f"""
-            <a class="btn btn-sm btn-red" 
-                data-bs-toggle="tooltip" 
-                data-bs-placement="top" 
-                title="Delete" 
-                href="{delete_url}" 
-                type="button" 
+            <a class="btn btn-sm btn-red"
+                data-bs-toggle="tooltip"
+                data-bs-placement="top"
+                title="Delete"
+                href="{delete_url}"
+                type="button"
                 aria-label="Delete">
                 <i class="mdi mdi-trash-can-outline"></i>
             </a>

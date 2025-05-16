@@ -8,6 +8,7 @@ from django.test import TestCase
 
 from netbox_diode_plugin.diode.clients import ClientAPI, ClientAPIError
 
+
 class DiodeClientsTestCase(TestCase):
     """Test cases for Diode Clients API."""
 
@@ -185,7 +186,12 @@ class DiodeClientsTestCase(TestCase):
             mock_post.side_effect = [
                 ClientAPIError("Failed to create client", 401),
                 mock.Mock(status_code=200, json=lambda: {"access_token": "new-access-token"}),
-                mock.Mock(status_code=201, json=lambda: {"client_id": "test-client-id", "client_secret": "test-client-secret", "client_name": "test-client", "scope": "diode:read diode:write"}),
+                mock.Mock(status_code=201, json=lambda: {
+                    "client_id": "test-client-id",
+                    "client_secret": "test-client-secret",
+                    "client_name": "test-client",
+                    "scope": "diode:read diode:write"
+                }),
             ]
 
             result = client.create_client("test-client", "diode:read diode:write")

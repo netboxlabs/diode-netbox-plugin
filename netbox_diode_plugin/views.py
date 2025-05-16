@@ -9,20 +9,20 @@ from django.contrib.auth import get_user_model
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect, render
 from django.urls import reverse
-from django.utils.translation import gettext as _
 from django.utils.http import url_has_allowed_host_and_scheme
+from django.utils.translation import gettext as _
 from django.views.generic import View
 from netbox.plugins import get_plugin_config
 from netbox.views import generic
+from utilities.forms import ConfirmationForm
 from utilities.htmx import htmx_partial
 from utilities.permissions import get_permission_for_model
-from utilities.forms import ConfirmationForm
 from utilities.views import register_model_view
 
-from netbox_diode_plugin.forms import SettingsForm, ClientCredentialForm
+from netbox_diode_plugin.client import create_client, delete_client, get_client, list_clients
+from netbox_diode_plugin.forms import ClientCredentialForm, SettingsForm
 from netbox_diode_plugin.models import ClientCredentials, Setting
 from netbox_diode_plugin.tables import ClientCredentialsTable
-from netbox_diode_plugin.client import list_clients, get_client, delete_client, create_client
 
 User = get_user_model()
 
@@ -123,9 +123,10 @@ class SettingsEditView(generic.ObjectEditView):
 
 
 class GetReturnURLMixin:
+    """Get return URL mixin."""
 
     def get_return_url(self, request):
-
+        """Get return URL."""
         # First, see if `return_url` was specified as a query parameter or form data. Use this URL only if it's
         # considered safe.
         return_url = request.GET.get("return_url") or request.POST.get("return_url")
@@ -138,8 +139,10 @@ class GetReturnURLMixin:
 
 
 class BaseDiodeView(View):
+    """Base diode view."""
 
     def check_authentication(self, request):
+        """Check authentication."""
         if not request.user.is_authenticated or not request.user.is_staff:
             next_url = request.path
             if not url_has_allowed_host_and_scheme(next_url, allowed_hosts=None):
@@ -147,16 +150,21 @@ class BaseDiodeView(View):
 
             safe_redirect_url = f"{netbox_settings.LOGIN_URL}?next={next_url}"
             return redirect(safe_redirect_url)
+        return None
 
     def get_required_permission(self):
+        """Get required permission."""
         return get_permission_for_model(self.model, "view")
 
 class ClientCredentialListView(BaseDiodeView):
+    """Client credential list view."""
+
     table = ClientCredentialsTable
     template_name = "diode/client_credential_list.html"
     model = ClientCredentials
 
     def get_table_data(self, request):
+        """Get table data."""
         try:
             data = list_clients(request)
             total = len(data)
@@ -169,6 +177,7 @@ class ClientCredentialListView(BaseDiodeView):
         return total, data
 
     def get(self, request):
+        """GET request handler."""
         if ret := self.check_authentication(request):
             return ret
 
@@ -202,10 +211,13 @@ class ClientCredentialListView(BaseDiodeView):
 
 
 class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
+    """Client credential delete view."""
+
     template_name = "diode/client_credential_delete.html"
     default_return_url = "plugins:netbox_diode_plugin:client_credential_list"
 
     def get(self, request, client_credential_id):
+        """GET request handler."""
         if ret := self.check_authentication(request):
             return ret
 
@@ -222,6 +234,7 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
         )
 
     def post(self, request, client_credential_id):
+        """POST request handler."""
         sanitized_client_credential_id = client_credential_id.replace('\n', '').replace('\r', '')
         logger.info(f"Deleting client {sanitized_client_credential_id}")
         if ret := self.check_authentication(request):
@@ -247,11 +260,13 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
 
 class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
     """View for adding client credentials."""
+
     template_name = "diode/client_credential_add.html"
     form_class = ClientCredentialForm
     default_return_url = "plugins:netbox_diode_plugin:client_credential_list"
 
     def get(self, request):
+        """GET request handler."""
         if ret := self.check_authentication(request):
             return ret
 
@@ -266,6 +281,7 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
         )
 
     def post(self, request):
+        """POST request handler."""
         if ret := self.check_authentication(request):
             return ret
 
@@ -298,9 +314,11 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
 
 class ClientCredentialSecretView(BaseDiodeView):
     """View for displaying client secret."""
+
     template_name = "diode/client_credential_secret.html"
 
     def get(self, request):
+        """Get request handler."""
         if ret := self.check_authentication(request):
             return ret
 

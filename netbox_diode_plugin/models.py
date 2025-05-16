@@ -41,9 +41,7 @@ class Setting(NetBoxModel):
 
 
 class ClientCredentials(models.Model):
-    """
-    Dummy model to allow for permissions, saved filters, etc..
-    """
+    """Dummy model to allow for permissions, saved filters, etc.."""
 
     class Meta:
         """Meta class."""

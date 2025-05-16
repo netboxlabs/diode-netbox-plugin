@@ -1,11 +1,11 @@
 # !/usr/bin/env python
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - Forms."""
+from django import forms
+from django.utils.translation import gettext_lazy as _
 from netbox.forms import NetBoxModelForm
 from netbox.plugins import get_plugin_config
 from utilities.forms.rendering import FieldSet
-from django import forms
-from django.utils.translation import gettext_lazy as _
 
 from netbox_diode_plugin.models import Setting
 
@@ -47,6 +47,7 @@ class SettingsForm(NetBoxModelForm):
 
 class ClientCredentialForm(forms.Form):
     """Form for adding client credentials."""
+
     client_name = forms.CharField(
         label=_("Client Name"),
         required=True,
