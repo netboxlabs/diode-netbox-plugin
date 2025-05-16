@@ -145,7 +145,8 @@ class BaseDiodeView(View):
             if not url_has_allowed_host_and_scheme(next_url, allowed_hosts=None):
                 next_url = "/"
 
-            return redirect(f"{netbox_settings.LOGIN_URL}?next={next_url}")
+            safe_redirect_url = f"{netbox_settings.LOGIN_URL}?next={next_url}"
+            return redirect(safe_redirect_url)
 
     def get_required_permission(self):
         return get_permission_for_model(self.model, "view")
