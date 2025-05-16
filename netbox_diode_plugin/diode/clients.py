@@ -96,7 +96,7 @@ class ClientAPI:
     def get_client(self, client_id: str) -> dict:
         """Get a client."""
         if not valid_client_id_re.match(client_id):
-            raise ClientAPIError(f"Invalid client ID: {client_id}")
+            raise ValueError(f"Invalid client ID: {client_id}")
 
         for attempt in range(self._max_auth_retries):
             token = None
@@ -121,7 +121,7 @@ class ClientAPI:
     def delete_client(self, client_id: str) -> None:
         """Delete a client."""
         if not valid_client_id_re.match(client_id):
-            raise ClientAPIError(f"Invalid client ID: {client_id}")
+            raise ValueError(f"Invalid client ID: {client_id}")
 
         for attempt in range(self._max_auth_retries):
             token = None
