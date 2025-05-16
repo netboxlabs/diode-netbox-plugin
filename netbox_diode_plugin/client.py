@@ -26,5 +26,6 @@ def list_clients(request):
 
 
 def get_client(request, client_id: str):
-    logger.info(f"Getting client {client_id}")
+    sanitized_client_id = client_id.replace("\n", "").replace("\r", "")
+    logger.info(f"Getting client {sanitized_client_id}")
     return get_api_client().get_client(client_id)
