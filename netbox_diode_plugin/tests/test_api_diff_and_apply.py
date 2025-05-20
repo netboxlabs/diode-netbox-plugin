@@ -918,9 +918,8 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(ip.vrf.name, f"VRF {vrf_uuid}")
         self.assertEqual(ip.status, "active")
 
-        ip2 = IPAddress.objects.get(address="254.198.174.116/24", vrf__isnull=True)
-        self.assertEqual(ip2.vrf, None)
-        self.assertEqual(ip2.status, "deprecated")
+        # this updated the existing ip due to a loose match and associated the vrf, so there is no "other" address ...
+        self.assertRaises(IPAddress.DoesNotExist, IPAddress.objects.get, address="254.198.174.116/24", vrf__isnull=True)
 
         payload = {
             "timestamp": 1,
@@ -939,9 +938,8 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         ip = IPAddress.objects.get(address="254.198.174.116", vrf__name=f"VRF {vrf_uuid}")
         self.assertEqual(ip.status, "dhcp")
 
-        ip2 = IPAddress.objects.get(address="254.198.174.116/24", vrf__isnull=True)
-        self.assertEqual(ip2.vrf, None)
-        self.assertEqual(ip2.status, "deprecated")
+        # this updated the existing ip due to a loose match and associated the vrf, so there is no "other" address ...
+        self.assertRaises(IPAddress.DoesNotExist, IPAddress.objects.get, address="254.198.174.116/24", vrf__isnull=True)
 
     def test_generate_diff_and_apply_complex_vminterface(self):
         """Test generate diff and apply and update a complex vm interface."""
@@ -1047,7 +1045,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                             "role": {"name": "Device Role 1"},
                             "site": {"name": "Site 1"}
                         },
-                        "name": "Radio0/1",
+                        "name": "Radio0/2",
                         "type": "ieee802.11ac",
                         "enabled": True
                     },

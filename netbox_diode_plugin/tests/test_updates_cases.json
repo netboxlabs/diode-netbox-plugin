@@ -2033,7 +2033,7 @@
                     },
                     {
                         "vid": 102,
-                        "name": "Data VLAN",
+                        "name": "Data VLAN 2",
                         "status": "active"
                     }
                 ]    
@@ -2159,7 +2159,7 @@
                     },
                     {
                         "vid": 102,
-                        "name": "Data VLAN",
+                        "name": "Data VLAN 2",
                         "status": "active"
                     }
                 ]    
@@ -5867,7 +5867,7 @@
                         },
                         "site": {"name": "Site 1"}
                     },
-                    "name": "Radio0/1",
+                    "name": "Radio0/2",
                     "type": "ieee802.11ac",
                     "enabled": true
                 },
@@ -5910,7 +5910,7 @@
                         },
                         "site": {"name": "Site 1"}
                     },
-                    "name": "Radio0/1",
+                    "name": "Radio0/2",
                     "type": "ieee802.11ac",
                     "enabled": true
                 },

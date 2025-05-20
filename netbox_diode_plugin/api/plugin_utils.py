@@ -1,19 +1,19 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Timestamp: 2025-04-13 16:50:25Z
+# Timestamp: 2025-05-20 14:28:26Z
 
+from dataclasses import dataclass
 import datetime
 import decimal
-import logging
-from dataclasses import dataclass
 from functools import lru_cache
+import logging
 from typing import Type
 
-import netaddr
 from core.models import ObjectType as NetBoxType
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
+import netaddr
 from rest_framework.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
@@ -987,20 +987,89 @@ def legal_fields(object_type: str|Type[models.Model]) -> frozenset[str]:
     return _LEGAL_FIELDS.get(object_type, frozenset())
 
 _OBJECT_TYPE_PRIMARY_VALUE_FIELD_MAP = {
-    'ipam.asn': 'asn',
-    'dcim.devicetype': 'model',
     'circuits.circuit': 'cid',
-    'ipam.ipaddress': 'address',
-    'dcim.macaddress': 'mac_address',
-    'dcim.moduletype': 'model',
-    'ipam.prefix': 'prefix',
-    'dcim.racktype': 'model',
+    'circuits.circuitgroup': 'name',
+    'circuits.circuittype': 'name',
+    'circuits.provider': 'name',
+    'circuits.provideraccount': 'name',
+    'circuits.providernetwork': 'name',
     'circuits.virtualcircuit': 'cid',
+    'circuits.virtualcircuittype': 'name',
+    'dcim.consoleport': 'name',
+    'dcim.consoleserverport': 'name',
+    'dcim.device': 'name',
+    'dcim.devicebay': 'name',
+    'dcim.devicerole': 'name',
+    'dcim.devicetype': 'model',
+    'dcim.frontport': 'name',
+    'dcim.interface': 'name',
+    'dcim.inventoryitem': 'name',
+    'dcim.inventoryitemrole': 'name',
+    'dcim.location': 'name',
+    'dcim.macaddress': 'mac_address',
+    'dcim.manufacturer': 'name',
+    'dcim.modulebay': 'name',
+    'dcim.moduletype': 'model',
+    'dcim.platform': 'name',
+    'dcim.powerfeed': 'name',
+    'dcim.poweroutlet': 'name',
+    'dcim.powerpanel': 'name',
+    'dcim.powerport': 'name',
+    'dcim.rack': 'name',
+    'dcim.rackrole': 'name',
+    'dcim.racktype': 'model',
+    'dcim.rearport': 'name',
+    'dcim.region': 'name',
+    'dcim.site': 'name',
+    'dcim.sitegroup': 'name',
+    'dcim.virtualchassis': 'name',
+    'dcim.virtualdevicecontext': 'name',
+    'extras.tag': 'name',
+    'ipam.aggregate': 'prefix',
+    'ipam.asn': 'asn',
+    'ipam.asnrange': 'name',
+    'ipam.fhrpgroup': 'name',
+    'ipam.ipaddress': 'address',
+    'ipam.prefix': 'prefix',
+    'ipam.rir': 'name',
+    'ipam.role': 'name',
+    'ipam.routetarget': 'name',
+    'ipam.service': 'name',
+    'ipam.vlan': 'name',
+    'ipam.vlangroup': 'name',
+    'ipam.vlantranslationpolicy': 'name',
+    'ipam.vrf': 'name',
+    'tenancy.contact': 'name',
+    'tenancy.contactgroup': 'name',
+    'tenancy.contactrole': 'name',
+    'tenancy.tenant': 'name',
+    'tenancy.tenantgroup': 'name',
+    'virtualization.cluster': 'name',
+    'virtualization.clustergroup': 'name',
+    'virtualization.clustertype': 'name',
+    'virtualization.virtualdisk': 'name',
+    'virtualization.virtualmachine': 'name',
+    'virtualization.vminterface': 'name',
+    'vpn.ikepolicy': 'name',
+    'vpn.ikeproposal': 'name',
+    'vpn.ipsecpolicy': 'name',
+    'vpn.ipsecprofile': 'name',
+    'vpn.ipsecproposal': 'name',
+    'vpn.l2vpn': 'name',
+    'vpn.tunnel': 'name',
+    'vpn.tunnelgroup': 'name',
     'wireless.wirelesslan': 'ssid',
+    'wireless.wirelesslangroup': 'name',
+    'wireless.wirelesslink': 'ssid',
 }
 
+def get_primary_value_field(object_type: str) -> str|None:
+    return _OBJECT_TYPE_PRIMARY_VALUE_FIELD_MAP.get(object_type)
+
 def get_primary_value(data: dict, object_type: str) -> str|None:
-    field = _OBJECT_TYPE_PRIMARY_VALUE_FIELD_MAP.get(object_type, 'name')
+    field = get_primary_value_field(object_type)
+    if field is None:
+        return None
     return data.get(field)
 
 
@@ -1209,9 +1278,6 @@ def apply_format_transformations(data: dict, object_type: str):
         except ValidationError:
             raise
         except ValueError as e:
-            sanitized_object_type = object_type.replace('\n', '').replace('\r', '')
-            sanitized_val = str(val).replace('\n', '').replace('\r', '')
-            logger.error(f"Error processing field {key} in {sanitized_object_type} with value {sanitized_val}: {e}")
-            raise ValidationError(f"Invalid value for field {key} in {sanitized_object_type}.")
+            raise ValidationError(f'Invalid value {val} for field {key} in {object_type}: {e}')
         except Exception as e:
-            raise ValidationError(f'Invalid value for field {key} in {object_type}')
+            raise ValidationError(f'Invalid value {val} for field {key} in {object_type}')

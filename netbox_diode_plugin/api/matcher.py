@@ -17,8 +17,8 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 from extras.models.customfields import CustomField
 
-from .common import UnresolvedReference
-from .plugin_utils import content_type_id, get_object_type, get_object_type_model
+from .common import UnresolvedReference, ChangeSetException, NON_FIELD_ERRORS
+from .plugin_utils import content_type_id, get_object_type, get_object_type_model, get_primary_value_field
 
 logger = logging.getLogger(__name__)
 
@@ -58,31 +58,52 @@ _LOGICAL_MATCHERS = {
         ),
     ],
     "ipam.ipaddress": lambda: [
-        GlobalIPNetworkIPMatcher(
+        # matches global ip addresses when no vrf is specified
+        IPNetworkIPMatcher(
             ip_fields=("address",),
             vrf_field="vrf",
             model_class=get_object_type_model("ipam.ipaddress"),
             name="logical_ip_address_global_no_vrf",
+            global_only=True,
         ),
+        # matches ip addresses within a vrf when a vrf is specified
         VRFIPNetworkIPMatcher(
             ip_fields=("address",),
             vrf_field="vrf",
             model_class=get_object_type_model("ipam.ipaddress"),
             name="logical_ip_address_within_vrf",
         ),
+        # matches loosely anything with same ip address, ignoring mask
+        # this is necessary because the default loose primary value match would
+        # not ignore the network mask.
+        IPNetworkIPMatcher(
+            ip_fields=("address",),
+            vrf_field="vrf",
+            model_class=get_object_type_model("ipam.ipaddress"),
+            name="loose_ip_address_match",
+            global_only=False,
+        ),
     ],
     "ipam.iprange": lambda: [
-        GlobalIPNetworkIPMatcher(
+        IPNetworkIPMatcher(
             ip_fields=("start_address", "end_address"),
             vrf_field="vrf",
             model_class=get_object_type_model("ipam.iprange"),
             name="logical_ip_range_start_end_global_no_vrf",
+            global_only=True,
         ),
         VRFIPNetworkIPMatcher(
             ip_fields=("start_address", "end_address"),
             vrf_field="vrf",
             model_class=get_object_type_model("ipam.iprange"),
             name="logical_ip_range_start_end_within_vrf",
+        ),
+        IPNetworkIPMatcher(
+            ip_fields=("start_address", "end_address"),
+            vrf_field="vrf",
+            model_class=get_object_type_model("ipam.iprange"),
+            name="loose_ip_range_match",
+            global_only=False,
         ),
     ],
     "ipam.prefix": lambda: [
@@ -260,6 +281,10 @@ class ObjectMatchCriteria:
                             refs.add(source_expr.name)
         return refs
 
+    def describe(self, data: dict) -> str:
+        """Returns a description of the data used to match the object."""
+        return ", ".join(f"{k}='{v}'" for k, v in data.items() if k in self._get_refs())
+
     def fingerprint(self, data: dict) -> str|None:
         """
         Returns a fingerprint of the data based on these criteria.
@@ -415,6 +440,10 @@ class CustomFieldMatcher:
     custom_field: str
     model_class: Type[models.Model]
 
+    def describe(self, data: dict) -> str:
+        """Returns a description of the data used to match the object."""
+        return f"{self.custom_field}={data.get(self.custom_field)}"
+
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
         if not self.has_required_fields(data):
@@ -443,17 +472,29 @@ class CustomFieldMatcher:
 
 
 @dataclass
-class GlobalIPNetworkIPMatcher:
+class IPNetworkIPMatcher:
     """A matcher that ignores the mask."""
 
     ip_fields: tuple[str]
     vrf_field: str
     model_class: Type[models.Model]
     name: str
+    global_only: bool = False
 
     def _check_condition(self, data: dict) -> bool:
         """Check the condition for the custom field."""
-        return data.get(self.vrf_field, None) is None
+        if self.global_only:
+            return data.get(self.vrf_field, None) is None
+        return True
+
+    def describe(self, data: dict) -> str:
+        """Returns a description of the data used to match the object."""
+        desc = f"{', '.join(f'{k}={v}' for k, v in data.items() if k in self.ip_fields)}"
+        if self.global_only:
+            desc = f"{desc} (global only)"
+        else:
+            desc = f"{desc} (loose match)"
+        return desc
 
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
@@ -491,9 +532,10 @@ class GlobalIPNetworkIPMatcher:
         if not self._check_condition(data):
             return None
 
-        filter = {
-            f'{self.vrf_field}__isnull': True,
-        }
+        filter = {}
+        if self.global_only:
+            filter[f'{self.vrf_field}__isnull'] = True
+
         for field in self.ip_fields:
             value = self.ip_value(data, field)
             if value is None:
@@ -514,6 +556,12 @@ class VRFIPNetworkIPMatcher:
     def _check_condition(self, data: dict) -> bool:
         """Check the condition for the custom field."""
         return data.get(self.vrf_field, None) is not None
+
+    def describe(self, data: dict) -> str:
+        """Returns a description of the data used to match the object."""
+        desc = f"{', '.join(f'{k}={v}' for k, v in data.items() if k in self.ip_fields)}"
+        desc = f"{desc}, {self.vrf_field}={data.get(self.vrf_field)})"
+        return desc
 
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
@@ -585,6 +633,10 @@ class AutoSlugMatcher:
     slug_field: str
     model_class: Type[models.Model]
 
+    def describe(self, data: dict) -> str:
+        """Returns a description of the data used to match the object."""
+        return f"{self.slug_field}={data.get('_auto_slug', None)}"
+
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
         if not self.has_required_fields(data):
@@ -629,6 +681,7 @@ def get_model_matchers(model_class) -> list:
                         name=f"unique_custom_field_{cf.name}",
                     )
                 )
+    matchers += _get_model_loose_matchers(model_class)
     matchers += _get_autoslug_matchers(model_class)
     return matchers
 
@@ -698,6 +751,21 @@ def _get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
 
     return matchers
 
+@lru_cache(maxsize=256)
+def _get_model_loose_matchers(model_class) -> list[ObjectMatchCriteria]:
+    object_type = get_object_type(model_class)
+    # search loosely by primary value if one is defined ...
+    primary_value_field = get_primary_value_field(object_type)
+    if primary_value_field is None:
+        return []
+
+    return [
+        ObjectMatchCriteria(
+            model_class=model_class,
+            fields=(primary_value_field,),
+            name=f"loose_match_by_{primary_value_field}",
+        )
+    ]
 
 def _is_supported_constraint(constraint, model_class) -> bool:
     if not isinstance(constraint, models.UniqueConstraint):
@@ -790,13 +858,31 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
     Returns the object if found, otherwise None.
     """
     model_class = get_object_type_model(object_type)
+    ambiguous_match_errors = []
     for matcher in get_model_matchers(model_class):
         if not matcher.has_required_fields(data):
             continue
         q = matcher.build_queryset(data)
         if q is None:
             continue
-        existing = q.order_by('pk').first()
-        if existing is not None:
-            return existing
+        try:
+            return q.get()
+        except model_class.MultipleObjectsReturned:
+            # at least one "loose/non-unique" matcher found multiple
+            # objects that could be matched... so we don't consider it "new"
+            # If it cannot be unambiguously matched by some other matcher,
+            # we will raise an ambiguity error
+            ambiguous_match_errors.append(f"More than one object found loosely matching {matcher.describe(data)}")
+            continue
+        except model_class.DoesNotExist:
+            continue
+    if len(ambiguous_match_errors) > 0:
+        ambiguous_match_errors.insert(0, "No strictly unique matches found.")
+        raise ChangeSetException(
+            f"Ambiguous match for {object_type}: could not uniquely identify object from given data",
+            errors={
+                object_type: {
+                    NON_FIELD_ERRORS: ambiguous_match_errors
+                }
+            })
     return None
