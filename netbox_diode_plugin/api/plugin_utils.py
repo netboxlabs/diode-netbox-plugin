@@ -1278,7 +1278,9 @@ def apply_format_transformations(data: dict, object_type: str):
         except ValidationError:
             raise
         except ValueError as e:
-            logger.error(f"Error processing field {key} in {object_type} with value {val}: {e}")
-            raise ValidationError(f"Invalid value for field {key} in {object_type}.")
+            sanitized_object_type = object_type.replace('\n', '').replace('\r', '')
+            sanitized_val = str(val).replace('\n', '').replace('\r', '')
+            logger.error(f"Error processing field {key} in {sanitized_object_type} with value {sanitized_val}: {e}")
+            raise ValidationError(f"Invalid value for field {key} in {sanitized_object_type}.")
         except Exception as e:
             raise ValidationError(f'Invalid value {val} for field {key} in {object_type}')
