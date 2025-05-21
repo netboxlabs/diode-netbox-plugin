@@ -17,7 +17,7 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 from extras.models.customfields import CustomField
 
-from .common import UnresolvedReference, ChangeSetException, NON_FIELD_ERRORS
+from .common import NON_FIELD_ERRORS, ChangeSetException, UnresolvedReference
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model, get_primary_value_field
 
 logger = logging.getLogger(__name__)
