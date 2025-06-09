@@ -14,6 +14,7 @@ from rest_framework.exceptions import AuthenticationFailed
 from netbox_diode_plugin.plugin_config import (
     get_diode_auth_introspect_url,
     get_diode_user,
+    get_required_token_audience,
 )
 
 logger = logging.getLogger("netbox.diode_data")
@@ -65,6 +66,16 @@ class DiodeOAuth2Authentication(BaseAuthentication):
             return None
 
         if data.get("active"):
+            # if the plugin is configured to require specific token audience(s),
+            # reject the token if any are missing.
+            required_audience = get_required_token_audience()
+            if len(required_audience) > 0:
+                token_audience = set(data.get("aud", []))
+                for aud in required_audience:
+                    if aud not in token_audience:
+                        logger.error(f"Token audience {aud} not found in {token_audience}")
+                        return None
+
             diode_user = SimpleNamespace(
                 user=get_diode_user(),
                 token_scopes=data.get("scope", "").split(),

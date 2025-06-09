@@ -89,3 +89,7 @@ def get_diode_user():
         diode_user = User.objects.create(username=diode_username, is_active=True)
 
     return diode_user
+
+def get_required_token_audience():
+    """Returns the require token audience."""
+    return get_plugin_config("netbox_diode_plugin", "required_token_audience")

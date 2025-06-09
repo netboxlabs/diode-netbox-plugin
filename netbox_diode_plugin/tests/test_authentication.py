@@ -49,12 +49,19 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         )
         self.introspect_url_patcher.start()
 
+        self.required_audience_patcher = mock.patch(
+            'netbox_diode_plugin.api.authentication.get_required_token_audience',
+            return_value=[]
+        )
+        self.required_audience_mock = self.required_audience_patcher.start()
+
     def tearDown(self):
         """Clean up after tests."""
         self.cache_patcher.stop()
         self.cache_set_patcher.stop()
         self.requests_patcher.stop()
         self.introspect_url_patcher.stop()
+        self.required_audience_patcher.stop()
 
     def test_authenticate_no_auth_header(self):
         """Test authentication with no Authorization header."""
@@ -102,6 +109,42 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         user, _ = self.auth.authenticate(request)
         self.assertEqual(user, self.diode_user.user)
         self.cache_set_mock.assert_called_once()
+
+    def test_authenticate_token_with_required_audience(self):
+        """Test authentication with token having required audience."""
+        self.cache_get_mock.return_value = None
+        self.requests_mock.return_value.json.return_value = {
+            'active': True,
+            'scope': 'netbox:read netbox:write',
+            'exp': 1000,
+            'iat': 500
+        }
+
+        request = self.factory.get('/', HTTP_AUTHORIZATION=f'Bearer {self.token_with_scope}')
+
+        self.cache_get_mock.return_value = None
+        self.required_audience_mock.return_value = ['netbox']
+        try:
+            # should fail if the token does not have the required audience
+            with self.assertRaises(AuthenticationFailed):
+                self.auth.authenticate(request)
+            self.required_audience_mock.assert_called_once()
+            self.cache_set_mock.assert_not_called()
+
+            # should succeed if the token has the required audience
+            self.requests_mock.return_value.json.return_value = {
+                'active': True,
+                'aud': ['netbox', 'api', 'other'],
+                'scope': 'netbox:read netbox:write',
+                'exp': 1000,
+                'iat': 500
+            }
+
+            user, _ = self.auth.authenticate(request)
+            self.assertEqual(user, self.diode_user.user)
+            self.cache_set_mock.assert_called_once()
+        finally:
+            self.required_audience_patcher.return_value = []
 
     def test_authenticate_token_introspection_failure(self):
         """Test authentication when token introspection fails."""
