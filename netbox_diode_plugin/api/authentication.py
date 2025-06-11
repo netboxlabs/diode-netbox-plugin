@@ -69,12 +69,12 @@ class DiodeOAuth2Authentication(BaseAuthentication):
             # if the plugin is configured to require specific token audience(s),
             # reject the token if any are missing.
             required_audience = get_required_token_audience()
-            if len(required_audience) > 0:
+            if required_audience:
                 token_audience = set(data.get("aud", []))
-                for aud in required_audience:
-                    if aud not in token_audience:
-                        logger.error(f"Token audience {aud} not found in {token_audience}")
-                        return None
+                missing_audience = set(required_audience) - token_audience
+                if missing_audience:
+                    logger.error(f"Token audience(s) {missing_audience} not found in {token_audience}")
+                    return None
 
             diode_user = SimpleNamespace(
                 user=get_diode_user(),
