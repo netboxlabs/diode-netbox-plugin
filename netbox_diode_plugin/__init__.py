@@ -31,6 +31,10 @@ class NetBoxDiodePluginConfig(PluginConfig):
         "secrets_path": "/run/secrets/",
         "netbox_to_diode_client_secret_name": "netbox_to_diode",
         "diode_max_auth_retries": 3,
+
+        # List of audiences to require for the diode-to-netbox token.
+        # If empty, no audience is required.
+        "required_token_audience": [],
     }
 
 
