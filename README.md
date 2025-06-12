@@ -17,6 +17,8 @@ at [https://netboxlabs.com/blog/introducing-diode-streamlining-data-ingestion-in
 |    >= 3.7.2    |     0.1.0      |
 |    >= 4.1.0    |     0.4.0      |
 |    >= 4.2.3    |     1.0.0      |
+|    >= 4.2.3    |     1.1.0      |
+|    >= 4.2.3    |     1.2.0      |
 
 ## Installation
 
