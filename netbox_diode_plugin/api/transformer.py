@@ -608,7 +608,7 @@ def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict,
         keyname = key
         try:
             value_type, value = _pop_custom_field_type_and_value(value)
-            if value_type in ("text", "longText", "decimal", "boolean", "datetime", "selection", "url", "multipleSelection"):
+            if value_type in ("text", "long_text", "decimal", "boolean", "datetime", "selection", "url", "multiple_selection"):
                 out[key] = value
             elif value_type == "date":
                 # truncate to YYYY-MM-DD
@@ -629,11 +629,11 @@ def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict,
                     object_type=ref['_object_type'],
                     uuid=ref['_uuid'],
                 )
-            elif value_type == "multipleObjects":
+            elif value_type == "multiple_objects":
                 vals = []
                 for i, item in enumerate(value):
                     keyname = f"{key}[{i}]"
-                    nested = _prepare_custom_ref(value)
+                    nested = _prepare_custom_ref(item)
                     ref = nested[0]
                     refs.add(ref['_uuid'])
                     nodes += nested
