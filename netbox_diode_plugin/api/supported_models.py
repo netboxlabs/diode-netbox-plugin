@@ -6,7 +6,6 @@ import importlib
 import logging
 import time
 from functools import lru_cache
-from typing import List, Type
 
 from django.apps import apps
 from django.db import models
@@ -82,9 +81,9 @@ def extract_supported_models() -> dict[str, dict]:
     return extracted_models
 
 
-def get_prerequisites(model_class, fields) -> List[dict[str, str]]:
+def get_prerequisites(model_class, fields) -> list[dict[str, str]]:
     """Get the prerequisite models for the model."""
-    prerequisites: List[dict[str, str]] = []
+    prerequisites: list[dict[str, str]] = []
     prerequisite_models = getattr(model_class, "prerequisite_models", [])
 
     for prereq in prerequisite_models:
@@ -252,7 +251,7 @@ def get_serializer_for_model(model, prefix=""):
     return netbox_get_serializer_for_model(model, prefix)
 
 
-def discover_models(root_packages: List[str]) -> list[Type[models.Model]]:
+def discover_models(root_packages: list[str]) -> list[type[models.Model]]:
     """Discovers all model classes in specified root packages."""
     discovered_models = []
 
