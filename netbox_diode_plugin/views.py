@@ -7,6 +7,7 @@ from collections import defaultdict
 from django.conf import settings as netbox_settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -87,6 +88,9 @@ class BaseDiodeView(View):
 
     def has_perm(self, user_obj, perm):
         # Superusers implicitly have all permissions
+        if not user_obj.is_authenticated:
+            return False
+
         if user_obj.is_active and user_obj.is_superuser:
             return True
 
@@ -116,12 +120,12 @@ class SettingsView(BaseDiodeView):
     """Settings view."""
 
     def get_required_permission(self):
-        return "netbox_diode_plugin.view_settings"
+        return "netbox_diode_plugin.view_setting"
 
     def get(self, request):
         """Render settings template."""
-        if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect_to_login(request)
+        if ret := self.check_authentication(request):
+            return ret
 
         diode_target_override = get_plugin_config(
             "netbox_diode_plugin", "diode_target_override"
