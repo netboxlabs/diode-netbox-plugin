@@ -10,10 +10,12 @@ from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import RequestFactory, TestCase as _TestCase
 from django.urls import reverse
+from users.models import ObjectPermission
 from rest_framework import status
 
 from netbox_diode_plugin.models import Setting
 from netbox_diode_plugin.views import SettingsEditView, SettingsView
+from utilities.permissions import resolve_permission_type
 
 User = get_user_model()
 
