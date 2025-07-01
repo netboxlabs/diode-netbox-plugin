@@ -17,6 +17,7 @@ from extras.models.customfields import CustomField
 from rest_framework import serializers
 
 from .common import NON_FIELD_ERRORS, AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats, sort_ints_first
+from .compat import apply_entity_migrations
 from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -125,6 +126,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
     # handle camelCase protoJSON if provided...
     proto_json = _ensure_snake_case(proto_json, object_type)
     apply_format_transformations(proto_json, object_type)
+    apply_entity_migrations(proto_json, object_type)
 
     # context pushed down from parent nodes
     if context is not None:
