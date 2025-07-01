@@ -5,7 +5,6 @@
 import logging
 from dataclasses import dataclass
 from functools import cache, lru_cache
-from typing import Type
 
 import netaddr
 from django.contrib.contenttypes.fields import ContentType
@@ -221,7 +220,7 @@ class ObjectMatchCriteria:
     fields: tuple[str] | None = None
     expressions: tuple | None = None
     condition: Q | None = None
-    model_class: Type[models.Model] | None = None
+    model_class: type[models.Model] | None = None
     name: str | None = None
 
     def __hash__(self):
@@ -365,7 +364,7 @@ class ObjectMatchCriteria:
         """Builds a queryset for the constraint with the given data."""
         data = self._prepare_data(data)
         replacements = {
-            F(field): Value(value) if isinstance(value, (str, int, float, bool)) else value
+            F(field): Value(value) if isinstance(value, str | int | float | bool) else value
             for field, value in data.items()
         }
 
@@ -413,7 +412,7 @@ class CustomFieldMatcher:
 
     name: str
     custom_field: str
-    model_class: Type[models.Model]
+    model_class: type[models.Model]
 
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
@@ -448,7 +447,7 @@ class GlobalIPNetworkIPMatcher:
 
     ip_fields: tuple[str]
     vrf_field: str
-    model_class: Type[models.Model]
+    model_class: type[models.Model]
     name: str
 
     def _check_condition(self, data: dict) -> bool:
@@ -508,7 +507,7 @@ class VRFIPNetworkIPMatcher:
 
     ip_fields: tuple[str]
     vrf_field: str
-    model_class: Type[models.Model]
+    model_class: type[models.Model]
     name: str
 
     def _check_condition(self, data: dict) -> bool:
@@ -583,7 +582,7 @@ class AutoSlugMatcher:
 
     name: str
     slug_field: str
-    model_class: Type[models.Model]
+    model_class: type[models.Model]
 
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
@@ -750,7 +749,7 @@ def _fingerprint_all(data: dict, object_type: str|None = None) -> str:
         if k.startswith("_"):
             continue
         values.append(k)
-        if isinstance(v, (list, tuple)):
+        if isinstance(v, list | tuple):
             values.extend(sorted(v))
         elif isinstance(v, dict):
             values.append(_fingerprint_all(v))
