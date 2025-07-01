@@ -8,25 +8,24 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.messages.middleware import MessageMiddleware
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.sessions.middleware import SessionMiddleware
-from django.test import RequestFactory, TestCase as _TestCase
+from django.test import RequestFactory
+from django.test import TestCase as _TestCase
 from django.urls import reverse
-from users.models import ObjectPermission
 from rest_framework import status
+from users.models import ObjectPermission
+from utilities.permissions import resolve_permission_type
 
 from netbox_diode_plugin.models import Setting
 from netbox_diode_plugin.views import SettingsEditView, SettingsView
-from utilities.permissions import resolve_permission_type
 
 User = get_user_model()
 
 
 class TestCase(_TestCase):
-    user_permissions = ()
+    """Base test case class for NetBox Diode plugin tests."""
 
     def add_permissions(self, user, *names):
-        """
-        Assign a set of permissions to the test user. Accepts permission names in the form <app>.<action>_<model>.
-        """
+        """Assign a set of permissions to the test user. Accepts permission names in the form <app>.<action>_<model>."""
         for name in names:
             object_type, action = resolve_permission_type(name)
             obj_perm = ObjectPermission(name=name, actions=[action])
