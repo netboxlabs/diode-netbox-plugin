@@ -169,7 +169,7 @@ class SettingsView(BaseDiodeView):
 
 
 @register_model_view(Setting, "edit")
-class SettingsEditView(generic.ObjectEditView):
+class SettingsEditView(BaseDiodeView,generic.ObjectEditView):
     """Settings edit view."""
 
     queryset = Setting.objects
@@ -177,10 +177,14 @@ class SettingsEditView(generic.ObjectEditView):
     template_name = "diode/settings_edit.html"
     default_return_url = "plugins:netbox_diode_plugin:settings"
 
+    def get_required_permission(self):
+        """Return the permission required to view Diode plugin settings."""
+        return "netbox_diode_plugin.change_setting"
+
     def get(self, request, *args, **kwargs):
         """GET request handler."""
-        if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect_to_login(request)
+        if ret := self.check_authentication(request):
+            return ret
 
         diode_target_override = get_plugin_config(
             "netbox_diode_plugin", "diode_target_override"
@@ -199,8 +203,8 @@ class SettingsEditView(generic.ObjectEditView):
 
     def post(self, request, *args, **kwargs):
         """POST request handler."""
-        if not request.user.is_authenticated or not request.user.is_staff:
-            return redirect_to_login(request)
+        if ret := self.check_authentication(request):
+            return ret
 
         diode_target_override = get_plugin_config(
             "netbox_diode_plugin", "diode_target_override"
