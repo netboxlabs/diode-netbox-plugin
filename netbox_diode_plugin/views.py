@@ -7,6 +7,7 @@ from collections import defaultdict
 from django.conf import settings as netbox_settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ImproperlyConfigured
 from django.db.models import Q
 from django.http import HttpResponseRedirect
 from django.shortcuts import redirect, render
@@ -44,20 +45,28 @@ def redirect_to_login(request):
 
 
 class BaseDiodeView(View):
+    """
+    Base view class for Diode plugin views.
+
+    Provides authentication and permission checking functionality for views
+    that need to interact with the Diode API. Includes methods for:
+    - Object permission filtering and retrieval
+    - Permission checking for authenticated users
+    - Authentication validation for requests
+    """
 
     def get_permission_filter(self, user_obj):
+        """Return the permission filter for the user."""
         return Q(users=user_obj) | Q(groups__user=user_obj)
 
     def get_object_permissions(self, user_obj):
-        """
-        Return all permissions granted to the user by an ObjectPermission.
-        """
+        """Return all permissions granted to the user by an ObjectPermission."""
         # Initialize a dictionary mapping permission names to sets of constraints
         perms = defaultdict(list)
 
         # Collect any configured default permissions
         for perm_name, constraints in netbox_settings.DEFAULT_PERMISSIONS.items():
-            constraints = constraints or tuple()
+            constraints = constraints or ()
             if type(constraints) not in (list, tuple):
                 raise ImproperlyConfigured(
                     f"Constraints for default permission {perm_name} must be defined as a list or tuple."
@@ -80,13 +89,15 @@ class BaseDiodeView(View):
         return perms
 
     def get_all_permissions(self, user_obj, obj=None):
+        """Get all permissions for the user."""
         if not user_obj.is_active or user_obj.is_anonymous:
-            return dict()
+            return {}
         if not hasattr(user_obj, '_object_perm_cache'):
             user_obj._object_perm_cache = self.get_object_permissions(user_obj)
         return user_obj._object_perm_cache
 
     def has_perm(self, user_obj, perm):
+        """Check if the user has the required permission."""
         # Superusers implicitly have all permissions
         if not user_obj.is_authenticated:
             return False
@@ -111,15 +122,18 @@ class BaseDiodeView(View):
         return True
 
     def check_authentication(self, request):
+        """Check if the user has the required permission."""
         if not self.has_perm(request.user, self.get_required_permission()):
             return redirect(
                 reverse("home",)
             )
-         
+        return None
+
 class SettingsView(BaseDiodeView):
     """Settings view."""
 
     def get_required_permission(self):
+        """Return the permission required to view Diode plugin settings."""
         return "netbox_diode_plugin.view_setting"
 
     def get(self, request):
@@ -225,6 +239,7 @@ class ClientCredentialListView(BaseDiodeView):
     model = ClientCredentials
 
     def get_required_permission(self):
+        """Return the permission required to view client credentials list."""
         return "netbox_diode_plugin.view_clientcredentials"
 
     def get_table_data(self, request):
@@ -281,6 +296,7 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
     default_return_url = "plugins:netbox_diode_plugin:client_credential_list"
 
     def get_required_permission(self):
+        """Return the permission required to delete client credentials."""
         return "netbox_diode_plugin.delete_clientcredentials"
 
     def get(self, request, client_credential_id):
@@ -333,6 +349,7 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
     default_return_url = "plugins:netbox_diode_plugin:client_credential_list"
 
     def get_required_permission(self):
+        """Return the permission required to add new client credentials."""
         return "netbox_diode_plugin.add_clientcredentials"
 
     def get(self, request):
@@ -388,7 +405,8 @@ class ClientCredentialSecretView(BaseDiodeView):
     template_name = "diode/client_credential_secret.html"
 
     def get_required_permission(self):
-         return "netbox_diode_plugin.view_clientcredentials"
+        """Return the permission required to view client credential secrets."""
+        return "netbox_diode_plugin.view_clientcredentials"
 
     def get(self, request):
         """Get request handler."""
