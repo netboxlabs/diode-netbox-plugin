@@ -123,6 +123,9 @@ class BaseDiodeView(View):
 
     def check_authentication(self, request):
         """Check if the user has the required permission."""
+        if not request.user.is_authenticated:
+            return redirect_to_login(request)
+
         if not self.has_perm(request.user, self.get_required_permission()):
             return redirect(
                 reverse("home",)
