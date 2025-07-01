@@ -9,12 +9,12 @@ _diode_menu_items = (
     PluginMenuItem(
         link="plugins:netbox_diode_plugin:settings",
         link_text=_("Settings"),
-        staff_only= True,
+        permissions=("netbox_diode_plugin.view_settings",),
     ),
     PluginMenuItem(
         link="plugins:netbox_diode_plugin:client_credential_list",
         link_text=_("Client Credentials"),
-        staff_only= True,
+        permissions=("netbox_diode_plugin.view_clientcredentials",),
     ),
 )
 
