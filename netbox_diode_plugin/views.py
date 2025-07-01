@@ -281,7 +281,7 @@ class ClientCredentialDeleteView(GetReturnURLMixin, BaseDiodeView):
     default_return_url = "plugins:netbox_diode_plugin:client_credential_list"
 
     def get_required_permission(self):
-        return "netbox_diode_plugin.view_clientcredentials"
+        return "netbox_diode_plugin.delete_clientcredentials"
 
     def get(self, request, client_credential_id):
         """GET request handler."""
@@ -333,7 +333,7 @@ class ClientCredentialAddView(GetReturnURLMixin, BaseDiodeView):
     default_return_url = "plugins:netbox_diode_plugin:client_credential_list"
 
     def get_required_permission(self):
-        return "netbox_diode_plugin.view_clientcredentials"
+        return "netbox_diode_plugin.add_clientcredentials"
 
     def get(self, request):
         """GET request handler."""
