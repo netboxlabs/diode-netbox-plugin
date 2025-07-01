@@ -8,7 +8,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.messages.middleware import MessageMiddleware
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.sessions.middleware import SessionMiddleware
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase as _TestCase
 from django.urls import reverse
 from rest_framework import status
 
@@ -16,6 +16,21 @@ from netbox_diode_plugin.models import Setting
 from netbox_diode_plugin.views import SettingsEditView, SettingsView
 
 User = get_user_model()
+
+
+class TestCase(_TestCase):
+    user_permissions = ()
+
+    def add_permissions(self, user, *names):
+        """
+        Assign a set of permissions to the test user. Accepts permission names in the form <app>.<action>_<model>.
+        """
+        for name in names:
+            object_type, action = resolve_permission_type(name)
+            obj_perm = ObjectPermission(name=name, actions=[action])
+            obj_perm.save()
+            obj_perm.users.add(user)
+            obj_perm.object_types.add(object_type)
 
 
 class SettingsViewTestCase(TestCase):
@@ -31,7 +46,7 @@ class SettingsViewTestCase(TestCase):
     def test_returns_200_for_authenticated(self):
         """Test that the view returns 200 for an authenticated user."""
         self.request.user = User.objects.create_user("foo", password="pass")
-        self.request.user.is_staff = True
+        self.add_permissions(self.request.user, ["netbox_diode_plugin.view_setting",])
 
         response = self.view.get(self.request)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -49,7 +64,7 @@ class SettingsViewTestCase(TestCase):
     def test_settings_created_if_not_found(self):
         """Test that the settings are created with placeholder data if not found."""
         self.request.user = User.objects.create_user("foo", password="pass")
-        self.request.user.is_staff = True
+        self.add_permissions(self.request.user, ["netbox_diode_plugin.view_setting",])
 
         with mock.patch("netbox_diode_plugin.models.Setting.objects.get") as mock_get:
             mock_get.side_effect = Setting.DoesNotExist
@@ -72,7 +87,7 @@ class SettingsEditViewTestCase(TestCase):
         """Test that the view returns 200 for an authenticated user."""
         request = self.request_factory.get(self.path)
         request.user = User.objects.create_user("foo", password="pass")
-        request.user.is_staff = True
+        self.add_permissions(request.user, ["netbox_diode_plugin.view_setting",])
         request.htmx = None
         self.view.setup(request)
 
@@ -92,7 +107,7 @@ class SettingsEditViewTestCase(TestCase):
     def test_settings_updated(self):
         """Test that the settings are updated."""
         user = User.objects.create_user("foo", password="pass")
-        user.is_staff = True
+        self.add_permissions(user, ["netbox_diode_plugin.view_setting",])
 
         request = self.request_factory.get(self.path)
         request.user = user
@@ -150,7 +165,14 @@ class SettingsEditViewTestCase(TestCase):
             mock_get_plugin_config.return_value = "grpc://localhost:8080/diode"
 
             user = User.objects.create_user("foo", password="pass")
-            user.is_staff = True
+            self.add_permissions(
+                user,
+                [
+                    "netbox_diode_plugin.view_setting",
+                    "netbox_diode_plugin.add_setting",
+                    "netbox_diode_plugin.change_setting",
+                ]
+            )
 
             request = self.request_factory.post(self.path)
             request.user = user
@@ -189,7 +211,14 @@ class SettingsEditViewTestCase(TestCase):
             mock_get_plugin_config.return_value = "grpc://localhost:8080/diode"
 
             user = User.objects.create_user("foo", password="pass")
-            user.is_staff = True
+            self.add_permissions(
+                user,
+                [
+                    "netbox_diode_plugin.view_setting",
+                    "netbox_diode_plugin.add_setting",
+                    "netbox_diode_plugin.change_setting",
+                ]
+            )
 
             request = self.request_factory.post(self.path)
             request.user = user
