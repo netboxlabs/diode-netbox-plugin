@@ -26,7 +26,7 @@ def _harmonize_formats(data):
     return _tuples_to_lists(data)
 
 def _tuples_to_lists(data):
-    if isinstance(data, (tuple, list)):
+    if isinstance(data, tuple | list):
         return [_tuples_to_lists(d) for d in data]
     if isinstance(data, dict):
         return {k: _tuples_to_lists(v) for k, v in data.items()}
@@ -165,7 +165,7 @@ class ApplyUpdatesTestCase(APITestCase):
         path = path[:-1]
         cur = self._follow_path(obj, path)
 
-        if isinstance(value, (list, tuple)):
+        if isinstance(value, list | tuple):
             vals = set(value)
         else:
             vals = {value}

@@ -9,6 +9,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
+from zoneinfo import ZoneInfo
 
 import netaddr
 from django.apps import apps
@@ -20,7 +21,6 @@ from django.db.backends.postgresql.psycopg_any import NumericRange
 from extras.models import CustomField
 from netaddr.eui import EUI
 from rest_framework import status
-from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -166,7 +166,7 @@ class ChangeSet:
         excluded_relation_fields = []
         rel_errors = defaultdict(list)
         for f in model._meta.get_fields():
-            if isinstance(f, (GenericRelation, GenericForeignKey)):
+            if isinstance(f, GenericRelation | GenericForeignKey):
                 excluded_relation_fields.append(f.name)
                 continue
             if not f.is_relation:
@@ -251,7 +251,7 @@ def error_from_validation_error(e, object_name):
     if e.detail:
         if isinstance(e.detail, dict):
             errors[object_name] = e.detail
-        elif isinstance(e.detail, (list, tuple)):
+        elif isinstance(e.detail, list | tuple):
             errors[object_name] = {
                 NON_FIELD_ERRORS: e.detail
             }

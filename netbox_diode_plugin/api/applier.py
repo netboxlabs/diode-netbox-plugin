@@ -101,7 +101,7 @@ def _pre_apply(model_class: models.Model, change: Change, created: dict):
     # resolve foreign key references to new objects
     for ref_field in change.new_refs:
         v = _get_path(data, ref_field)
-        if isinstance(v, (list, tuple)):
+        if isinstance(v, list | tuple):
             ref_list = []
             for ref in v:
                 if isinstance(ref, str):

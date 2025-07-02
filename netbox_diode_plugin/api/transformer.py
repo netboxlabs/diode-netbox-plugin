@@ -4,6 +4,7 @@
 
 import copy
 import datetime
+import graphlib
 import json
 import logging
 import re
@@ -11,7 +12,6 @@ from collections import defaultdict
 from functools import lru_cache
 from uuid import uuid4
 
-import graphlib
 from django.utils.text import slugify
 from extras.models.customfields import CustomField
 from rest_framework import serializers
@@ -474,7 +474,7 @@ def _update_dict_refs(data, new_refs):
     for k, v in data.items():
         if isinstance(v, UnresolvedReference) and v.uuid in new_refs:
             v.uuid = new_refs[v.uuid]
-        elif isinstance(v, (list, tuple)):
+        elif isinstance(v, list | tuple):
             for item in v:
                 if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
                     item.uuid = new_refs[item.uuid]
@@ -517,7 +517,7 @@ def _update_resolved_refs(data, new_refs):
     for k, v in list(data.items()):
         if isinstance(v, UnresolvedReference) and v.uuid in new_refs:
             data[k] = new_refs[v.uuid]
-        elif isinstance(v, (list, tuple)):
+        elif isinstance(v, list | tuple):
             new_items = []
             has_refs = False
             for item in v:
@@ -539,7 +539,7 @@ def cleanup_unresolved_references(data: dict) -> list[str]:
             if k != 'id':
                 unresolved.add(k)
             data[k] = str(v)
-        elif isinstance(v, (list, tuple)):
+        elif isinstance(v, list | tuple):
             items = []
             for item in v:
                 if isinstance(item, UnresolvedReference):

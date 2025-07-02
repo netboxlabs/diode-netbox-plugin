@@ -84,7 +84,7 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         custom_field_values = instance.get_custom_fields()
         cfmap = {}
         for cf, value in custom_field_values.items():
-            if isinstance(value, (datetime.datetime, datetime.date)):
+            if isinstance(value, datetime.datetime | datetime.date):
                 cfmap[cf.name] = value
             else:
                 cfmap[cf.name] = cf.serialize(value)
