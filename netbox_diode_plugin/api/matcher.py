@@ -17,6 +17,7 @@ from django.db.models.query_utils import Q
 from extras.models.customfields import CustomField
 
 from .common import UnresolvedReference
+from .compat import in_version_range
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model
 
 logger = logging.getLogger(__name__)
@@ -162,18 +163,28 @@ _LOGICAL_MATCHERS = {
             name="logical_service_name_no_device_or_vm",
             model_class=get_object_type_model("ipam.service"),
             condition=Q(device__isnull=True, virtual_machine__isnull=True),
+            max_version="4.2.99",
         ),
         ObjectMatchCriteria(
             fields=("name", "device"),
             name="logical_service_name_on_device",
             model_class=get_object_type_model("ipam.service"),
             condition=Q(device__isnull=False),
+            max_version="4.2.99",
         ),
         ObjectMatchCriteria(
             fields=("name", "virtual_machine"),
             name="logical_service_name_on_vm",
             model_class=get_object_type_model("ipam.service"),
             condition=Q(virtual_machine__isnull=False),
+            max_version="4.2.99",
+        ),
+        ObjectMatchCriteria(
+            fields=("name", "parent_object_type", "parent_object_id"),
+            name="logical_service_name_on_parent",
+            model_class=get_object_type_model("ipam.service"),
+            condition=Q(parent_object_type__isnull=False),
+            min_version="4.3.0"
         ),
     ],
     "dcim.modulebay": lambda: [
@@ -222,6 +233,9 @@ class ObjectMatchCriteria:
     condition: Q | None = None
     model_class: type[models.Model] | None = None
     name: str | None = None
+
+    min_version: str | None = None
+    max_version: str | None = None
 
     def __hash__(self):
         """Hash the object match criteria."""
@@ -414,6 +428,9 @@ class CustomFieldMatcher:
     custom_field: str
     model_class: type[models.Model]
 
+    min_version: str | None = None
+    max_version: str | None = None
+
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
         if not self.has_required_fields(data):
@@ -449,6 +466,9 @@ class GlobalIPNetworkIPMatcher:
     vrf_field: str
     model_class: type[models.Model]
     name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
 
     def _check_condition(self, data: dict) -> bool:
         """Check the condition for the custom field."""
@@ -509,6 +529,9 @@ class VRFIPNetworkIPMatcher:
     vrf_field: str
     model_class: type[models.Model]
     name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
 
     def _check_condition(self, data: dict) -> bool:
         """Check the condition for the custom field."""
@@ -584,6 +607,9 @@ class AutoSlugMatcher:
     slug_field: str
     model_class: type[models.Model]
 
+    min_version: str | None = None
+    max_version: str | None = None
+
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
         if not self.has_required_fields(data):
@@ -649,7 +675,10 @@ def _get_autoslug_matchers(model_class) -> list:
 @lru_cache(maxsize=256)
 def _get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
     object_type = get_object_type(model_class)
-    matchers = _LOGICAL_MATCHERS.get(object_type, lambda: [])()
+    matchers = [
+        x for x in _LOGICAL_MATCHERS.get(object_type, lambda: [])()
+        if in_version_range(x.min_version, x.max_version)
+    ]
 
     # collect single fields that are unique
     for field in model_class._meta.fields:

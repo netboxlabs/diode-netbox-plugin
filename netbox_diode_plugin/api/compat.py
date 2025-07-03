@@ -28,19 +28,11 @@ def apply_entity_migrations(data: dict, object_type: str):
 
 def _register_migration(func, min_version, max_version, object_type):
     """Registers a migration function."""
-    min_version = version.parse(min_version)
-    max_version = version.parse(max_version) if max_version else None
-    current_version = _current_netbox_version()
-
-    if current_version < min_version:
-        logger.debug(f"Skipping migration {func.__name__} for {object_type}: min version {min_version}")
-        return
-    if max_version and current_version > max_version:
-        logger.debug(f"Skipping migration {func.__name__} for {object_type}: max version {max_version}")
-        return
-
-    logger.debug(f"Registering migration {func.__name__} for {object_type}.")
-    _MIGRATIONS_BY_OBJECT_TYPE[object_type].append(func)
+    if in_version_range(min_version, max_version):
+        logger.debug(f"Registering migration {func.__name__} for {object_type}.")
+        _MIGRATIONS_BY_OBJECT_TYPE[object_type].append(func)
+    else:
+        logger.debug(f"Skipping migration {func.__name__} for {object_type}: {min_version} to {max_version}.")
 
 @cache
 def _current_netbox_version():
@@ -50,6 +42,17 @@ def _current_netbox_version():
     except Exception:
         logger.exception("Failed to determine current version of NetBox.")
         return (0, 0, 0)
+
+def in_version_range(min_version: str | None, max_version: str | None):
+    """Returns True if the current version of NetBox is within the given version range."""
+    min_version = version.parse(min_version) if min_version else None
+    max_version = version.parse(max_version) if max_version else None
+    current_version = _current_netbox_version()
+    if min_version and current_version < min_version:
+        return False
+    if max_version and current_version > max_version:
+        return False
+    return True
 
 def diode_migration(min_version: str, max_version: str | None, object_type: str):
     """Decorator to mark a function as a diode migration."""
