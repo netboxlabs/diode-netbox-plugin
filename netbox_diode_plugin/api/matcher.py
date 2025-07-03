@@ -212,6 +212,32 @@ _LOGICAL_MATCHERS = {
             model_class=get_object_type_model("ipam.fhrpgroup"),
         )
     ],
+    "tenancy.contact": lambda: [
+        ObjectMatchCriteria(
+            # contacts are unconstrained in 4.3.0
+            # in 4.2 they are constrained by unique name per group
+            fields=("name", ),
+            name="logical_contact_name",
+            model_class=get_object_type_model("tenancy.contact"),
+            min_version="4.3.0",
+        )
+    ],
+    "dcim.devicerole": lambda: [
+        ObjectMatchCriteria(
+            fields=("name",),
+            name="logical_device_role_name_no_parent",
+            model_class=get_object_type_model("dcim.devicerole"),
+            condition=Q(parent__isnull=True),
+            min_version="4.3.0",
+        ),
+        ObjectMatchCriteria(
+            fields=("slug",),
+            name="logical_device_role_slug_no_parent",
+            model_class=get_object_type_model("dcim.devicerole"),
+            condition=Q(parent__isnull=True),
+            min_version="4.3.0",
+        )
+    ],
 }
 
 @dataclass
