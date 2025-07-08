@@ -544,6 +544,8 @@ _JSON_REF_INFO = {
     'ipam.service': {
         'device': RefInfo(object_type='dcim.device', field_name='device'),
         'ipaddresses': RefInfo(object_type='ipam.ipaddress', field_name='ipaddresses', is_many=True),
+        'parent_object_device': RefInfo(object_type='dcim.device', field_name='parent_object', is_generic=True),
+        'parent_object_virtual_machine': RefInfo(object_type='virtualization.virtualmachine', field_name='parent_object', is_generic=True),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
         'virtual_machine': RefInfo(object_type='virtualization.virtualmachine', field_name='virtual_machine'),
     },
@@ -576,6 +578,7 @@ _JSON_REF_INFO = {
     },
     'tenancy.contact': {
         'group': RefInfo(object_type='tenancy.contactgroup', field_name='group'),
+        'groups': RefInfo(object_type='tenancy.contactgroup', field_name='groups', is_many=True),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
     },
     'tenancy.contactassignment': {
@@ -948,13 +951,13 @@ _LEGAL_FIELDS = {
     'ipam.rir': frozenset(['custom_fields', 'description', 'is_private', 'name', 'slug', 'tags']),
     'ipam.role': frozenset(['custom_fields', 'description', 'name', 'slug', 'tags', 'weight']),
     'ipam.routetarget': frozenset(['comments', 'custom_fields', 'description', 'name', 'tags', 'tenant']),
-    'ipam.service': frozenset(['comments', 'custom_fields', 'description', 'device', 'ipaddresses', 'name', 'ports', 'protocol', 'tags', 'virtual_machine']),
+    'ipam.service': frozenset(['comments', 'custom_fields', 'description', 'device', 'ipaddresses', 'name', 'parent_object_id', 'parent_object_type', 'ports', 'protocol', 'tags', 'virtual_machine']),
     'ipam.vlan': frozenset(['comments', 'custom_fields', 'description', 'group', 'name', 'qinq_role', 'qinq_svlan', 'role', 'site', 'status', 'tags', 'tenant', 'vid']),
     'ipam.vlangroup': frozenset(['custom_fields', 'description', 'name', 'scope_id', 'scope_type', 'slug', 'tags', 'vid_ranges']),
     'ipam.vlantranslationpolicy': frozenset(['description', 'name']),
     'ipam.vlantranslationrule': frozenset(['description', 'local_vid', 'policy', 'remote_vid']),
     'ipam.vrf': frozenset(['comments', 'custom_fields', 'description', 'enforce_unique', 'export_targets', 'import_targets', 'name', 'rd', 'tags', 'tenant']),
-    'tenancy.contact': frozenset(['address', 'comments', 'custom_fields', 'description', 'email', 'group', 'link', 'name', 'phone', 'tags', 'title']),
+    'tenancy.contact': frozenset(['address', 'comments', 'custom_fields', 'description', 'email', 'group', 'groups', 'link', 'name', 'phone', 'tags', 'title']),
     'tenancy.contactassignment': frozenset(['contact', 'custom_fields', 'object_id', 'object_type', 'priority', 'role', 'tags']),
     'tenancy.contactgroup': frozenset(['custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
     'tenancy.contactrole': frozenset(['custom_fields', 'description', 'name', 'slug', 'tags']),
