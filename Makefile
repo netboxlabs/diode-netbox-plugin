@@ -24,7 +24,7 @@ docker-compose-netbox-plugin-test-cover:
 
 .PHONY: docker-compose-generate-matching-docs
 docker-compose-generate-matching-docs: docker-compose-migrate
-	@$(DOCKER_COMPOSE) -f docker/docker-compose.yaml -f docker/docker-compose.test.yaml run --rm netbox python manage.py generate_matching_docs
+	@$(DOCKER_COMPOSE) -f docker/docker-compose.yaml -f docker/docker-compose.test.yaml run --rm netbox python manage.py generate_matching_docs > ./docs/matching-criteria-documentation.md
 
 .PHONY: docker-compose-migrate
 docker-compose-migrate:
