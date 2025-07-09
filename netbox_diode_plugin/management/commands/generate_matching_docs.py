@@ -22,13 +22,6 @@ class MatcherInfo:
 class Command(BaseCommand):
     help = "Generate markdown documentation for NetBox Diode Plugin matching criteria"
 
-    def add_arguments(self, parser):
-        parser.add_argument(
-            '--output',
-            type=str,
-            help='Output file path (default: stdout)',
-        )
-
     def extract_condition_description(self, condition) -> str:
         """Extract a human-readable description of a Q condition."""
         if condition is None:
@@ -139,16 +132,12 @@ class Command(BaseCommand):
             markdown.append("|--------------|--------|-----------|-------------|-------------------|")
             
             for matcher in matchers:
-                fields_str = ", ".join(matcher.fields) if matcher.fields else "N/A"
-                condition_str = matcher.condition if matcher.condition and matcher.condition != "None" else "N/A"
-                version_str = matcher.version_constraints if matcher.version_constraints else "All versions"
-                
                 # Escape pipe characters in table cells
-                name = matcher.name.replace("|", "\\|")
-                fields_str = fields_str.replace("|", "\\|")
-                condition_str = condition_str.replace("|", "\\|")
-                description = matcher.description.replace("|", "\\|")
-                version_str = version_str.replace("|", "\\|")
+                name = matcher.name.replace("|", "\\|") if matcher.name else "N/A"
+                fields_str = ", ".join(matcher.fields).replace("|", "\\|") if matcher.fields else ""
+                condition_str = matcher.condition.replace("|", "\\|") if matcher.condition and matcher.condition != "None" else "N/A"
+                description = matcher.description.replace("|", "\\|") if matcher.description else "N/A"
+                version_str = matcher.version_constraints.replace("|", "\\|") if matcher.version_constraints else "All versions"
                 
                 markdown.append(f"| {name} | {fields_str} | {condition_str} | {description} | {version_str} |")
             

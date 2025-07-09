@@ -45,15 +45,15 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Fields | Condition | Description | Version Constraints |
 |--------------|--------|-----------|-------------|-------------------|
-| logical_ip_address_global_no_vrf | N/A | N/A | Matches IP address address in global namespace (no VRF) | All versions |
-| logical_ip_address_within_vrf | N/A | N/A | Matches IP address address within VRF | All versions |
+| logical_ip_address_global_no_vrf |  | N/A | Matches IP address address in global namespace (no VRF) | All versions |
+| logical_ip_address_within_vrf |  | N/A | Matches IP address address within VRF | All versions |
 
 ## ipam.iprange
 
 | Matcher Name | Fields | Condition | Description | Version Constraints |
 |--------------|--------|-----------|-------------|-------------------|
-| logical_ip_range_start_end_global_no_vrf | N/A | N/A | Matches IP range start_address, end_address within VRF context | All versions |
-| logical_ip_range_start_end_within_vrf | N/A | N/A | Matches IP range start_address, end_address within VRF context | All versions |
+| logical_ip_range_start_end_global_no_vrf |  | N/A | Matches IP range start_address, end_address within VRF context | All versions |
+| logical_ip_range_start_end_within_vrf |  | N/A | Matches IP range start_address, end_address within VRF context | All versions |
 
 ## ipam.prefix
 
