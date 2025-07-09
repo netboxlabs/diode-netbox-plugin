@@ -160,16 +160,6 @@ class Command(BaseCommand):
         """Handle the command execution."""
         self.stdout.write("Analyzing matching criteria...")
         docs = self.analyze_logical_matchers()
-        
         self.stdout.write("Generating markdown documentation...")
-        markdown_content = self.generate_markdown_table(docs)
-        
-        # Output to file or stdout
-        if options['output']:
-            with open(options['output'], 'w') as f:
-                f.write(markdown_content)
-            self.stdout.write(
-                self.style.SUCCESS(f"Documentation generated and saved to: {options['output']}")
-            )
-        else:
-            self.stdout.write(markdown_content) 
+        markdown_content = self.generate_markdown_table(docs)        
+        self.stdout.write(markdown_content) 

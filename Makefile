@@ -23,8 +23,8 @@ docker-compose-netbox-plugin-test-cover:
 	@$(MAKE) docker-compose-netbox-plugin-down
 
 .PHONY: docker-compose-generate-matching-docs
-docker-compose-generate-matching-docs: docker-compose-migrate
-	@$(DOCKER_COMPOSE) -f docker/docker-compose.yaml -f docker/docker-compose.test.yaml run --rm netbox python manage.py generate_matching_docs > ./docs/matching-criteria-documentation.md
+docker-compose-generate-matching-docs:
+	@$(DOCKER_COMPOSE) -f docker/docker-compose.yaml -f docker/docker-compose.test.yaml run --rm netbox python manage.py generate_matching_docs | awk '/Generating markdown documentation.../{p=1;next} p' > ./docs/matching-criteria-documentation.md
 
 .PHONY: docker-compose-migrate
 docker-compose-migrate:

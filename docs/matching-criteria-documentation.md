@@ -1,9 +1,3 @@
-🧬 loaded config '/etc/netbox/config/configuration.py'
-🧬 loaded config '/etc/netbox/config/extra.py'
-🧬 loaded config '/etc/netbox/config/logging.py'
-🧬 loaded config '/etc/netbox/config/plugins.py'
-Analyzing matching criteria...
-Generating markdown documentation...
 # NetBox Diode Plugin - Object Matching Criteria
 
 This document describes how the Diode NetBox Plugin matches existing objects when applying changes.
