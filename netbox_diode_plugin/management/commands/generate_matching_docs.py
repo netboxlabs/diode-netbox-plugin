@@ -198,7 +198,7 @@ class Command(BaseCommand):
         markdown = []
         markdown.append("# NetBox Diode Plugin - Object Matching Criteria")
         markdown.append("")
-        markdown.append("This document describes how the Diode NetBox Plugin matches existing objects when applying changes.")
+        markdown.append("This document describes how the Diode NetBox Plugin matches existing objects when applying changes. The matchers will be applied in the order of their precedence, unttil one of them matches.")
         markdown.append("")
         markdown.append("## Matcher Types")
         markdown.append("")
@@ -221,10 +221,10 @@ class Command(BaseCommand):
                 continue
             
             # Create table header
-            markdown.append("| Matcher Name | Type | Fields | Condition | Description | Version Constraints |")
-            markdown.append("|--------------|------|--------|-----------|-------------|-------------------|")
+            markdown.append("| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |")
+            markdown.append("|--------------|---------------------|------|--------|-----------|-------------|---------------------|")
             
-            for matcher in matchers:
+            for precedence, matcher in enumerate(matchers, start=1):
                 # Escape pipe characters in table cells
                 name = matcher.name.replace("|", "\\|") if matcher.name else "N/A"
                 matcher_type = matcher.matcher_source.replace("|", "\\|")
@@ -233,7 +233,7 @@ class Command(BaseCommand):
                 description = matcher.description.replace("|", "\\|") if matcher.description else "N/A"
                 version_str = matcher.version_constraints.replace("|", "\\|") if matcher.version_constraints else "All versions"
                 
-                markdown.append(f"| {name} | {matcher_type} | {fields_str} | {condition_str} | {description} | {version_str} |")
+                markdown.append(f"| {name} | {precedence} | {matcher_type} | {fields_str} | {condition_str} | {description} | {version_str} |")
             
             markdown.append("")
         

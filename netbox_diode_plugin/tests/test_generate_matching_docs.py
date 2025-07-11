@@ -456,12 +456,12 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         self.assertIn("## dcim.site", result)
         
         # Check table header
-        self.assertIn("| Matcher Name | Type | Fields | Condition | Description | Version Constraints |", result)
-        self.assertIn("|--------------|------|--------|-----------|-------------|-------------------|", result)
+        self.assertIn("| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |", result)
+        self.assertIn("|--------------|---------------------|------|--------|-----------|-------------|---------------------|", result)
         
         # Check table rows
-        self.assertIn("| test_matcher_1 | logical | name | N/A | Test description 1 | All versions |", result)
-        self.assertIn("| test_matcher_2 | logical | name, site | site is NOT NULL | Test description 2 | ≥4.3.0 |", result)
+        self.assertIn("| test_matcher_1 | 1 | logical | name | N/A | Test description 1 | All versions |", result)
+        self.assertIn("| test_matcher_2 | 2 | logical | name, site | site is NOT NULL | Test description 2 | ≥4.3.0 |", result)
 
     def test_generate_markdown_table_with_pipe_escaping(self):
         """Test generating markdown table with pipe character escaping."""
@@ -481,7 +481,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         result = self.command.generate_markdown_table(docs)
         
         # Check that pipe characters are escaped
-        self.assertIn("| test\\|matcher | logical | field\\|1, field\\|2 | field\\|1 is NOT NULL | Test\\|description | ≥4.3.0\\|test |", result)
+        self.assertIn("| test\\|matcher | 1 | logical | field\\|1, field\\|2 | field\\|1 is NOT NULL | Test\\|description | ≥4.3.0\\|test |", result)
 
     def test_generate_markdown_table_no_matchers(self):
         """Test generating markdown table for object type with no matchers."""
@@ -603,7 +603,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         result = self.command.generate_markdown_table(docs)
         
         # Check that None values are handled gracefully
-        self.assertIn("| test_matcher | logical |  | N/A | N/A | All versions |", result)
+        self.assertIn("| test_matcher | 1 | logical |  | N/A | N/A | All versions |", result)
         
     def test_markdown_table_with_empty_fields(self):
         """Test with empty fields list."""
@@ -623,4 +623,4 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         result = self.command.generate_markdown_table(docs)
         
         # Check that empty fields list is handled
-        self.assertIn("| test_matcher | logical |  | N/A | Test description | All versions |", result) 
+        self.assertIn("| test_matcher | 1 | logical |  | N/A | Test description | All versions |", result) 
