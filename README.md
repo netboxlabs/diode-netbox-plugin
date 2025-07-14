@@ -99,6 +99,12 @@ cd /opt/netbox/netbox
 make docker-compose-netbox-plugin-test
 ```
 
+## Generating Documentation
+Generates documentation on how diode entities are matched. The generated documentation is output to [here](./docs/matching-criteria-documentation.md).
+```shell
+make docker-compose-generate-matching-docs
+```
+
 ## License
 
 Distributed under the NetBox Limited Use License 1.0. See [LICENSE.md](./LICENSE.md) for more information.
