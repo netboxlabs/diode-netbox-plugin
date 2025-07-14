@@ -32,7 +32,7 @@ class MatcherInfoTestCase(TestCase):
             matcher_type="ObjectMatchCriteria",
             version_constraints="≥4.3.0"
         )
-        
+
         self.assertEqual(info.name, "test_matcher")
         self.assertEqual(info.fields, ["field1", "field2"])
         self.assertEqual(info.condition, "field1 is NOT NULL")
@@ -43,7 +43,7 @@ class MatcherInfoTestCase(TestCase):
     def test_matcher_info_defaults(self):
         """Test creating MatcherInfo with default values."""
         info = MatcherInfo(name="test_matcher")
-        
+
         self.assertEqual(info.name, "test_matcher")
         self.assertIsNone(info.fields)
         self.assertIsNone(info.condition)
@@ -63,9 +63,9 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
 
     def test_add_arguments(self):
         """Test that the command accepts the --output argument."""
-        from django.core.management.base import BaseCommand
         from django.core.management import get_commands
-        
+        from django.core.management.base import BaseCommand
+
         # Verify the command is registered
         commands = get_commands()
         self.assertIn('generate_matching_docs', commands)
@@ -105,7 +105,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_matcher.name = "logical_ip_address_global_no_vrf"
         mock_matcher.ip_fields = ["address"]
         mock_matcher.vrf_field = "vrf"
-        
+
         result = self.command.get_matcher_description(mock_matcher)
         self.assertEqual(result, "Matches IP address address in global namespace (no VRF)")
 
@@ -115,7 +115,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_matcher.name = "logical_ip_address_within_vrf"
         mock_matcher.ip_fields = ["address"]
         mock_matcher.vrf_field = "vrf"
-        
+
         result = self.command.get_matcher_description(mock_matcher)
         self.assertEqual(result, "Matches IP address address within VRF")
 
@@ -125,7 +125,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_matcher.name = "logical_ip_range_start_end_within_vrf"
         mock_matcher.ip_fields = ["start_address", "end_address"]
         mock_matcher.vrf_field = "vrf"
-        
+
         result = self.command.get_matcher_description(mock_matcher)
         self.assertEqual(result, "Matches IP range start_address, end_address within VRF context")
 
@@ -137,7 +137,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             model_class=None,
             condition=None
         )
-        
+
         result = self.command.get_matcher_description(matcher)
         self.assertEqual(result, "Matches on unique constraint fields: name, site")
 
@@ -149,7 +149,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             model_class=None,
             condition=Q(site__isnull=False)
         )
-        
+
         result = self.command.get_matcher_description(matcher)
         self.assertEqual(result, "Matches on unique constraint fields: name, site where site is NOT NULL")
 
@@ -161,7 +161,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             model_class=None,
             condition=None
         )
-        
+
         result = self.command.get_matcher_description(matcher)
         self.assertEqual(result, "Custom matcher")
 
@@ -170,7 +170,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_matcher = mock.MagicMock()
         mock_matcher.min_version = None
         mock_matcher.max_version = None
-        
+
         result = self.command.get_version_constraints(mock_matcher)
         self.assertIsNone(result)
 
@@ -179,7 +179,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_matcher = mock.MagicMock()
         mock_matcher.min_version = "4.3.0"
         mock_matcher.max_version = None
-        
+
         result = self.command.get_version_constraints(mock_matcher)
         self.assertEqual(result, "≥4.3.0")
 
@@ -188,7 +188,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_matcher = mock.MagicMock()
         mock_matcher.min_version = None
         mock_matcher.max_version = "4.2.99"
-        
+
         result = self.command.get_version_constraints(mock_matcher)
         self.assertEqual(result, "≤4.2.99")
 
@@ -197,7 +197,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_matcher = mock.MagicMock()
         mock_matcher.min_version = "4.3.0"
         mock_matcher.max_version = "4.3.99"
-        
+
         result = self.command.get_version_constraints(mock_matcher)
         self.assertEqual(result, "≥4.3.0 ≤4.3.99")
 
@@ -211,24 +211,24 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_matcher1.condition = None
         mock_matcher1.min_version = "4.3.0"
         mock_matcher1.max_version = None
-        
+
         mock_matcher2 = mock.MagicMock()
         mock_matcher2.name = "test_matcher_2"
         mock_matcher2.fields = ["name", "site"]
         mock_matcher2.condition = Q(site__isnull=False)
         mock_matcher2.min_version = None
         mock_matcher2.max_version = "4.2.99"
-        
+
         # Mock the matcher factory
         mock_logical_matchers.items.return_value = [
             ("dcim.site", lambda: [mock_matcher1, mock_matcher2])
         ]
-        
+
         result = self.command.analyze_logical_matchers()
-        
+
         self.assertIn("dcim.site", result)
         self.assertEqual(len(result["dcim.site"]), 2)
-        
+
         # Check first matcher
         matcher1_info = result["dcim.site"][0]
         self.assertEqual(matcher1_info.name, "test_matcher_1")
@@ -236,7 +236,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         self.assertEqual(matcher1_info.condition, "None")
         self.assertEqual(matcher1_info.version_constraints, "≥4.3.0")
         self.assertEqual(matcher1_info.matcher_source, "logical")
-        
+
         # Check second matcher
         matcher2_info = result["dcim.site"][1]
         self.assertEqual(matcher2_info.name, "test_matcher_2")
@@ -252,7 +252,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         # Create mock model class
         mock_model_class = mock.MagicMock()
         mock_model_class.__name__ = "TestModel"
-        
+
         # Create mock builtin matchers
         mock_unique_matcher = mock.MagicMock()
         mock_unique_matcher.name = "unique_name"
@@ -260,14 +260,14 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_unique_matcher.condition = None
         mock_unique_matcher.min_version = None
         mock_unique_matcher.max_version = None
-        
+
         mock_constraint_matcher = mock.MagicMock()
         mock_constraint_matcher.name = "test_constraint"
         mock_constraint_matcher.fields = ["field1", "field2"]
         mock_constraint_matcher.condition = Q(field1__isnull=True)
         mock_constraint_matcher.min_version = None
         mock_constraint_matcher.max_version = None
-        
+
         # Mock logical matcher (should be skipped)
         mock_logical_matcher = mock.MagicMock()
         mock_logical_matcher.name = "logical_test"
@@ -275,7 +275,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_logical_matcher.condition = None
         mock_logical_matcher.min_version = None
         mock_logical_matcher.max_version = None
-        
+
         # Mock the supported models and get_model_matchers
         mock_supported_models.items.return_value = [
             ("dcim.site", {"model": mock_model_class})
@@ -285,18 +285,18 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             mock_constraint_matcher,
             mock_logical_matcher  # This should be skipped
         ]
-        
+
         result = self.command.analyze_builtin_matchers()
-        
+
         self.assertIn("dcim.site", result)
         self.assertEqual(len(result["dcim.site"]), 2)  # Should only include builtin matchers
-        
+
         # Check unique field matcher
         unique_matcher_info = result["dcim.site"][0]
         self.assertEqual(unique_matcher_info.name, "unique_name")
         self.assertEqual(unique_matcher_info.fields, ["name"])
         self.assertEqual(unique_matcher_info.matcher_source, "builtin")
-        
+
         # Check constraint matcher
         constraint_matcher_info = result["dcim.site"][1]
         self.assertEqual(constraint_matcher_info.name, "test_constraint")
@@ -314,7 +314,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             version_constraints="All versions",
             matcher_source="logical"
         )
-        
+
         # Create builtin matchers
         builtin_matcher = MatcherInfo(
             name="builtin_test",
@@ -324,38 +324,38 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             version_constraints="All versions",
             matcher_source="builtin"
         )
-        
+
         logical_docs = {
             "dcim.site": [logical_matcher],
             "dcim.device": [logical_matcher]
         }
-        
+
         builtin_docs = {
             "dcim.site": [builtin_matcher],
             "ipam.prefix": [builtin_matcher]
         }
-        
+
         result = self.command.combine_matchers(logical_docs, builtin_docs)
-        
+
         # Check that all object types are included
         self.assertIn("dcim.site", result)
         self.assertIn("dcim.device", result)
         self.assertIn("ipam.prefix", result)
-        
+
         # Check that dcim.site has both logical and builtin matchers
         site_matchers = result["dcim.site"]
         self.assertEqual(len(site_matchers), 2)
-        
+
         # Check that logical matcher comes first (as it was added first)
         self.assertEqual(site_matchers[0].name, "logical_test")
         self.assertEqual(site_matchers[0].matcher_source, "logical")
         self.assertEqual(site_matchers[1].name, "builtin_test")
         self.assertEqual(site_matchers[1].matcher_source, "builtin")
-        
+
         # Check that other object types have correct matchers
         self.assertEqual(len(result["dcim.device"]), 1)
         self.assertEqual(result["dcim.device"][0].matcher_source, "logical")
-        
+
         self.assertEqual(len(result["ipam.prefix"]), 1)
         self.assertEqual(result["ipam.prefix"][0].matcher_source, "builtin")
 
@@ -367,10 +367,10 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_custom_field_matcher.fields = None
         mock_custom_field_matcher.ip_fields = None
         mock_custom_field_matcher.vrf_field = None
-                
+
         result = self.command.get_matcher_description(mock_custom_field_matcher)
         self.assertEqual(result, "Matches on unique custom field: test_field")
-        
+
     def test_get_matcher_description_autoslug(self):
         """Test getting matcher description for AutoSlugMatcher."""
         # Test AutoSlugMatcher
@@ -379,10 +379,10 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             model_class=None,
             slug_field="slug"
         )
-        
+
         result = self.command.get_matcher_description(autoslug_matcher)
         self.assertEqual(result, "Matches on auto-generated slug field: slug")
-        
+
     def test_get_matcher_description_unique_field(self):
         """Test getting matcher description for unique field matcher."""
         # Test unique field matcher
@@ -393,10 +393,10 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_unique_matcher.vrf_field = None
         mock_unique_matcher.custom_field = None
         mock_unique_matcher.slug_field = None
-        
+
         result = self.command.get_matcher_description(mock_unique_matcher)
         self.assertEqual(result, "Matches on unique field(s): name")
-        
+
     def test_get_matcher_description_unique_constraint(self):
         """Test getting matcher description for unique constraint matcher."""
         # Test unique constraint matcher
@@ -406,7 +406,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_constraint_matcher.condition = None
         mock_constraint_matcher.custom_field = None
         mock_constraint_matcher.slug_field = None
-        
+
         result = self.command.get_matcher_description(mock_constraint_matcher)
         self.assertEqual(result, "Matches on unique constraint fields: field1, field2")
 
@@ -414,14 +414,14 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         """Test generating markdown table with empty documentation."""
         docs = {}
         result = self.command.generate_markdown_table(docs)
-        
+
         expected_lines = [
             "# NetBox Diode Plugin - Object Matching Criteria",
             "",
             "This document describes how the Diode NetBox Plugin matches existing objects when applying changes.",
             ""
         ]
-        
+
         for line in expected_lines:
             self.assertIn(line, result)
 
@@ -435,7 +435,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             version_constraints="All versions",
             matcher_source="logical"
         )
-        
+
         matcher_info2 = MatcherInfo(
             name="test_matcher_2",
             fields=["name", "site"],
@@ -444,21 +444,21 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             version_constraints="≥4.3.0",
             matcher_source="logical"
         )
-        
+
         docs = {
             "dcim.site": [matcher_info1, matcher_info2]
         }
-        
+
         result = self.command.generate_markdown_table(docs)
-        
+
         # Check header
         self.assertIn("# NetBox Diode Plugin - Object Matching Criteria", result)
         self.assertIn("## dcim.site", result)
-        
+
         # Check table header
         self.assertIn("| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |", result)
         self.assertIn("|--------------|---------------------|------|--------|-----------|-------------|---------------------|", result)
-        
+
         # Check table rows
         self.assertIn("| test_matcher_1 | 1 | logical | name | N/A | Test description 1 | All versions |", result)
         self.assertIn("| test_matcher_2 | 2 | logical | name, site | site is NOT NULL | Test description 2 | ≥4.3.0 |", result)
@@ -473,24 +473,27 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             version_constraints="≥4.3.0|test",
             matcher_source="logical"
         )
-        
+
         docs = {
             "dcim.site": [matcher_info]
         }
-        
+
         result = self.command.generate_markdown_table(docs)
-        
+
         # Check that pipe characters are escaped
-        self.assertIn("| test\\|matcher | 1 | logical | field\\|1, field\\|2 | field\\|1 is NOT NULL | Test\\|description | ≥4.3.0\\|test |", result)
+        self.assertIn(
+            "| test\\|matcher | 1 | logical | field\\|1, field\\|2 | field\\|1 is NOT NULL | Test\\|description | ≥4.3.0\\|test |",
+            result,
+        )
 
     def test_generate_markdown_table_no_matchers(self):
         """Test generating markdown table for object type with no matchers."""
         docs = {
             "dcim.site": []
         }
-        
+
         result = self.command.generate_markdown_table(docs)
-        
+
         self.assertIn("## dcim.site", result)
         self.assertIn("No specific matching criteria defined.", result)
 
@@ -503,20 +506,20 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             description="Test description",
             version_constraints="All versions"
         )
-        
+
         docs = {
             "dcim.device": [matcher_info],
             "dcim.site": [matcher_info],
             "ipam.prefix": [matcher_info]
         }
-        
+
         result = self.command.generate_markdown_table(docs)
-        
+
         # Check that sections appear in alphabetical order
         site_index = result.find("## dcim.site")
         device_index = result.find("## dcim.device")
         prefix_index = result.find("## ipam.prefix")
-        
+
         self.assertLess(device_index, site_index)
         self.assertLess(site_index, prefix_index)
 
@@ -526,13 +529,13 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         condition = "simple_string_condition"
         result = self.command.extract_condition_description(condition)
         self.assertEqual(result, "simple_string_condition")
-        
+
     def test_condition_extraction_with_Q_condition_with_no_children(self):
-        # Test with Q condition that has no children
+        """Test with Q condition that has no children."""
         condition = Q()
         result = self.command.extract_condition_description(condition)
         self.assertEqual(result, "")
-        
+
     def test_condition_extraction_with_Q_condition_with_children(self):
         """Test with complex nested condition."""
         condition = Q(field1__isnull=True) & (Q(field2="value1") | Q(field2="value2"))
@@ -548,10 +551,10 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             model_class=None,
             condition=None
         )
-        
+
         result = self.command.get_matcher_description(matcher)
         self.assertEqual(result, "Matches on unique constraint fields: name")
-        
+
         # Test with matcher that has condition but no fields
         matcher = ObjectMatchCriteria(
             fields=None,
@@ -559,11 +562,11 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             model_class=None,
             condition=Q(field1__isnull=True)
         )
-        
+
         with mock.patch.object(self.command, 'extract_condition_description') as mock_extract:
             mock_extract.return_value = "field1 is NULL"
             result = self.command.get_matcher_description(matcher)
-        
+
         self.assertEqual(result, "Custom matcher")
 
     def test_version_constraints_edge_cases(self):
@@ -572,15 +575,15 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         mock_matcher = mock.MagicMock()
         mock_matcher.min_version = ""
         mock_matcher.max_version = ""
-        
+
         result = self.command.get_version_constraints(mock_matcher)
         self.assertEqual(result, None)
-        
+
         # Test with whitespace versions
         mock_matcher = mock.MagicMock()
         mock_matcher.min_version = "  4.3.0  "
         mock_matcher.max_version = "  4.3.99  "
-        
+
         result = self.command.get_version_constraints(mock_matcher)
         self.assertEqual(result, "≥  4.3.0   ≤  4.3.99  ")
 
@@ -595,16 +598,16 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             version_constraints=None,
             matcher_source="logical"
         )
-        
+
         docs = {
             "dcim.site": [matcher_info]
         }
-        
+
         result = self.command.generate_markdown_table(docs)
-        
+
         # Check that None values are handled gracefully
         self.assertIn("| test_matcher | 1 | logical |  | N/A | N/A | All versions |", result)
-        
+
     def test_markdown_table_with_empty_fields(self):
         """Test with empty fields list."""
         matcher_info = MatcherInfo(
@@ -615,12 +618,12 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
             version_constraints="All versions",
             matcher_source="logical"
         )
-        
+
         docs = {
             "dcim.site": [matcher_info]
         }
-        
+
         result = self.command.generate_markdown_table(docs)
-        
+
         # Check that empty fields list is handled
-        self.assertIn("| test_matcher | 1 | logical |  | N/A | Test description | All versions |", result) 
+        self.assertIn("| test_matcher | 1 | logical |  | N/A | Test description | All versions |", result)

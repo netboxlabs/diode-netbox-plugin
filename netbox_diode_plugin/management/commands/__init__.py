@@ -1,1 +1,1 @@
-# Django management commands for netbox_diode_plugin 
+"""Django management commands for netbox_diode_plugin."""
