@@ -233,7 +233,7 @@ class Command(BaseCommand):
                 continue
 
             # Create table header
-            markdown.append("| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |")
+            markdown.append("| FORCING A TEST FAILURE | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |")
             markdown.append("|--------------|---------------------|------|--------|-----------|-------------|---------------------|")
 
             for precedence, matcher in enumerate(matchers, start=1):
