@@ -55,7 +55,7 @@ class Command(BaseCommand):
 
         return str(condition)
 
-    def get_matcher_description(self, matcher) -> str:
+    def get_matcher_description(self, matcher) -> str:  # noqa: C901
         """Generate a human-readable description of what the matcher does."""
         # Handle IP Network matchers
         if hasattr(matcher, 'ip_fields') and matcher.ip_fields and hasattr(matcher, 'vrf_field') and matcher.vrf_field:
