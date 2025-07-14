@@ -200,7 +200,6 @@ class Command(BaseCommand):
         return combined
 
     def generate_markdown_table(self, docs: dict[str, list[MatcherInfo]]) -> str:
-        """Generate a markdown table from the documentation."""
         markdown = []
         markdown.append("# NetBox Diode Plugin - Object Matching Criteria")
         markdown.append("")
@@ -233,7 +232,7 @@ class Command(BaseCommand):
                 continue
 
             # Create table header
-            markdown.append("| FORCING A TEST FAILURE | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |")
+            markdown.append("| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |")
             markdown.append("|--------------|---------------------|------|--------|-----------|-------------|---------------------|")
 
             for precedence, matcher in enumerate(matchers, start=1):
