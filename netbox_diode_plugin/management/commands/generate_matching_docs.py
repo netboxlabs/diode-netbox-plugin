@@ -55,7 +55,7 @@ class Command(BaseCommand):
 
         return str(condition)
 
-    def get_matcher_description(self, matcher) -> str:  # noqa: C901
+    def get_matcher_description(self, matcher) -> str:
         """Generate a human-readable description of what the matcher does."""
         # Handle IP Network matchers
         if hasattr(matcher, 'ip_fields') and matcher.ip_fields and hasattr(matcher, 'vrf_field') and matcher.vrf_field:
@@ -200,6 +200,7 @@ class Command(BaseCommand):
         return combined
 
     def generate_markdown_table(self, docs: dict[str, list[MatcherInfo]]) -> str:
+        """Generate a markdown table from the documentation."""
         markdown = []
         markdown.append("# NetBox Diode Plugin - Object Matching Criteria")
         markdown.append("")
