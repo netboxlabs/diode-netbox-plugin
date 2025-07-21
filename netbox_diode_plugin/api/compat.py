@@ -84,3 +84,20 @@ def _migrate_contact_group(data: dict):
         if data.get("groups") is None:
             data["groups"] = [group]
         # else ignored.
+
+@diode_migration(min_version="4.2.0", max_version="4.2.99", object_type="ipam.service")
+def _migrate_service_parent_object_down(data: dict):
+    """Transforms ipam.service parent_object to device and virtual_machine."""
+    parent_object_vm = data.pop("parent_object_virtual_machine", None)
+    if parent_object_vm and data.get("virtual_machine") is None:
+        data["virtual_machine"] = parent_object_vm
+    parent_object_device = data.pop("parent_object_device", None)
+    if parent_object_device and data.get("device") is None:
+        data["device"] = parent_object_device
+
+@diode_migration(min_version="4.2.0", max_version="4.2.99", object_type="tenancy.contact")
+def _migrate_contact_group_down(data: dict):
+    """Transforms tenancy.contact groups to group."""
+    groups = data.pop("groups", None)
+    if groups and len(groups) == 1:
+        data["group"] = groups[0]

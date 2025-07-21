@@ -116,9 +116,15 @@ _LOGICAL_MATCHERS = {
     "ipam.vlan": lambda: [
         ObjectMatchCriteria(
             fields=("vid",),
-            name="logical_vlan_vid_no_group_or_svlan",
+            name="logical_vlan_vid_no_group_or_svlan_or_site",
             model_class=get_object_type_model("ipam.vlan"),
-            condition=Q(group__isnull=True, qinq_svlan__isnull=True),
+            condition=Q(group__isnull=True, qinq_svlan__isnull=True, site__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("vid", "site"),
+            name="logical_vlan_in_site",
+            model_class=get_object_type_model("ipam.vlan"),
+            condition=Q(group__isnull=True, qinq_svlan__isnull=True, site__isnull=False),
         ),
     ],
     "ipam.vlangroup": lambda: [
@@ -236,6 +242,13 @@ _LOGICAL_MATCHERS = {
             model_class=get_object_type_model("dcim.devicerole"),
             condition=Q(parent__isnull=True),
             min_version="4.3.0",
+        )
+    ],
+    "extras.journalentry": lambda: [
+        ObjectMatchCriteria(
+            fields=("assigned_object_id", "assigned_object_type", "comments"),
+            name="logical_journal_entry_assigned_object_comments",
+            model_class=get_object_type_model("extras.journalentry"),
         )
     ],
 }
@@ -799,19 +812,30 @@ def _fingerprint_all(data: dict, object_type: str|None = None) -> str:
     if data is None:
         return None
 
-    values = ["object_type", object_type]
-    for k, v in sorted(data.items()):
-        if k.startswith("_"):
-            continue
-        values.append(k)
-        if isinstance(v, list | tuple):
-            values.extend(sorted(v))
-        elif isinstance(v, dict):
-            values.append(_fingerprint_all(v))
-        else:
-            values.append(v)
+    try:
+        values = ["object_type", object_type]
+        for k, v in sorted(data.items()):
+            if k.startswith("_"):
+                continue
+            values.append(k)
+            if isinstance(v, list | tuple):
+                values.extend(sorted(_as_tuples(v)))
+            elif isinstance(v, dict):
+                values.append(_fingerprint_all(v))
+            else:
+                values.append(v)
 
-    return hash(tuple(values))
+        return hash(tuple(values))
+    except Exception as e:
+        logger.error(f"Error fingerprinting data {data}: {e}")
+        raise
+
+def _as_tuples(vs):
+    if isinstance(vs, list):
+        return tuple(_as_tuples(v) for v in vs)
+    if isinstance(vs, dict):
+        return tuple((k, _as_tuples(v)) for k, v in vs.items())
+    return vs
 
 def fingerprints(data: dict, object_type: str) -> list[str]:
     """

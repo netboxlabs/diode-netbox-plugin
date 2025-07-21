@@ -98,14 +98,18 @@ class ChangeSet:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     changes: list[Change] = field(default_factory=list)
     branch: dict[str, str] | None = field(default=None)  # {"id": str, "name": str}
+    warnings: dict | None = field(default=None)
 
     def to_dict(self) -> dict:
         """Convert the change set to a dictionary."""
-        return {
+        d = {
             "id": self.id,
             "changes": [change.to_dict() for change in self.changes],
             "branch": self.branch,
         }
+        if self.warnings:
+            d["warnings"] = self.warnings
+        return d
 
     def validate(self) -> dict[str, list[str]]:
         """Validate basics of the change set data."""
@@ -244,7 +248,6 @@ class AutoSlug:
     field_name: str
     value: str
 
-
 def error_from_validation_error(e, object_name):
     """Convert a from DRF ValidationError to a ChangeSetException."""
     errors = {}
@@ -277,7 +280,7 @@ def harmonize_formats(data):
         case datetime.date():
             return data.strftime("%Y-%m-%d")
         case NumericRange():
-            return (data.lower, data.upper-1)
+            return [data.lower, data.upper-1]
         case netaddr.IPNetwork() | EUI() | ZoneInfo():
             return str(data)
         case _:

@@ -1489,6 +1489,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         )
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         diff = response1.json().get("change_set", {})
+
         response2 = self.client.post(
             self.apply_url, data=diff, format="json", **self.authorization_header
         )

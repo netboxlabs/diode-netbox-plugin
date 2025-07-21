@@ -1,7 +1,7 @@
-name: diode-netbox-plugin
+name: diode-netbox-plugin-4.2.3
 services:
   netbox: &netbox
-    image: netboxcommunity/netbox:v4.3.3-3.3.0-diode-netbox-plugin
+    image: netboxcommunity/netbox:v4.2.3-3.1.1-diode-netbox-plugin
     build:
       context: .
       dockerfile: Dockerfile-diode-netbox-plugin
@@ -20,8 +20,8 @@ services:
     volumes:
       - ./netbox/docker-entrypoint.sh:/opt/netbox/docker-entrypoint.sh:z,ro
       - ./netbox/nginx-unit.json:/opt/netbox/nginx-unit.json:z,ro
-      - ../netbox_diode_plugin:/opt/netbox/netbox/netbox_diode_plugin:z,rw
-      - ./oauth2/secrets:/run/secrets:z,ro
+      - ../../netbox_diode_plugin:/opt/netbox/netbox/netbox_diode_plugin:z,rw
+      - ../oauth2/secrets:/run/secrets:z,ro
       - ./netbox/launch-netbox.sh:/opt/netbox/launch-netbox.sh:z,ro
       - ./netbox/plugins_dev.py:/etc/netbox/config/plugins.py:z,ro
       - ./coverage:/opt/netbox/netbox/coverage:z,rw
