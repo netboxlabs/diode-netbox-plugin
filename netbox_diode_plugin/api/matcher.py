@@ -827,7 +827,7 @@ def _fingerprint_all(data: dict, object_type: str|None = None) -> str:
 
         return hash(tuple(values))
     except Exception as e:
-        logger.error(f"Error fingerprinting data {data}: {e}")
+        logger.error(f"Error fingerprinting data: {e}")
         raise
 
 def _as_tuples(vs):

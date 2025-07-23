@@ -161,7 +161,6 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
     for key, value in proto_json.items():
         ref_info = get_json_ref_info(object_type, key)
         if not is_supported(key, ref_info):
-            logger.debug(f"Field {key} is not a supported field for {object_type}, skipping...")
             node['_warnings'][key] = ["Ignored unsupported field."]
             continue
 
