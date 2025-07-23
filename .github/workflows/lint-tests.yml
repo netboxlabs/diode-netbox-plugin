@@ -26,6 +26,7 @@ jobs:
     strategy:
       matrix:
         python: [ "3.10" ]
+        netbox: [ "", "v4.2.3" ]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,7 +48,7 @@ jobs:
       - name: Test
         id: test
         run: |
-          make docker-compose-netbox-plugin-test-cover
+          make NETBOX_VERSION=${{ matrix.netbox }} docker-compose-netbox-plugin-test-cover
         continue-on-error: true
       - name: Check results
         if: always()
