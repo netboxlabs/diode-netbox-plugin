@@ -59,7 +59,7 @@ jobs:
           fi
       - name: Coverage comment
         uses: orgoro/coverage@3f13a558c5af7376496aa4848bf0224aead366ac # v3.2
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event.pull_request.head.repo.full_name == github.repository && matrix.netbox == ''
         with:
           coverageFile: ./docker/coverage/report.xml
           token: ${{ secrets.GITHUB_TOKEN }}
