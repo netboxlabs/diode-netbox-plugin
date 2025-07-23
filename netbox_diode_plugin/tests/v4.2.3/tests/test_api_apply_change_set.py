@@ -93,11 +93,11 @@ class BaseApplyChangeSet(APITestCase):
         )
         DeviceType.objects.bulk_create(self.device_types)
 
-        # bulk create is wierd due to mptt
-        self.roles = [
-            DeviceRole.objects.create(name="Device Role 1", slug="device-role-1", color="ff0000"),
-            DeviceRole.objects.create(name="Device Role 2", slug="device-role-2", color="00ff00"),
-        ]
+        self.roles = (
+            DeviceRole(name="Device Role 1", slug="device-role-1", color="ff0000"),
+            DeviceRole(name="Device Role 2", slug="device-role-2", color="00ff00"),
+        )
+        DeviceRole.objects.bulk_create(self.roles)
 
         cluster_type = ClusterType.objects.create(
             name="Cluster Type 1", slug="cluster-type-1"
@@ -822,10 +822,9 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             ],
         }
         response = self.send_request(payload, status_code=status.HTTP_400_BAD_REQUEST)
-        print(response.json())
         self.assertIn(
-            'Related object not found using the provided value: 99.',
-            _get_error(response, "ipam.prefix", "scope_id"),
+            'Please select a site.',
+            _get_error(response, "ipam.prefix", "scope"),
         )
         self.assertFalse(Prefix.objects.filter(prefix="192.168.0.0/24").exists())
 

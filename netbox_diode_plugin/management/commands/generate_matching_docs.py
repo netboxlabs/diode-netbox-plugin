@@ -6,7 +6,7 @@ from typing import Optional
 
 from django.core.management.base import BaseCommand
 
-from netbox_diode_plugin.api.differ import SUPPORTED_MODELS
+from netbox_diode_plugin.api.differ import extract_supported_models
 from netbox_diode_plugin.api.matcher import _LOGICAL_MATCHERS, get_model_matchers
 
 
@@ -137,7 +137,7 @@ class Command(BaseCommand):
         """Analyze the builtin matchers and extract documentation information."""
         documentation = {}
 
-        for object_type, model_info in SUPPORTED_MODELS.items():
+        for object_type, model_info in extract_supported_models().items():
             model_class = model_info["model"]
             matchers = get_model_matchers(model_class)
             matcher_infos = []

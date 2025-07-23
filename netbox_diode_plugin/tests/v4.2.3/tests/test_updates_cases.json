@@ -912,7 +912,7 @@
         "lookup": {"name": "Contact 1"},
         "create_expect": {
             "name": "Contact 1",
-            "groups.all.__by_name": ["Contact Group 1"],
+            "group.name": "Contact Group 1",
             "description": "Contact 1 Description"
         },
         "create": {
@@ -945,6 +945,47 @@
         },
         "update_expect": {
             "description": "Contact 1 Description Updated"
+        }
+    },
+    {
+        "name": "tenancy_contact_groups_migrate_down",
+        "object_type": "tenancy.contact",
+        "lookup": {"name": "Contact 2"},
+        "create_expect": {
+            "name": "Contact 2",
+            "group.name": "Contact Group 1",
+            "description": "Contact 2 Description"
+        },
+        "create": {
+            "contact": {
+                "groups": [{"name": "Contact Group 1"}],
+                "name": "Contact 2",
+                "title": "Contact 2 Title",
+                "phone": "1234567890",
+                "email": "contact2@example.com",
+                "address": "1235 Main St, Anytown, USA",
+                "link": "https://example.com/2",
+                "description": "Contact 2 Description",
+                "comments": "Contact 2 Comments",
+                "tags": [{"name": "Tag 1"}]
+            }
+        },
+        "update": {
+            "contact": {
+                "groups": [{"name": "Contact Group 1"}],
+                "name": "Contact 2",
+                "title": "Contact 2 Title",
+                "phone": "1234567890",
+                "email": "contact2@example.com",
+                "address": "1234 Main St, Anytown, USA",
+                "link": "https://example.com/2",
+                "description": "Contact 2 Description Updated",
+                "comments": "Contact 2 Comments",
+                "tags": [{"name": "Tag 1"}]
+            }
+        },
+        "update_expect": {
+            "description": "Contact 2 Description Updated"
         }
     },
     {
@@ -982,7 +1023,8 @@
                 "role": {"name": "Contact Role 1"},
                 "priority": "secondary",
                 "tags": [{"name": "Tag 1"}],
-                "object_site": {"name": "Site 1"}
+                "object_site": {"name": "Site 1"},
+                "comments": "ignored field from the future"
             }
         },
         "update_expect": {
@@ -3397,34 +3439,6 @@
         }
     },
     {
-        "name": "dcim_moduletypeprofile_1",
-        "object_type": "dcim.moduletypeprofile",
-        "lookup": {"name": "Module Type Profile 1"},
-        "create_expect": {
-            "name": "Module Type Profile 1",
-            "description": "This is a module type profile"
-        },
-        "create": {
-            "module_type_profile": {
-                "name": "Module Type Profile 1",
-                "description": "This is a module type profile",
-                "schema": "{\"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"$id\": \"https://example.com/product.schema.json\", \"title\": \"Product\", \"description\": \"A product from Acme's catalog\", \"type\": \"object\", \"properties\": {\"productId\": {\"description\": \"The unique identifier for a product\", \"type\": \"integer\"}}}", 
-                "comments": "This is a module type profile comment"
-            }
-        },
-        "update": {
-            "module_type_profile": {
-                "name": "Module Type Profile 1",
-                "description": "This is a module type profile updated",
-                "schema": "{\"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"$id\": \"https://example.com/product.schema.json\", \"title\": \"Product\", \"description\": \"A product from Acme's catalog\", \"type\": \"object\", \"properties\": {\"productId\": {\"description\": \"The unique identifier for a product\", \"type\": \"integer\"}}}",
-                "comments": "This is a module type profile comment"
-            }
-        },
-        "update_expect": {
-            "description": "This is a module type profile updated"
-        }
-    },
-    {
         "name": "dcim_platform_1",
         "object_type": "dcim.platform",
         "lookup": {"name": "Cisco IOS-XE"},
@@ -4029,129 +4043,6 @@
         }
     },
     {
-        "name": "extras_custom_field_1",
-        "object_type": "extras.customfield",
-        "lookup": {"name": "wlans"},
-        "create_expect": {
-            "name": "wlans",
-            "label": "WLANs",
-            "type": "multiobject"
-        },
-        "create": {
-            "custom_field": {
-                "name": "wlans",
-                "label": "WLANs",
-                "object_types": ["dcim.device"],
-                "type": "multiobject",
-                "related_object_type": "wireless.wirelesslan",
-                "search_weight": 1000,
-                "filter_logic": "loose"
-            }
-        },
-        "update": {
-            "custom_field": {
-                "name": "wlans",
-                "label": "WLANs Served",
-                "object_types": ["dcim.device"],
-                "type": "multiobject",
-                "related_object_type": "wireless.wirelesslan",
-                "search_weight": 1000,
-                "filter_logic": "loose"
-            }
-        },
-        "update_expect": {
-            "label": "WLANs Served"
-        }
-    },
-    {
-        "name": "extras_customfieldchoiceset_1",
-        "object_type": "extras.customfieldchoiceset",
-        "lookup": {"name": "scope_choices"},
-        "create": {
-            "custom_field_choice_set": {
-                "name": "scope_choices",
-                "extra_choices": ["site:Site", "virtual_machine:Virtual Machine", "toadstool"]
-            }
-        },
-        "create_expect": {
-            "name": "scope_choices",
-            "extra_choices": [["site", "Site"], ["virtual_machine", "Virtual Machine"], ["toadstool", "toadstool"]]
-        },
-        "update": {
-            "custom_field_choice_set": {
-                "name": "scope_choices",
-                "extra_choices": ["site:Site", "virtual_machine:Virtual Machine", "toadstool:Toad Stool"]
-            }
-        },
-        "update_expect": {
-            "extra_choices": [["site", "Site"], ["virtual_machine", "Virtual Machine"], ["toadstool", "Toad Stool"]]
-        }
-    },
-    {
-        "name": "extras_custom_link_1",
-        "object_type": "extras.customlink",
-        "lookup": {"name": "Custom Link 1"},
-        "create":{
-            "custom_link": {
-                "name": "Custom Link 1",
-                "enabled": true,
-                "link_text": "Custom Link 1",
-                "link_url": "https://www.google.com",
-                "object_types": ["dcim.device"]
-            }
-        },
-        "create_expect": {
-            "name": "Custom Link 1",
-            "link_text": "Custom Link 1",
-            "link_url": "https://www.google.com"
-        },
-        "update":{
-            "custom_link": {
-                "name": "Custom Link 1",
-                "enabled": true,
-                "link_text": "Custom Link 1 Updated",
-                "link_url": "https://www.google.com",
-                "object_types": ["dcim.device"]
-            }
-        },
-        "update_expect": {
-            "link_text": "Custom Link 1 Updated"
-        }
-    },
-    {
-        "name": "extras_journal_entry_1",
-        "object_type": "extras.journalentry",
-        "lookup": {"comments": "This is a journal entry"},
-        "create": {
-            "journal_entry": {
-                "assigned_object_site": {
-                    "name": "Journal Test Site"
-                },
-                "comments": "This is a journal entry",
-                "kind": "info"
-            }
-        },
-        "create_expect": {
-            "assigned_object.name": "Journal Test Site",
-            "comments": "This is a journal entry",
-            "kind": "info"
-        },
-        "update": {
-            "journal_entry": {
-                "assigned_object_site": {
-                    "name": "Journal Test Site"
-                },
-                "comments": "This is a journal entry",
-                "kind": "danger"
-            }
-        },
-        "update_expect": {
-            "assigned_object.name": "Journal Test Site",
-            "comments": "This is a journal entry",
-            "kind": "danger"
-        }
-    },
-    {
         "name": "ipam_rir_1",
         "object_type": "ipam.rir",
         "lookup": {"name": "ARIN"},
@@ -4633,6 +4524,136 @@
         }
     },
     {
+        "name": "ipam_service_2_migrate_parent_object_device_down",
+        "object_type": "ipam.service",
+        "lookup": {"name": "Web Server 3"},
+        "create_expect": {
+            "name": "Web Server 3",
+            "protocol": "tcp",
+            "ports": [80, 443],
+            "description": "Primary web server service",
+            "device.name": "Device 1"
+        },
+        "create": {
+            "service": {
+                "parent_object_device": {
+                    "name": "Device 1",
+                    "role": {"name": "Device Role 1"},
+                    "device_type": {
+                        "manufacturer": {"name": "Cisco"},
+                        "model": "C2960S"
+                    },
+                    "site": {"name": "Site 1"}
+                },
+                "name": "Web Server 3",
+                "protocol": "tcp",
+                "ports": ["80", "443"],
+                "description": "Primary web server service",
+                "comments": "Handles HTTPS traffic for main website",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}],
+                "ipaddresses": [
+                    {
+                        "address": "192.168.1.100/24",
+                        "status": "active",
+                        "dns_name": "web.example.com"
+                    }
+                ]
+            }
+        },
+        "update": {
+            "service": {
+                "parent_object_device": {
+                    "name": "Device 1",
+                    "role": {"name": "Device Role 1"},
+                    "device_type": {
+                        "manufacturer": {"name": "Cisco"},
+                        "model": "C2960S"
+                    },
+                    "site": {"name": "Site 1"}
+                },
+                "name": "Web Server 3",
+                "protocol": "tcp",
+                "ports": ["80", "443"],
+                "description": "Primary web server service Updated",
+                "comments": "Handles HTTPS traffic for main website",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}],
+                "ipaddresses": [
+                    {
+                        "address": "192.168.1.100/24",
+                        "status": "active",
+                        "dns_name": "web.example.com"
+                    }
+                ]
+            }
+        },
+        "update_expect": {
+            "description": "Primary web server service Updated",
+            "device.name": "Device 1"
+        }
+    },
+    {
+        "name": "ipam_service_3_migrate_parent_object_virtual_machine_down",
+        "object_type": "ipam.service",
+        "lookup": {"name": "Web Server 4"},
+        "create_expect": {
+            "name": "Web Server 4",
+            "protocol": "tcp",
+            "ports": [80, 443],
+            "description": "Primary web server service",
+            "virtual_machine.name": "Virtual Machine 1"
+        },
+        "create": {
+            "service": {
+                "parent_object_virtual_machine": {
+                    "name": "Virtual Machine 1",
+                    "status": "active",
+                    "role": {"name": "Web Server"},
+                    "site": {"name": "Site 1"}
+                },
+                "name": "Web Server 4",
+                "protocol": "tcp",
+                "ports": ["80", "443"],
+                "description": "Primary web server service",
+                "comments": "Handles HTTPS traffic for main website",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}],
+                "ipaddresses": [
+                    {
+                        "address": "192.168.1.100/24",
+                        "status": "active",
+                        "dns_name": "web.example.com"
+                    }
+                ]
+            }
+        },
+        "update": {
+            "service": {
+                "parent_object_virtual_machine": {
+                    "name": "Virtual Machine 1",
+                    "status": "active",
+                    "role": {"name": "Web Server"},
+                    "site": {"name": "Site 1"}
+                },
+                "name": "Web Server 4",
+                "protocol": "tcp",
+                "ports": ["80", "443"],
+                "description": "Primary web server service Updated",
+                "comments": "Handles HTTPS traffic for main website",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}],
+                "ipaddresses": [
+                    {
+                        "address": "192.168.1.100/24",
+                        "status": "active",
+                        "dns_name": "web.example.com"
+                    }
+                ]
+            }
+        },
+        "update_expect": {
+            "description": "Primary web server service Updated",
+            "virtual_machine.name": "Virtual Machine 1"
+        }
+    },
+    {
         "name": "dcim_site_1",
         "object_type": "dcim.site",
         "lookup": {"name": "Data Center West"},
@@ -5076,52 +5097,6 @@
         },
         "update_expect": {
             "description": "Primary production server network Updated"
-        }
-    },
-    {
-        "name": "ipam_vlan_2",
-        "object_type": "ipam.vlan",
-        "lookup": {"vid": 807},
-        "create_expect": {
-            "vid": 807,
-            "name": "Production Servers",
-            "site.name": "Site 1"
-        },
-        "create": {
-            "vlan": {
-                "vid": "807",
-                "name": "Production Servers",
-                "tenant": {"name": "Tenant 1"},
-                "status": "active",
-                "site": {"name": "Site 1"},
-                "role": {
-                    "name": "Production",
-                    "slug": "production"
-                },
-                "description": "Primary production server network",
-                "comments": "Used for customer-facing production workloads",
-                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
-            }
-        },
-        "update": {
-            "vlan": {
-                "vid": "807",
-                "name": "Production Servers",
-                "tenant": {"name": "Tenant 1"},
-                "status": "active",
-                "site": {"name": "Site 1"},
-                "role": {
-                    "name": "Production",
-                    "slug": "production"
-                },
-                "description": "Primary production server network Updated",
-                "comments": "Used for customer-facing production workloads",
-                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
-            }
-        },
-        "update_expect": {
-            "description": "Primary production server network Updated",
-            "site.name": "Site 1"
         }
     },
     {
