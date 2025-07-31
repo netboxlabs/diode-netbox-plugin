@@ -207,10 +207,10 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         }
 
         request = self.factory.get('/', HTTP_AUTHORIZATION=f'Bearer {self.valid_token}')
-        
+
         user, _ = self.auth.authenticate(request)
         self.assertEqual(user, self.diode_user.user)
-        
+
         # Verify that requests.post was called with only Authorization header
         self.requests_mock.assert_called_once_with(
             'http://localhost:8080/diode/auth/introspect',
@@ -234,10 +234,10 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         }
 
         request = self.factory.get('/', HTTP_AUTHORIZATION=f'Bearer {self.valid_token}')
-        
+
         user, _ = self.auth.authenticate(request)
         self.assertEqual(user, self.diode_user.user)
-        
+
         # Verify that requests.post was called with merged headers
         expected_headers = {
             'Authorization': f'Bearer {self.valid_token}',

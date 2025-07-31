@@ -61,7 +61,7 @@ class DiodeOAuth2Authentication(BaseAuthentication):
             introspection_headers = get_introspection_headers()
             if introspection_headers:
                 headers.update(introspection_headers)
-            
+
             response = requests.post(
                 introspect_url, headers=headers, timeout=5
             )
