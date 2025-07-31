@@ -12,6 +12,7 @@ from netbox.plugins import get_plugin_config
 __all__ = (
     "get_diode_auth_introspect_url",
     "get_diode_user",
+    "get_introspection_headers",
 )
 
 User = get_user_model()
@@ -93,3 +94,7 @@ def get_diode_user():
 def get_required_token_audience():
     """Returns the require token audience."""
     return get_plugin_config("netbox_diode_plugin", "required_token_audience")
+
+def get_introspection_headers():
+    """Returns the introspection headers."""
+    return get_plugin_config("netbox_diode_plugin", "introspection_headers")

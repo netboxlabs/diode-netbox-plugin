@@ -55,6 +55,13 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         )
         self.required_audience_mock = self.required_audience_patcher.start()
 
+        # Mock get_introspection_headers
+        self.introspection_headers_patcher = mock.patch(
+            'netbox_diode_plugin.api.authentication.get_introspection_headers',
+            return_value={}
+        )
+        self.introspection_headers_mock = self.introspection_headers_patcher.start()
+
     def tearDown(self):
         """Clean up after tests."""
         self.cache_patcher.stop()
@@ -62,6 +69,7 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
         self.requests_patcher.stop()
         self.introspect_url_patcher.stop()
         self.required_audience_patcher.stop()
+        self.introspection_headers_patcher.stop()
 
     def test_authenticate_no_auth_header(self):
         """Test authentication with no Authorization header."""
@@ -186,3 +194,59 @@ class DiodeOAuth2AuthenticationTestCase(TestCase):
 
         # The timeout should be 300 (default)
         self.assertEqual(call_args.kwargs['timeout'], 300)
+
+    def test_authenticate_with_no_introspection_headers(self):
+        """Test authentication with no introspection headers configured."""
+        self.cache_get_mock.return_value = None
+        self.introspection_headers_mock.return_value = {}
+        self.requests_mock.return_value.json.return_value = {
+            'active': True,
+            'scope': 'netbox:read netbox:write',
+            'exp': 1000,
+            'iat': 500
+        }
+
+        request = self.factory.get('/', HTTP_AUTHORIZATION=f'Bearer {self.valid_token}')
+        
+        user, _ = self.auth.authenticate(request)
+        self.assertEqual(user, self.diode_user.user)
+        
+        # Verify that requests.post was called with only Authorization header
+        self.requests_mock.assert_called_once_with(
+            'http://localhost:8080/diode/auth/introspect',
+            headers={'Authorization': f'Bearer {self.valid_token}'},
+            timeout=5
+        )
+
+    def test_authenticate_with_introspection_headers(self):
+        """Test authentication with introspection headers configured."""
+        self.cache_get_mock.return_value = None
+        custom_headers = {
+            'X-Custom-Header': 'custom-value',
+            'Content-Type': 'application/json'
+        }
+        self.introspection_headers_mock.return_value = custom_headers
+        self.requests_mock.return_value.json.return_value = {
+            'active': True,
+            'scope': 'netbox:read netbox:write',
+            'exp': 1000,
+            'iat': 500
+        }
+
+        request = self.factory.get('/', HTTP_AUTHORIZATION=f'Bearer {self.valid_token}')
+        
+        user, _ = self.auth.authenticate(request)
+        self.assertEqual(user, self.diode_user.user)
+        
+        # Verify that requests.post was called with merged headers
+        expected_headers = {
+            'Authorization': f'Bearer {self.valid_token}',
+            'X-Custom-Header': 'custom-value',
+            'Content-Type': 'application/json'
+        }
+        self.requests_mock.assert_called_once_with(
+            'http://localhost:8080/diode/auth/introspect',
+            headers=expected_headers,
+            timeout=5
+        )
+

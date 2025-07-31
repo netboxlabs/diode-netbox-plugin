@@ -35,6 +35,10 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # List of audiences to require for the diode-to-netbox token.
         # If empty, no audience is required.
         "required_token_audience": [],
+
+        # Headers to use for introspection requests.
+        # If empty, no headers are sent.
+        "introspection_headers": {},
     }
 
 

@@ -14,6 +14,7 @@ from rest_framework.exceptions import AuthenticationFailed
 from netbox_diode_plugin.plugin_config import (
     get_diode_auth_introspect_url,
     get_diode_user,
+    get_introspection_headers,
     get_required_token_audience,
 )
 
@@ -56,8 +57,13 @@ class DiodeOAuth2Authentication(BaseAuthentication):
             return None
 
         try:
+            headers = {"Authorization": f"Bearer {token}"}
+            introspection_headers = get_introspection_headers()
+            if introspection_headers:
+                headers.update(introspection_headers)
+            
             response = requests.post(
-                introspect_url, headers={"Authorization": f"Bearer {token}"}, timeout=5
+                introspect_url, headers=headers, timeout=5
             )
             response.raise_for_status()
             data = response.json()
