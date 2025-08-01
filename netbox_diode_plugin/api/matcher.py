@@ -263,7 +263,7 @@ class ObjectMatchCriteria:
     the model fields and any references to another object
     specify a specific id in the appropriate field name.
     eg device_id=123 etc and for any generic references,
-    both the type and idshould be specified, eg:
+    both the type and id should be specified, eg:
     scope_type="dcim.site" and scope_id=123
     """
 
