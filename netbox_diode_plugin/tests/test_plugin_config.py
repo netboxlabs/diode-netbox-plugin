@@ -6,7 +6,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from netbox_diode_plugin.plugin_config import get_diode_auth_introspect_url, get_diode_user, _parse_diode_target
+from netbox_diode_plugin.plugin_config import _parse_diode_target, get_diode_auth_introspect_url, get_diode_user
 
 User = get_user_model()
 
