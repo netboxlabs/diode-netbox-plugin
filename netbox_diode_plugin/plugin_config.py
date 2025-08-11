@@ -23,7 +23,7 @@ def _parse_diode_target(target: str) -> tuple[str, str, bool]:
     parsed_target = urlparse(target)
 
     if parsed_target.scheme not in ["grpc", "grpcs", "http", "https"]:
-        raise ValueError("target should start with grpc:// or grpcs:// or http:// or https://")
+        raise ValueError("target should start with grpc://, grpcs://, http:// or https://")
 
     tls_verify = parsed_target.scheme in ["grpcs", "https"]
 
