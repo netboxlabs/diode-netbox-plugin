@@ -912,7 +912,7 @@
         "lookup": {"name": "Contact 1"},
         "create_expect": {
             "name": "Contact 1",
-            "group.name": "Contact Group 1",
+            "groups.all.__by_name": ["Contact Group 1"],
             "description": "Contact 1 Description"
         },
         "create": {
@@ -3397,6 +3397,34 @@
         }
     },
     {
+        "name": "dcim_moduletypeprofile_1",
+        "object_type": "dcim.moduletypeprofile",
+        "lookup": {"name": "Module Type Profile 1"},
+        "create_expect": {
+            "name": "Module Type Profile 1",
+            "description": "This is a module type profile"
+        },
+        "create": {
+            "module_type_profile": {
+                "name": "Module Type Profile 1",
+                "description": "This is a module type profile",
+                "schema": "{\"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"$id\": \"https://example.com/product.schema.json\", \"title\": \"Product\", \"description\": \"A product from Acme's catalog\", \"type\": \"object\", \"properties\": {\"productId\": {\"description\": \"The unique identifier for a product\", \"type\": \"integer\"}}}", 
+                "comments": "This is a module type profile comment"
+            }
+        },
+        "update": {
+            "module_type_profile": {
+                "name": "Module Type Profile 1",
+                "description": "This is a module type profile updated",
+                "schema": "{\"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"$id\": \"https://example.com/product.schema.json\", \"title\": \"Product\", \"description\": \"A product from Acme's catalog\", \"type\": \"object\", \"properties\": {\"productId\": {\"description\": \"The unique identifier for a product\", \"type\": \"integer\"}}}",
+                "comments": "This is a module type profile comment"
+            }
+        },
+        "update_expect": {
+            "description": "This is a module type profile updated"
+        }
+    },
+    {
         "name": "dcim_platform_1",
         "object_type": "dcim.platform",
         "lookup": {"name": "Cisco IOS-XE"},
@@ -3998,6 +4026,129 @@
         },
         "update_expect": {
             "description": "Global MPLS backbone network Updated"
+        }
+    },
+    {
+        "name": "extras_custom_field_1",
+        "object_type": "extras.customfield",
+        "lookup": {"name": "wlans"},
+        "create_expect": {
+            "name": "wlans",
+            "label": "WLANs",
+            "type": "multiobject"
+        },
+        "create": {
+            "custom_field": {
+                "name": "wlans",
+                "label": "WLANs",
+                "object_types": ["dcim.device"],
+                "type": "multiobject",
+                "related_object_type": "wireless.wirelesslan",
+                "search_weight": 1000,
+                "filter_logic": "loose"
+            }
+        },
+        "update": {
+            "custom_field": {
+                "name": "wlans",
+                "label": "WLANs Served",
+                "object_types": ["dcim.device"],
+                "type": "multiobject",
+                "related_object_type": "wireless.wirelesslan",
+                "search_weight": 1000,
+                "filter_logic": "loose"
+            }
+        },
+        "update_expect": {
+            "label": "WLANs Served"
+        }
+    },
+    {
+        "name": "extras_customfieldchoiceset_1",
+        "object_type": "extras.customfieldchoiceset",
+        "lookup": {"name": "scope_choices"},
+        "create": {
+            "custom_field_choice_set": {
+                "name": "scope_choices",
+                "extra_choices": ["site:Site", "virtual_machine:Virtual Machine", "toadstool"]
+            }
+        },
+        "create_expect": {
+            "name": "scope_choices",
+            "extra_choices": [["site", "Site"], ["virtual_machine", "Virtual Machine"], ["toadstool", "toadstool"]]
+        },
+        "update": {
+            "custom_field_choice_set": {
+                "name": "scope_choices",
+                "extra_choices": ["site:Site", "virtual_machine:Virtual Machine", "toadstool:Toad Stool"]
+            }
+        },
+        "update_expect": {
+            "extra_choices": [["site", "Site"], ["virtual_machine", "Virtual Machine"], ["toadstool", "Toad Stool"]]
+        }
+    },
+    {
+        "name": "extras_custom_link_1",
+        "object_type": "extras.customlink",
+        "lookup": {"name": "Custom Link 1"},
+        "create":{
+            "custom_link": {
+                "name": "Custom Link 1",
+                "enabled": true,
+                "link_text": "Custom Link 1",
+                "link_url": "https://www.google.com",
+                "object_types": ["dcim.device"]
+            }
+        },
+        "create_expect": {
+            "name": "Custom Link 1",
+            "link_text": "Custom Link 1",
+            "link_url": "https://www.google.com"
+        },
+        "update":{
+            "custom_link": {
+                "name": "Custom Link 1",
+                "enabled": true,
+                "link_text": "Custom Link 1 Updated",
+                "link_url": "https://www.google.com",
+                "object_types": ["dcim.device"]
+            }
+        },
+        "update_expect": {
+            "link_text": "Custom Link 1 Updated"
+        }
+    },
+    {
+        "name": "extras_journal_entry_1",
+        "object_type": "extras.journalentry",
+        "lookup": {"comments": "This is a journal entry"},
+        "create": {
+            "journal_entry": {
+                "assigned_object_site": {
+                    "name": "Journal Test Site"
+                },
+                "comments": "This is a journal entry",
+                "kind": "info"
+            }
+        },
+        "create_expect": {
+            "assigned_object.name": "Journal Test Site",
+            "comments": "This is a journal entry",
+            "kind": "info"
+        },
+        "update": {
+            "journal_entry": {
+                "assigned_object_site": {
+                    "name": "Journal Test Site"
+                },
+                "comments": "This is a journal entry",
+                "kind": "danger"
+            }
+        },
+        "update_expect": {
+            "assigned_object.name": "Journal Test Site",
+            "comments": "This is a journal entry",
+            "kind": "danger"
         }
     },
     {
@@ -4928,6 +5079,52 @@
         }
     },
     {
+        "name": "ipam_vlan_2",
+        "object_type": "ipam.vlan",
+        "lookup": {"vid": 807},
+        "create_expect": {
+            "vid": 807,
+            "name": "Production Servers",
+            "site.name": "Site 1"
+        },
+        "create": {
+            "vlan": {
+                "vid": "807",
+                "name": "Production Servers",
+                "tenant": {"name": "Tenant 1"},
+                "status": "active",
+                "site": {"name": "Site 1"},
+                "role": {
+                    "name": "Production",
+                    "slug": "production"
+                },
+                "description": "Primary production server network",
+                "comments": "Used for customer-facing production workloads",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update": {
+            "vlan": {
+                "vid": "807",
+                "name": "Production Servers",
+                "tenant": {"name": "Tenant 1"},
+                "status": "active",
+                "site": {"name": "Site 1"},
+                "role": {
+                    "name": "Production",
+                    "slug": "production"
+                },
+                "description": "Primary production server network Updated",
+                "comments": "Used for customer-facing production workloads",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update_expect": {
+            "description": "Primary production server network Updated",
+            "site.name": "Site 1"
+        }
+    },
+    {
         "name": "ipam_vlan_group_1",
         "object_type": "ipam.vlangroup",
         "lookup": {"name": "Data Center Core"},
@@ -4945,7 +5142,7 @@
                     "slug": "dc-west",
                     "status": "active"
                 },
-                "vid_ranges": [101, 102, 99, 100],
+                "vid_ranges": ["101", "102", "99", "100"],
                 "description": "Core network VLANs for data center infrastructure",
                 "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
             }    
@@ -4959,7 +5156,7 @@
                     "slug": "dc-west",
                     "status": "active"
                 },
-                "vid_ranges": [101, 102, 99, 100],
+                "vid_ranges": ["101", "102", "99", "100"],
                 "description": "Core network VLANs for data center infrastructure Updated",
                 "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
             }    

@@ -1,0 +1,5 @@
+name: diode-netbox-plugin-4.2.3
+services:
+  netbox:
+    volumes:
+      - ./netbox/plugins_test.py:/etc/netbox/config/plugins.py:z,ro

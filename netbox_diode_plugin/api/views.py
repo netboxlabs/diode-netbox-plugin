@@ -66,9 +66,13 @@ class GenerateDiffView(views.APIView):
         """Generate diff for entity."""
         try:
             return self._post(request, *args, **kwargs)
+        except ChangeSetException as e:
+            result = ChangeSetResult(
+                errors=e.errors,
+            )
+            return Response(result.to_dict(), status=result.get_status_code())
         except Exception:
             import traceback
-
             traceback.print_exc()
             raise
 
@@ -77,12 +81,36 @@ class GenerateDiffView(views.APIView):
         object_type = request.data.get("object_type")
 
         if not entity:
-            raise ValidationError("Entity is required")
+            raise ChangeSetException(
+                "validation error",
+                errors={
+                    "request": {
+                        "entity": ["entity is required"]
+                    }
+                }
+            )
         if not object_type:
-            raise ValidationError("Object type is required")
+            raise ChangeSetException(
+                "validation error",
+                errors={
+                    "request": {
+                        "object_type": ["object_type is required"]
+                    }
+                }
+            )
 
         app_label, model_name = object_type.split(".")
-        model_class = apps.get_model(app_label, model_name)
+        try:
+            model_class = apps.get_model(app_label, model_name)
+        except LookupError:
+            raise ChangeSetException(
+                "validation error",
+                errors={
+                    "request": {
+                        "object_type": [f"{object_type} is not supported in this version."]
+                    }
+                }
+            )
 
         for entity_key in get_valid_entity_keys(model_class.__name__):
             original_entity_data = entity.get(entity_key)
@@ -90,19 +118,16 @@ class GenerateDiffView(views.APIView):
                 break
 
         if original_entity_data is None:
-            raise ValidationError(
-                f"No data found for {entity_key} in entity got: {entity.keys()}"
+            raise ChangeSetException(
+                "validation error",
+                errors={
+                    "entity": {
+                        entity_key: [f"No data found in expected entity key, got: {entity.keys()}"]
+                    }
+                }
             )
 
-        try:
-            result = generate_changeset(original_entity_data, object_type)
-        except ChangeSetException as e:
-            logger.error(f"Error generating change set: {e}")
-            result = ChangeSetResult(
-                errors=e.errors,
-            )
-            return Response(result.to_dict(), status=result.get_status_code())
-
+        result = generate_changeset(original_entity_data, object_type)
         branch_schema_id = request.headers.get("X-NetBox-Branch")
 
         # If branch schema ID is provided and branching plugin is installed, get branch name
