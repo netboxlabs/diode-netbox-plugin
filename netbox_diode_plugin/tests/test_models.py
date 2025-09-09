@@ -28,3 +28,8 @@ class SettingModelTestCase(TestCase):
         """Check Setting model absolute URL."""
         setting = Setting()
         self.assertEqual(setting.get_absolute_url(), "/netbox/plugins/diode/settings/")
+
+    def test_tags_disabled(self):
+        """Check Setting model has tags disabled."""
+        setting = Setting()
+        self.assertIsNone(setting.tags)
