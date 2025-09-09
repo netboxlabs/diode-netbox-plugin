@@ -24,6 +24,7 @@ class Setting(NetBoxModel):
     """Setting model."""
 
     diode_target = models.CharField(max_length=255, validators=[diode_target_validator])
+    tags = None
 
     class Meta:
         """Meta class."""
