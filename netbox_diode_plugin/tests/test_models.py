@@ -31,5 +31,5 @@ class SettingModelTestCase(TestCase):
 
     def test_tags_disabled(self):
         """Check Setting model has tags disabled."""
-        setting = Setting()
+        setting = Setting(diode_target="http://localhost:8080")
         self.assertIsNone(setting.tags)
