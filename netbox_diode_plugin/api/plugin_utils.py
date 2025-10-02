@@ -1,7 +1,7 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Timestamp: 2025-07-23 01:46:44Z
+# Timestamp: 2025-10-02 12:39:10Z
 
 from dataclasses import dataclass
 import datetime
@@ -333,6 +333,7 @@ _JSON_REF_INFO = {
     },
     'dcim.platform': {
         'manufacturer': RefInfo(object_type='dcim.manufacturer', field_name='manufacturer'),
+        'parent': RefInfo(object_type='dcim.platform', field_name='parent'),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
     },
     'dcim.powerfeed': {
@@ -1143,13 +1144,13 @@ _LEGAL_FIELDS = {
     'dcim.modulebay': frozenset(['custom_fields', 'description', 'device', 'installed_module', 'label', 'module', 'name', 'position', 'tags']),
     'dcim.moduletype': frozenset(['airflow', 'attributes', 'comments', 'custom_fields', 'description', 'manufacturer', 'model', 'part_number', 'profile', 'tags', 'weight', 'weight_unit']),
     'dcim.moduletypeprofile': frozenset(['comments', 'custom_fields', 'description', 'name', 'schema', 'tags']),
-    'dcim.platform': frozenset(['custom_fields', 'description', 'manufacturer', 'name', 'slug', 'tags']),
+    'dcim.platform': frozenset(['comments', 'custom_fields', 'description', 'manufacturer', 'name', 'parent', 'slug', 'tags']),
     'dcim.powerfeed': frozenset(['amperage', 'comments', 'custom_fields', 'description', 'mark_connected', 'max_utilization', 'name', 'phase', 'power_panel', 'rack', 'status', 'supply', 'tags', 'tenant', 'type', 'voltage']),
     'dcim.poweroutlet': frozenset(['color', 'custom_fields', 'description', 'device', 'feed_leg', 'label', 'mark_connected', 'module', 'name', 'power_port', 'status', 'tags', 'type']),
     'dcim.powerpanel': frozenset(['comments', 'custom_fields', 'description', 'location', 'name', 'site', 'tags']),
     'dcim.powerport': frozenset(['allocated_draw', 'custom_fields', 'description', 'device', 'label', 'mark_connected', 'maximum_draw', 'module', 'name', 'tags', 'type']),
     'dcim.rack': frozenset(['airflow', 'asset_tag', 'comments', 'custom_fields', 'desc_units', 'description', 'facility_id', 'form_factor', 'location', 'max_weight', 'mounting_depth', 'name', 'outer_depth', 'outer_height', 'outer_unit', 'outer_width', 'rack_type', 'role', 'serial', 'site', 'starting_unit', 'status', 'tags', 'tenant', 'u_height', 'weight', 'weight_unit', 'width']),
-    'dcim.rackreservation': frozenset(['comments', 'custom_fields', 'description', 'rack', 'tags', 'tenant', 'units']),
+    'dcim.rackreservation': frozenset(['comments', 'custom_fields', 'description', 'rack', 'status', 'tags', 'tenant', 'units']),
     'dcim.rackrole': frozenset(['color', 'custom_fields', 'description', 'name', 'slug', 'tags']),
     'dcim.racktype': frozenset(['comments', 'custom_fields', 'desc_units', 'description', 'form_factor', 'manufacturer', 'max_weight', 'model', 'mounting_depth', 'outer_depth', 'outer_height', 'outer_unit', 'outer_width', 'slug', 'starting_unit', 'tags', 'u_height', 'weight', 'weight_unit', 'width']),
     'dcim.rearport': frozenset(['color', 'custom_fields', 'description', 'device', 'label', 'mark_connected', 'module', 'name', 'positions', 'tags', 'type']),
@@ -1387,8 +1388,8 @@ _FORMAT_TRANSFORMATIONS = {
         'object_types': for_all(None, True, False),
         'related_object_filter': parse_json,
         'search_weight': int_from_int64string,
-        'validation_maximum': int_from_int64string,
-        'validation_minimum': int_from_int64string,
+        'validation_maximum': transform_float_to_decimal,
+        'validation_minimum': transform_float_to_decimal,
         'weight': int_from_int64string,
     },
     'extras.customfieldchoiceset': {
