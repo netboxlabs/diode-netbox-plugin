@@ -6,7 +6,8 @@ from urllib.parse import urlparse
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.urls import reverse
-from netbox.models import NetBoxModel
+from netbox.models import ChangeLoggingMixin, PrimaryModel
+from utilities.querysets import RestrictedQuerySet
 
 
 def diode_target_validator(target):
@@ -20,11 +21,25 @@ def diode_target_validator(target):
         raise ValidationError(exc)
 
 
-class Setting(NetBoxModel):
-    """Setting model."""
+class Setting(ChangeLoggingMixin, models.Model):
+    """
+    Setting model.
+
+    This model is excluded from branching by not inheriting from ChangeLoggingMixin,
+    since it represents global plugin configuration that should not be branched.
+    """
 
     diode_target = models.CharField(max_length=255, validators=[diode_target_validator])
-    tags = None
+    branch = models.ForeignKey(
+        to="netbox_branching.Branch",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="diode_settings",
+        help_text="Optional branch for NetBox Branching plugin integration",
+    )
+
+    objects = RestrictedQuerySet.as_manager()
 
     class Meta:
         """Meta class."""
@@ -39,6 +54,11 @@ class Setting(NetBoxModel):
     def get_absolute_url(self):
         """Return absolute URL."""
         return reverse("plugins:netbox_diode_plugin:settings")
+
+    @property
+    def branch_schema_id(self):
+        """Return the branch schema_id if branch is set."""
+        return self.branch.schema_id if self.branch else None
 
 
 class ClientCredentials(models.Model):

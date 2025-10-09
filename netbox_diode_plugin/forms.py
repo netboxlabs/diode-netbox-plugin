@@ -3,7 +3,6 @@
 """Diode NetBox Plugin - Forms."""
 from django import forms
 from django.utils.translation import gettext_lazy as _
-from netbox.forms import NetBoxModelForm
 from netbox.plugins import get_plugin_config
 from utilities.forms.rendering import FieldSet
 
@@ -15,12 +14,13 @@ __all__ = (
 )
 
 
-class SettingsForm(NetBoxModelForm):
+class SettingsForm(forms.ModelForm):
     """Settings form."""
 
     fieldsets = (
         FieldSet(
             "diode_target",
+            "branch",
         ),
     )
 
@@ -28,7 +28,7 @@ class SettingsForm(NetBoxModelForm):
         """Meta class."""
 
         model = Setting
-        fields = ("diode_target",)
+        fields = ("diode_target", "branch")
 
     def __init__(self, *args, **kwargs):
         """Initialize the form."""
@@ -43,6 +43,27 @@ class SettingsForm(NetBoxModelForm):
             self.fields["diode_target"].help_text = (
                 "This field is not allowed to be modified."
             )
+
+        # Handle branch field based on netbox_branching plugin availability
+        from django.conf import settings as django_settings
+
+        if "netbox_branching" in django_settings.PLUGINS:
+            # Branching plugin is installed, configure the branch field
+            try:
+                from netbox_branching.models import Branch
+
+                self.fields["branch"].queryset = Branch.objects.filter(status="ready")
+                self.fields["branch"].required = False
+                self.fields["branch"].label = "Branch"
+                self.fields["branch"].help_text = (
+                    "Select an active branch for Diode ingestion. Leave empty to use the main schema."
+                )
+            except ImportError:
+                # Plugin is in PLUGINS but not actually available, remove the field
+                self.fields.pop("branch", None)
+        else:
+            # Branching plugin is not installed, remove the branch field
+            self.fields.pop("branch", None)
 
 
 class ClientCredentialForm(forms.Form):

@@ -130,7 +130,18 @@ class GenerateDiffView(views.APIView):
         result = generate_changeset(original_entity_data, object_type)
         branch_schema_id = request.headers.get("X-NetBox-Branch")
 
-        # If branch schema ID is provided and branching plugin is installed, get branch name
+        # If no branch specified in header, check for default branch in settings
+        if not branch_schema_id and Branch is not None:
+            try:
+                from netbox_diode_plugin.models import Setting
+                settings = Setting.objects.first()
+                if settings and settings.branch:
+                    branch_schema_id = settings.branch.schema_id
+                    logger.debug(f"Using default branch from settings: {settings.branch.name} ({branch_schema_id})")
+            except Exception as e:
+                logger.warning(f"Could not retrieve default branch from settings: {e}")
+
+        # If branch schema ID is provided (from header or settings) and branching plugin is installed, get branch name
         if branch_schema_id and Branch is not None:
             try:
                 branch = Branch.objects.get(schema_id=branch_schema_id)
