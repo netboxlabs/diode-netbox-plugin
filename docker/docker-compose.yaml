@@ -1,10 +1,10 @@
 name: diode-netbox-plugin
 services:
   netbox: &netbox
-    image: netboxcommunity/netbox:v4.3.3-3.3.0-diode-netbox-plugin
+    image: netboxcommunity/netbox:v4.4.2-3.4.1-diode-netbox-plugin
     build:
       context: .
-      dockerfile: Dockerfile-diode-netbox-plugin
+      dockerfile: Dockerfile
       pull: true
     depends_on:
       - netbox-postgres

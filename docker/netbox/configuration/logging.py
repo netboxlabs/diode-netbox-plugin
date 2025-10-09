@@ -1,20 +1,3 @@
-from os import environ
-
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-        },
-    },
-    'loggers': {
-        '': {  # root logger
-            'handlers': ['console'],
-            'level': 'DEBUG' if environ.get('DEBUG', 'false').lower() == 'true' else 'INFO',
-        },
-    },
-}
 # # Remove first comment(#) on each line to implement this working logging example.
 # # Add LOGLEVEL environment variable to netbox if you use this example & want a different log level.
 # from os import environ
