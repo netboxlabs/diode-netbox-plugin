@@ -21,7 +21,7 @@ def diode_target_validator(target):
         raise ValidationError(exc)
 
 
-class Setting(ChangeLoggingMixin, models.Model):
+class Setting(models.Model):
     """
     Setting model.
 
