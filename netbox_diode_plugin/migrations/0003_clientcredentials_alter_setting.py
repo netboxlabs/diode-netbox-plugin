@@ -45,4 +45,12 @@ class Migration(migrations.Migration):
             model_name="setting",
             name="custom_field_data",
         ),
+        migrations.RemoveField(
+            model_name='setting',
+            name='created',
+        ),
+        migrations.RemoveField(
+            model_name='setting',
+            name='last_updated',
+        ),
     ]
