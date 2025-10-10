@@ -23,18 +23,24 @@ docker-compose-netbox-plugin-down:
 
 .PHONY: docker-compose-netbox-plugin-test
 docker-compose-netbox-plugin-test:
-	-@$(DOCKER_COMPOSE) -f $(DOCKER_PATH)/docker-compose.yaml -f $(DOCKER_PATH)/docker-compose.test.yaml run -u root --rm netbox ./manage.py test $(TEST_FLAGS) --keepdb $(TEST_SELECTOR)
-	@$(MAKE) docker-compose-netbox-plugin-down
+	@$(DOCKER_COMPOSE) -f $(DOCKER_PATH)/docker-compose.yaml -f $(DOCKER_PATH)/docker-compose.test.yaml run -u root --rm netbox ./manage.py test $(TEST_FLAGS) --keepdb $(TEST_SELECTOR); \
+	EXIT_CODE=$$?; \
+	$(MAKE) docker-compose-netbox-plugin-down; \
+	exit $$EXIT_CODE
 
 .PHONY: docker-compose-netbox-plugin-test-lint
 docker-compose-netbox-plugin-test-lint:
-	-@$(DOCKER_COMPOSE) -f $(DOCKER_PATH)/docker-compose.yaml -f $(DOCKER_PATH)/docker-compose.test.yaml run -u root --rm netbox ruff check --output-format=github netbox_diode_plugin
-	@$(MAKE) docker-compose-netbox-plugin-down
+	@$(DOCKER_COMPOSE) -f $(DOCKER_PATH)/docker-compose.yaml -f $(DOCKER_PATH)/docker-compose.test.yaml run -u root --rm netbox ruff check --output-format=github netbox_diode_plugin; \
+	EXIT_CODE=$$?; \
+	$(MAKE) docker-compose-netbox-plugin-down; \
+	exit $$EXIT_CODE
 
 .PHONY: docker-compose-netbox-plugin-test-cover
 docker-compose-netbox-plugin-test-cover:
-	-@$(DOCKER_COMPOSE) -f $(DOCKER_PATH)/docker-compose.yaml -f $(DOCKER_PATH)/docker-compose.test.yaml run --rm -u root -e COVERAGE_FILE=/opt/netbox/netbox/coverage/.coverage netbox sh -c "coverage run --source=netbox_diode_plugin --omit=*/migrations/* ./manage.py test --keepdb $(TEST_SELECTOR) && coverage xml -o /opt/netbox/netbox/coverage/report.xml && coverage report -m | tee /opt/netbox/netbox/coverage/report.txt"
-	@$(MAKE) docker-compose-netbox-plugin-down
+	@$(DOCKER_COMPOSE) -f $(DOCKER_PATH)/docker-compose.yaml -f $(DOCKER_PATH)/docker-compose.test.yaml run --rm -u root -e COVERAGE_FILE=/opt/netbox/netbox/coverage/.coverage netbox sh -c "coverage run --source=netbox_diode_plugin --omit=*/migrations/* ./manage.py test --keepdb $(TEST_SELECTOR) && coverage xml -o /opt/netbox/netbox/coverage/report.xml && coverage report -m | tee /opt/netbox/netbox/coverage/report.txt"; \
+	EXIT_CODE=$$?; \
+	$(MAKE) docker-compose-netbox-plugin-down; \
+	exit $$EXIT_CODE
 
 .PHONY: docker-compose-generate-matching-docs
 docker-compose-generate-matching-docs:
