@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 # Copyright 2025 NetBox Labs, Inc.
-"""Add branch field to Setting model."""
+"""Add branch_id field to Setting model."""
 
-import django.db.models.deletion
 from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    """Add optional branch field to Setting model."""
+    """Add optional branch_id field to Setting model."""
 
     dependencies = [
         ("netbox_diode_plugin", "0001_squashed_0005"),
@@ -16,14 +15,11 @@ class Migration(migrations.Migration):
     operations = [
         migrations.AddField(
             model_name="setting",
-            name="branch",
-            field=models.ForeignKey(
+            name="branch_id",
+            field=models.BigIntegerField(
                 blank=True,
-                help_text="Optional branch for NetBox Branching plugin integration",
                 null=True,
-                on_delete=django.db.models.deletion.SET_NULL,
-                related_name="diode_settings",
-                to="netbox_branching.branch",
+                help_text="ID of the branch for NetBox Branching plugin integration",
             ),
         ),
     ]
