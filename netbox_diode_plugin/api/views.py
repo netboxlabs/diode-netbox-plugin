@@ -76,6 +76,35 @@ class GenerateDiffView(views.APIView):
             traceback.print_exc()
             raise
 
+    def _get_branch_schema_id(self, request):
+        """Get branch schema ID from request header or settings."""
+        branch_schema_id = request.headers.get("X-NetBox-Branch")
+
+        # If no branch specified in header, check for default branch in settings
+        if not branch_schema_id and Branch is not None:
+            try:
+                from netbox_diode_plugin.models import Setting
+                settings = Setting.objects.first()
+                if settings and settings.branch:
+                    branch_schema_id = settings.branch.schema_id
+                    logger.debug(
+                        f"Using default branch from settings: {settings.branch.name} ({branch_schema_id})"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not retrieve default branch from settings: {e}")
+
+        return branch_schema_id
+
+    def _add_branch_to_result(self, result, branch_schema_id):
+        """Add branch information to the result if branch is available."""
+        if branch_schema_id and Branch is not None:
+            try:
+                branch = Branch.objects.get(schema_id=branch_schema_id)
+                result.change_set.branch = {"id": branch.schema_id, "name": branch.name}
+            except Branch.DoesNotExist:
+                sanitized_branch_id = branch_schema_id.replace('\n', '').replace('\r', '')
+                logger.warning(f"Branch with ID {sanitized_branch_id} does not exist")
+
     def _post(self, request, *args, **kwargs):
         entity = request.data.get("entity")
         object_type = request.data.get("object_type")
@@ -128,27 +157,8 @@ class GenerateDiffView(views.APIView):
             )
 
         result = generate_changeset(original_entity_data, object_type)
-        branch_schema_id = request.headers.get("X-NetBox-Branch")
-
-        # If no branch specified in header, check for default branch in settings
-        if not branch_schema_id and Branch is not None:
-            try:
-                from netbox_diode_plugin.models import Setting
-                settings = Setting.objects.first()
-                if settings and settings.branch:
-                    branch_schema_id = settings.branch.schema_id
-                    logger.debug(f"Using default branch from settings: {settings.branch.name} ({branch_schema_id})")
-            except Exception as e:
-                logger.warning(f"Could not retrieve default branch from settings: {e}")
-
-        # If branch schema ID is provided (from header or settings) and branching plugin is installed, get branch name
-        if branch_schema_id and Branch is not None:
-            try:
-                branch = Branch.objects.get(schema_id=branch_schema_id)
-                result.change_set.branch = {"id": branch.schema_id, "name": branch.name}
-            except Branch.DoesNotExist:
-                sanitized_branch_id = branch_schema_id.replace('\n', '').replace('\r', '')
-                logger.warning(f"Branch with ID {sanitized_branch_id} does not exist")
+        branch_schema_id = self._get_branch_schema_id(request)
+        self._add_branch_to_result(result, branch_schema_id)
 
         return Response(result.to_dict(), status=result.get_status_code())
 

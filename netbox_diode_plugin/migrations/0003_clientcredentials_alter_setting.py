@@ -2,8 +2,9 @@
 # Copyright 2025 NetBox Labs, Inc.
 """Create ClientCredentials model and update Setting model."""
 
-import netbox_diode_plugin.models
 from django.db import migrations, models
+
+import netbox_diode_plugin.models
 
 
 class Migration(migrations.Migration):
