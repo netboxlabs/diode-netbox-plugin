@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - Tests."""
 from unittest import mock
 
+from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.messages.middleware import MessageMiddleware
@@ -158,8 +159,8 @@ class SettingsEditViewTestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         self.assertEqual(response.url, f"/netbox/login/?next={self.path}")
 
-    def test_settings_update_disallowed_on_get_method(self):
-        """Test that the accessing settings edit is not allowed with diode target override."""
+    def test_settings_update_allowed_on_get_method_with_override(self):
+        """Test that accessing settings edit shows info message when diode target is overridden."""
         with mock.patch(
             "netbox_diode_plugin.views.get_plugin_config"
         ) as mock_get_plugin_config:
@@ -173,7 +174,7 @@ class SettingsEditViewTestCase(TestCase):
                 "netbox_diode_plugin.change_setting",
             )
 
-            request = self.request_factory.post(self.path)
+            request = self.request_factory.get(self.path)
             request.user = user
             request.htmx = None
 
@@ -185,25 +186,22 @@ class SettingsEditViewTestCase(TestCase):
             middleware.process_request(request)
             request.session.save()
 
-            setattr(request, "session", "session")
-            messages = FallbackStorage(request)
-            request._messages = messages
-
             self.view.setup(request)
             response = self.view.get(request)
 
-            self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+            # Check that the message was added
+            storage = messages.get_messages(request)
+            message_list = list(storage)
+            self.assertEqual(len(message_list), 1)
             self.assertEqual(
-                response.url, reverse("plugins:netbox_diode_plugin:settings")
-            )
-            self.assertEqual(len(request._messages._queued_messages), 1)
-            self.assertEqual(
-                str(request._messages._queued_messages[0]),
-                "The Diode target is not allowed to be modified.",
+                str(message_list[0]),
+                "The Diode target field is disabled because it is overridden in the plugin configuration.",
             )
 
-    def test_settings_update_disallowed_on_post_method(self):
-        """Test that the updating settings is not allowed with diode target override."""
+    def test_settings_update_allowed_on_post_method_with_override(self):
+        """Test that updating settings succeeds when diode target is overridden (field is disabled in form)."""
         with mock.patch(
             "netbox_diode_plugin.views.get_plugin_config"
         ) as mock_get_plugin_config:
@@ -237,12 +235,8 @@ class SettingsEditViewTestCase(TestCase):
             self.view.setup(request)
             response = self.view.post(request)
 
+            # Should succeed and redirect to settings view
             self.assertEqual(response.status_code, status.HTTP_302_FOUND)
             self.assertEqual(
                 response.url, reverse("plugins:netbox_diode_plugin:settings")
-            )
-            self.assertEqual(len(request._messages._queued_messages), 1)
-            self.assertEqual(
-                str(request._messages._queued_messages[0]),
-                "The Diode target is not allowed to be modified.",
             )
