@@ -41,8 +41,18 @@ class Setting(NetBoxModel):
         return reverse("plugins:netbox_diode_plugin:settings")
 
 
+class UnmanagedModelManager(models.Manager):
+    """Manager for unmanaged models that prevents database queries."""
+
+    def get_queryset(self):
+        """Return an empty queryset without hitting the database."""
+        return super().get_queryset().none()
+
+
 class ClientCredentials(models.Model):
     """Dummy model to allow for permissions, saved filters, etc.."""
+
+    objects = UnmanagedModelManager()
 
     class Meta:
         """Meta class."""

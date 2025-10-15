@@ -449,7 +449,11 @@ class ObjectMatchCriteria:
                 field = self.model_class._meta.get_field(field_name)
                 # special handling for object type -> content type id
                 if field.is_relation and hasattr(field, "related_model") and field.related_model == ContentType:
-                    prepared[field_name] = content_type_id(value)
+                    # Handle ManyToMany fields (list of object types) and ForeignKey fields (single object type)
+                    if isinstance(value, list):
+                        prepared[field_name] = [content_type_id(v) for v in value]
+                    else:
+                        prepared[field_name] = content_type_id(value)
                 else:
                     prepared[field_name] = value
 
