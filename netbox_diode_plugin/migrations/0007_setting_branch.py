@@ -9,7 +9,7 @@ class Migration(migrations.Migration):
     """Add optional branch_id field to Setting model."""
 
     dependencies = [
-        ("netbox_diode_plugin", "0001_squashed_0005"),
+        ("netbox_diode_plugin", "0001_squashed_0005", "0006_clientcredentials_alter_setting_diode_target"),
     ]
 
     operations = [
