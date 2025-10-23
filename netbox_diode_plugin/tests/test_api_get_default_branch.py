@@ -108,7 +108,7 @@ class GetDefaultBranchViewTestCase(APITestCase):
         mock_branch.id = 1
 
         # Create a setting with branch_id
-        setting = Setting.objects.create(
+        Setting.objects.create(
             diode_target="grpc://localhost:8080/diode",
             branch_id=1
         )
@@ -132,7 +132,7 @@ class GetDefaultBranchViewTestCase(APITestCase):
     def test_get_default_branch_exception_handling(self):
         """Test that exceptions during branch retrieval are handled gracefully."""
         # Create a setting with branch_id
-        setting = Setting.objects.create(
+        Setting.objects.create(
             diode_target="grpc://localhost:8080/diode",
             branch_id=1
         )
