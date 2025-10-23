@@ -211,3 +211,32 @@ class ApplyChangeSetView(views.APIView):
             )
 
         return Response(result.to_dict(), status=result.get_status_code())
+
+
+class GetDefaultBranchView(views.APIView):
+    """GetDefaultBranch view."""
+
+    authentication_classes = [DiodeOAuth2Authentication]
+    permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_READ)]
+
+    def get(self, request, *args, **kwargs):
+        """Get default branch from settings."""
+        branch_data = None
+
+        # Check for default branch in settings
+        if Branch is not None:
+            try:
+                from netbox_diode_plugin.models import Setting
+                settings = Setting.objects.first()
+                if settings and settings.branch:
+                    branch_data = {
+                        "id": settings.branch.schema_id,
+                        "name": settings.branch.name
+                    }
+                    logger.debug(
+                        f"Default branch from settings: {settings.branch.name} ({settings.branch.schema_id})"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not retrieve default branch from settings: {e}")
+
+        return Response({"branch": branch_data})
