@@ -4,7 +4,7 @@ services:
     image: netboxcommunity/netbox:v4.4.2-3.4.1-diode-netbox-plugin
     build:
       context: .
-      dockerfile: Dockerfile-diode-netbox-plugin
+      dockerfile: Dockerfile
       pull: true
     depends_on:
       - netbox-postgres

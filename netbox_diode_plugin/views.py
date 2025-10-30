@@ -160,9 +160,15 @@ class SettingsView(BaseDiodeView):
 
         diode_target = diode_target_override or settings.diode_target
 
+        # Check if branching plugin is available
+        from django.conf import settings as django_settings
+        has_branching_plugin = "netbox_branching" in django_settings.PLUGINS
+
         context = {
             "diode_target": diode_target,
             "is_diode_target_overridden": diode_target_override is not None,
+            "branch": settings.branch if has_branching_plugin else None,
+            "has_branching_plugin": has_branching_plugin,
         }
 
         return render(request, "diode/settings.html", context)
@@ -190,11 +196,10 @@ class SettingsEditView(BaseDiodeView,generic.ObjectEditView):
             "netbox_diode_plugin", "diode_target_override"
         )
         if diode_target_override:
-            messages.error(
+            messages.info(
                 request,
-                "The Diode target is not allowed to be modified.",
+                "The Diode target field is disabled because it is overridden in the plugin configuration.",
             )
-            return redirect("plugins:netbox_diode_plugin:settings")
 
         settings = Setting.objects.get()
         kwargs["pk"] = settings.pk
@@ -205,16 +210,6 @@ class SettingsEditView(BaseDiodeView,generic.ObjectEditView):
         """POST request handler."""
         if ret := self.check_authentication(request):
             return ret
-
-        diode_target_override = get_plugin_config(
-            "netbox_diode_plugin", "diode_target_override"
-        )
-        if diode_target_override:
-            messages.error(
-                request,
-                "The Diode target is not allowed to be modified.",
-            )
-            return redirect("plugins:netbox_diode_plugin:settings")
 
         settings = Setting.objects.get()
         kwargs["pk"] = settings.pk
