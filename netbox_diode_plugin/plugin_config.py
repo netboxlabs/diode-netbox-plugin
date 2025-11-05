@@ -22,12 +22,18 @@ def _parse_diode_target(target: str) -> tuple[str, str, bool]:
     """Parse the target into authority, path and tls_verify."""
     parsed_target = urlparse(target)
 
-    if parsed_target.scheme not in ["grpc", "grpcs"]:
-        raise ValueError("target should start with grpc:// or grpcs://")
+    if parsed_target.scheme not in ["grpc", "grpcs", "http", "https"]:
+        raise ValueError("target should start with grpc://, grpcs://, http:// or https://")
 
-    tls_verify = parsed_target.scheme == "grpcs"
+    tls_verify = parsed_target.scheme in ["grpcs", "https"]
 
     authority = parsed_target.netloc
+
+    if ":" not in authority:
+        if parsed_target.scheme in ["grpc", "http"]:
+            authority += ":80"
+        elif parsed_target.scheme in ["grpcs", "https"]:
+            authority += ":443"
 
     return authority, parsed_target.path, tls_verify
 
@@ -89,3 +95,7 @@ def get_diode_user():
         diode_user = User.objects.create(username=diode_username, is_active=True)
 
     return diode_user
+
+def get_required_token_audience():
+    """Returns the require token audience."""
+    return get_plugin_config("netbox_diode_plugin", "required_token_audience")

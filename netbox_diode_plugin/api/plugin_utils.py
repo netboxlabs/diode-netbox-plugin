@@ -1,13 +1,15 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Timestamp: 2025-05-20 14:28:26Z
+# Timestamp: 2025-10-02 12:39:10Z
 
 from dataclasses import dataclass
 import datetime
 import decimal
 from functools import lru_cache
+import json
 import logging
+import re
 from typing import Type
 
 from core.models import ObjectType as NetBoxType
@@ -137,6 +139,11 @@ _JSON_REF_INFO = {
         'wireless_lan': RefInfo(object_type='wireless.wirelesslan', field_name='object', is_generic=True),
         'wireless_lan_group': RefInfo(object_type='wireless.wirelesslangroup', field_name='object', is_generic=True),
         'wireless_link': RefInfo(object_type='wireless.wirelesslink', field_name='object', is_generic=True),
+        'custom_field': RefInfo(object_type='extras.customfield', field_name='object', is_generic=True),
+        'custom_field_choice_set': RefInfo(object_type='extras.customfieldchoiceset', field_name='object', is_generic=True),
+        'journal_entry': RefInfo(object_type='extras.journalentry', field_name='object', is_generic=True),
+        'module_type_profile': RefInfo(object_type='dcim.moduletypeprofile', field_name='object', is_generic=True),
+        'custom_link': RefInfo(object_type='extras.customlink', field_name='object', is_generic=True),
     },
     'circuits.circuit': {
         'assignments': RefInfo(object_type='circuits.circuitgroupassignment', field_name='assignments', is_many=True),
@@ -243,6 +250,7 @@ _JSON_REF_INFO = {
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
     },
     'dcim.devicerole': {
+        'parent': RefInfo(object_type='dcim.devicerole', field_name='parent'),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
     },
     'dcim.devicetype': {
@@ -317,10 +325,15 @@ _JSON_REF_INFO = {
     },
     'dcim.moduletype': {
         'manufacturer': RefInfo(object_type='dcim.manufacturer', field_name='manufacturer'),
+        'profile': RefInfo(object_type='dcim.moduletypeprofile', field_name='profile'),
+        'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
+    },
+    'dcim.moduletypeprofile': {
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
     },
     'dcim.platform': {
         'manufacturer': RefInfo(object_type='dcim.manufacturer', field_name='manufacturer'),
+        'parent': RefInfo(object_type='dcim.platform', field_name='parent'),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
     },
     'dcim.powerfeed': {
@@ -395,6 +408,105 @@ _JSON_REF_INFO = {
         'primary_ip6': RefInfo(object_type='ipam.ipaddress', field_name='primary_ip6'),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
         'tenant': RefInfo(object_type='tenancy.tenant', field_name='tenant'),
+    },
+    'extras.customfield': {
+        'choice_set': RefInfo(object_type='extras.customfieldchoiceset', field_name='choice_set'),
+    },
+    'extras.journalentry': {
+        'assigned_object_asn': RefInfo(object_type='ipam.asn', field_name='assigned_object', is_generic=True),
+        'assigned_object_asn_range': RefInfo(object_type='ipam.asnrange', field_name='assigned_object', is_generic=True),
+        'assigned_object_aggregate': RefInfo(object_type='ipam.aggregate', field_name='assigned_object', is_generic=True),
+        'assigned_object_cable': RefInfo(object_type='dcim.cable', field_name='assigned_object', is_generic=True),
+        'assigned_object_cable_path': RefInfo(object_type='dcim.cablepath', field_name='assigned_object', is_generic=True),
+        'assigned_object_cable_termination': RefInfo(object_type='dcim.cabletermination', field_name='assigned_object', is_generic=True),
+        'assigned_object_circuit': RefInfo(object_type='circuits.circuit', field_name='assigned_object', is_generic=True),
+        'assigned_object_circuit_group': RefInfo(object_type='circuits.circuitgroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_circuit_group_assignment': RefInfo(object_type='circuits.circuitgroupassignment', field_name='assigned_object', is_generic=True),
+        'assigned_object_circuit_termination': RefInfo(object_type='circuits.circuittermination', field_name='assigned_object', is_generic=True),
+        'assigned_object_circuit_type': RefInfo(object_type='circuits.circuittype', field_name='assigned_object', is_generic=True),
+        'assigned_object_cluster': RefInfo(object_type='virtualization.cluster', field_name='assigned_object', is_generic=True),
+        'assigned_object_cluster_group': RefInfo(object_type='virtualization.clustergroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_cluster_type': RefInfo(object_type='virtualization.clustertype', field_name='assigned_object', is_generic=True),
+        'assigned_object_console_port': RefInfo(object_type='dcim.consoleport', field_name='assigned_object', is_generic=True),
+        'assigned_object_console_server_port': RefInfo(object_type='dcim.consoleserverport', field_name='assigned_object', is_generic=True),
+        'assigned_object_contact': RefInfo(object_type='tenancy.contact', field_name='assigned_object', is_generic=True),
+        'assigned_object_contact_assignment': RefInfo(object_type='tenancy.contactassignment', field_name='assigned_object', is_generic=True),
+        'assigned_object_contact_group': RefInfo(object_type='tenancy.contactgroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_contact_role': RefInfo(object_type='tenancy.contactrole', field_name='assigned_object', is_generic=True),
+        'assigned_object_custom_field': RefInfo(object_type='extras.customfield', field_name='assigned_object', is_generic=True),
+        'assigned_object_custom_field_choice_set': RefInfo(object_type='extras.customfieldchoiceset', field_name='assigned_object', is_generic=True),
+        'assigned_object_device': RefInfo(object_type='dcim.device', field_name='assigned_object', is_generic=True),
+        'assigned_object_device_bay': RefInfo(object_type='dcim.devicebay', field_name='assigned_object', is_generic=True),
+        'assigned_object_device_role': RefInfo(object_type='dcim.devicerole', field_name='assigned_object', is_generic=True),
+        'assigned_object_device_type': RefInfo(object_type='dcim.devicetype', field_name='assigned_object', is_generic=True),
+        'assigned_object_fhrp_group': RefInfo(object_type='ipam.fhrpgroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_fhrp_group_assignment': RefInfo(object_type='ipam.fhrpgroupassignment', field_name='assigned_object', is_generic=True),
+        'assigned_object_front_port': RefInfo(object_type='dcim.frontport', field_name='assigned_object', is_generic=True),
+        'assigned_object_ike_policy': RefInfo(object_type='vpn.ikepolicy', field_name='assigned_object', is_generic=True),
+        'assigned_object_ike_proposal': RefInfo(object_type='vpn.ikeproposal', field_name='assigned_object', is_generic=True),
+        'assigned_object_ip_address': RefInfo(object_type='ipam.ipaddress', field_name='assigned_object', is_generic=True),
+        'assigned_object_ip_range': RefInfo(object_type='ipam.iprange', field_name='assigned_object', is_generic=True),
+        'assigned_object_ip_sec_policy': RefInfo(object_type='vpn.ipsecpolicy', field_name='assigned_object', is_generic=True),
+        'assigned_object_ip_sec_profile': RefInfo(object_type='vpn.ipsecprofile', field_name='assigned_object', is_generic=True),
+        'assigned_object_ip_sec_proposal': RefInfo(object_type='vpn.ipsecproposal', field_name='assigned_object', is_generic=True),
+        'assigned_object_interface': RefInfo(object_type='dcim.interface', field_name='assigned_object', is_generic=True),
+        'assigned_object_inventory_item': RefInfo(object_type='dcim.inventoryitem', field_name='assigned_object', is_generic=True),
+        'assigned_object_inventory_item_role': RefInfo(object_type='dcim.inventoryitemrole', field_name='assigned_object', is_generic=True),
+        'assigned_object_journal_entry': RefInfo(object_type='extras.journalentry', field_name='assigned_object', is_generic=True),
+        'assigned_object_l2vpn': RefInfo(object_type='vpn.l2vpn', field_name='assigned_object', is_generic=True),
+        'assigned_object_l2vpn_termination': RefInfo(object_type='vpn.l2vpntermination', field_name='assigned_object', is_generic=True),
+        'assigned_object_location': RefInfo(object_type='dcim.location', field_name='assigned_object', is_generic=True),
+        'assigned_object_mac_address': RefInfo(object_type='dcim.macaddress', field_name='assigned_object', is_generic=True),
+        'assigned_object_manufacturer': RefInfo(object_type='dcim.manufacturer', field_name='assigned_object', is_generic=True),
+        'assigned_object_module': RefInfo(object_type='dcim.module', field_name='assigned_object', is_generic=True),
+        'assigned_object_module_bay': RefInfo(object_type='dcim.modulebay', field_name='assigned_object', is_generic=True),
+        'assigned_object_module_type': RefInfo(object_type='dcim.moduletype', field_name='assigned_object', is_generic=True),
+        'assigned_object_module_type_profile': RefInfo(object_type='dcim.moduletypeprofile', field_name='assigned_object', is_generic=True),
+        'assigned_object_platform': RefInfo(object_type='dcim.platform', field_name='assigned_object', is_generic=True),
+        'assigned_object_power_feed': RefInfo(object_type='dcim.powerfeed', field_name='assigned_object', is_generic=True),
+        'assigned_object_power_outlet': RefInfo(object_type='dcim.poweroutlet', field_name='assigned_object', is_generic=True),
+        'assigned_object_power_panel': RefInfo(object_type='dcim.powerpanel', field_name='assigned_object', is_generic=True),
+        'assigned_object_power_port': RefInfo(object_type='dcim.powerport', field_name='assigned_object', is_generic=True),
+        'assigned_object_prefix': RefInfo(object_type='ipam.prefix', field_name='assigned_object', is_generic=True),
+        'assigned_object_provider': RefInfo(object_type='circuits.provider', field_name='assigned_object', is_generic=True),
+        'assigned_object_provider_account': RefInfo(object_type='circuits.provideraccount', field_name='assigned_object', is_generic=True),
+        'assigned_object_provider_network': RefInfo(object_type='circuits.providernetwork', field_name='assigned_object', is_generic=True),
+        'assigned_object_rir': RefInfo(object_type='ipam.rir', field_name='assigned_object', is_generic=True),
+        'assigned_object_rack': RefInfo(object_type='dcim.rack', field_name='assigned_object', is_generic=True),
+        'assigned_object_rack_reservation': RefInfo(object_type='dcim.rackreservation', field_name='assigned_object', is_generic=True),
+        'assigned_object_rack_role': RefInfo(object_type='dcim.rackrole', field_name='assigned_object', is_generic=True),
+        'assigned_object_rack_type': RefInfo(object_type='dcim.racktype', field_name='assigned_object', is_generic=True),
+        'assigned_object_rear_port': RefInfo(object_type='dcim.rearport', field_name='assigned_object', is_generic=True),
+        'assigned_object_region': RefInfo(object_type='dcim.region', field_name='assigned_object', is_generic=True),
+        'assigned_object_role': RefInfo(object_type='ipam.role', field_name='assigned_object', is_generic=True),
+        'assigned_object_route_target': RefInfo(object_type='ipam.routetarget', field_name='assigned_object', is_generic=True),
+        'assigned_object_service': RefInfo(object_type='ipam.service', field_name='assigned_object', is_generic=True),
+        'assigned_object_site': RefInfo(object_type='dcim.site', field_name='assigned_object', is_generic=True),
+        'assigned_object_site_group': RefInfo(object_type='dcim.sitegroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_tag': RefInfo(object_type='extras.tag', field_name='assigned_object', is_generic=True),
+        'assigned_object_tenant': RefInfo(object_type='tenancy.tenant', field_name='assigned_object', is_generic=True),
+        'assigned_object_tenant_group': RefInfo(object_type='tenancy.tenantgroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_tunnel': RefInfo(object_type='vpn.tunnel', field_name='assigned_object', is_generic=True),
+        'assigned_object_tunnel_group': RefInfo(object_type='vpn.tunnelgroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_tunnel_termination': RefInfo(object_type='vpn.tunneltermination', field_name='assigned_object', is_generic=True),
+        'assigned_object_vlan': RefInfo(object_type='ipam.vlan', field_name='assigned_object', is_generic=True),
+        'assigned_object_vlan_group': RefInfo(object_type='ipam.vlangroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_vlan_translation_policy': RefInfo(object_type='ipam.vlantranslationpolicy', field_name='assigned_object', is_generic=True),
+        'assigned_object_vlan_translation_rule': RefInfo(object_type='ipam.vlantranslationrule', field_name='assigned_object', is_generic=True),
+        'assigned_object_vm_interface': RefInfo(object_type='virtualization.vminterface', field_name='assigned_object', is_generic=True),
+        'assigned_object_vrf': RefInfo(object_type='ipam.vrf', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_chassis': RefInfo(object_type='dcim.virtualchassis', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_circuit': RefInfo(object_type='circuits.virtualcircuit', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_circuit_termination': RefInfo(object_type='circuits.virtualcircuittermination', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_circuit_type': RefInfo(object_type='circuits.virtualcircuittype', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_device_context': RefInfo(object_type='dcim.virtualdevicecontext', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_disk': RefInfo(object_type='virtualization.virtualdisk', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_machine': RefInfo(object_type='virtualization.virtualmachine', field_name='assigned_object', is_generic=True),
+        'assigned_object_wireless_lan': RefInfo(object_type='wireless.wirelesslan', field_name='assigned_object', is_generic=True),
+        'assigned_object_wireless_lan_group': RefInfo(object_type='wireless.wirelesslangroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_wireless_link': RefInfo(object_type='wireless.wirelesslink', field_name='assigned_object', is_generic=True),
+        'assigned_object_custom_link': RefInfo(object_type='extras.customlink', field_name='assigned_object', is_generic=True),
+        'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
     },
     'ipam.aggregate': {
         'rir': RefInfo(object_type='ipam.rir', field_name='rir'),
@@ -504,6 +616,11 @@ _JSON_REF_INFO = {
         'interface_wireless_lan': RefInfo(object_type='wireless.wirelesslan', field_name='interface', is_generic=True),
         'interface_wireless_lan_group': RefInfo(object_type='wireless.wirelesslangroup', field_name='interface', is_generic=True),
         'interface_wireless_link': RefInfo(object_type='wireless.wirelesslink', field_name='interface', is_generic=True),
+        'interface_custom_field': RefInfo(object_type='extras.customfield', field_name='interface', is_generic=True),
+        'interface_custom_field_choice_set': RefInfo(object_type='extras.customfieldchoiceset', field_name='interface', is_generic=True),
+        'interface_journal_entry': RefInfo(object_type='extras.journalentry', field_name='interface', is_generic=True),
+        'interface_module_type_profile': RefInfo(object_type='dcim.moduletypeprofile', field_name='interface', is_generic=True),
+        'interface_custom_link': RefInfo(object_type='extras.customlink', field_name='interface', is_generic=True),
     },
     'ipam.ipaddress': {
         'assigned_object_fhrp_group': RefInfo(object_type='ipam.fhrpgroup', field_name='assigned_object', is_generic=True),
@@ -544,6 +661,9 @@ _JSON_REF_INFO = {
     'ipam.service': {
         'device': RefInfo(object_type='dcim.device', field_name='device'),
         'ipaddresses': RefInfo(object_type='ipam.ipaddress', field_name='ipaddresses', is_many=True),
+        'parent_object_device': RefInfo(object_type='dcim.device', field_name='parent_object', is_generic=True),
+        'parent_object_fhrp_group': RefInfo(object_type='ipam.fhrpgroup', field_name='parent_object', is_generic=True),
+        'parent_object_virtual_machine': RefInfo(object_type='virtualization.virtualmachine', field_name='parent_object', is_generic=True),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
         'virtual_machine': RefInfo(object_type='virtualization.virtualmachine', field_name='virtual_machine'),
     },
@@ -564,6 +684,7 @@ _JSON_REF_INFO = {
         'scope_site': RefInfo(object_type='dcim.site', field_name='scope', is_generic=True),
         'scope_site_group': RefInfo(object_type='dcim.sitegroup', field_name='scope', is_generic=True),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
+        'tenant': RefInfo(object_type='tenancy.tenant', field_name='tenant'),
     },
     'ipam.vlantranslationrule': {
         'policy': RefInfo(object_type='ipam.vlantranslationpolicy', field_name='policy'),
@@ -576,6 +697,7 @@ _JSON_REF_INFO = {
     },
     'tenancy.contact': {
         'group': RefInfo(object_type='tenancy.contactgroup', field_name='group'),
+        'groups': RefInfo(object_type='tenancy.contactgroup', field_name='groups', is_many=True),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
     },
     'tenancy.contactassignment': {
@@ -668,6 +790,11 @@ _JSON_REF_INFO = {
         'object_wireless_lan': RefInfo(object_type='wireless.wirelesslan', field_name='object', is_generic=True),
         'object_wireless_lan_group': RefInfo(object_type='wireless.wirelesslangroup', field_name='object', is_generic=True),
         'object_wireless_link': RefInfo(object_type='wireless.wirelesslink', field_name='object', is_generic=True),
+        'object_custom_field': RefInfo(object_type='extras.customfield', field_name='object', is_generic=True),
+        'object_custom_field_choice_set': RefInfo(object_type='extras.customfieldchoiceset', field_name='object', is_generic=True),
+        'object_journal_entry': RefInfo(object_type='extras.journalentry', field_name='object', is_generic=True),
+        'object_module_type_profile': RefInfo(object_type='dcim.moduletypeprofile', field_name='object', is_generic=True),
+        'object_custom_link': RefInfo(object_type='extras.customlink', field_name='object', is_generic=True),
         'role': RefInfo(object_type='tenancy.contactrole', field_name='role'),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
     },
@@ -758,6 +885,96 @@ _JSON_REF_INFO = {
         'assigned_object_interface': RefInfo(object_type='dcim.interface', field_name='assigned_object', is_generic=True),
         'assigned_object_vlan': RefInfo(object_type='ipam.vlan', field_name='assigned_object', is_generic=True),
         'assigned_object_vm_interface': RefInfo(object_type='virtualization.vminterface', field_name='assigned_object', is_generic=True),
+        'assigned_object_asn': RefInfo(object_type='ipam.asn', field_name='assigned_object', is_generic=True),
+        'assigned_object_asn_range': RefInfo(object_type='ipam.asnrange', field_name='assigned_object', is_generic=True),
+        'assigned_object_aggregate': RefInfo(object_type='ipam.aggregate', field_name='assigned_object', is_generic=True),
+        'assigned_object_cable': RefInfo(object_type='dcim.cable', field_name='assigned_object', is_generic=True),
+        'assigned_object_cable_path': RefInfo(object_type='dcim.cablepath', field_name='assigned_object', is_generic=True),
+        'assigned_object_cable_termination': RefInfo(object_type='dcim.cabletermination', field_name='assigned_object', is_generic=True),
+        'assigned_object_circuit': RefInfo(object_type='circuits.circuit', field_name='assigned_object', is_generic=True),
+        'assigned_object_circuit_group': RefInfo(object_type='circuits.circuitgroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_circuit_group_assignment': RefInfo(object_type='circuits.circuitgroupassignment', field_name='assigned_object', is_generic=True),
+        'assigned_object_circuit_termination': RefInfo(object_type='circuits.circuittermination', field_name='assigned_object', is_generic=True),
+        'assigned_object_circuit_type': RefInfo(object_type='circuits.circuittype', field_name='assigned_object', is_generic=True),
+        'assigned_object_cluster': RefInfo(object_type='virtualization.cluster', field_name='assigned_object', is_generic=True),
+        'assigned_object_cluster_group': RefInfo(object_type='virtualization.clustergroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_cluster_type': RefInfo(object_type='virtualization.clustertype', field_name='assigned_object', is_generic=True),
+        'assigned_object_console_port': RefInfo(object_type='dcim.consoleport', field_name='assigned_object', is_generic=True),
+        'assigned_object_console_server_port': RefInfo(object_type='dcim.consoleserverport', field_name='assigned_object', is_generic=True),
+        'assigned_object_contact': RefInfo(object_type='tenancy.contact', field_name='assigned_object', is_generic=True),
+        'assigned_object_contact_assignment': RefInfo(object_type='tenancy.contactassignment', field_name='assigned_object', is_generic=True),
+        'assigned_object_contact_group': RefInfo(object_type='tenancy.contactgroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_contact_role': RefInfo(object_type='tenancy.contactrole', field_name='assigned_object', is_generic=True),
+        'assigned_object_custom_field': RefInfo(object_type='extras.customfield', field_name='assigned_object', is_generic=True),
+        'assigned_object_custom_field_choice_set': RefInfo(object_type='extras.customfieldchoiceset', field_name='assigned_object', is_generic=True),
+        'assigned_object_device': RefInfo(object_type='dcim.device', field_name='assigned_object', is_generic=True),
+        'assigned_object_device_bay': RefInfo(object_type='dcim.devicebay', field_name='assigned_object', is_generic=True),
+        'assigned_object_device_role': RefInfo(object_type='dcim.devicerole', field_name='assigned_object', is_generic=True),
+        'assigned_object_device_type': RefInfo(object_type='dcim.devicetype', field_name='assigned_object', is_generic=True),
+        'assigned_object_fhrp_group': RefInfo(object_type='ipam.fhrpgroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_fhrp_group_assignment': RefInfo(object_type='ipam.fhrpgroupassignment', field_name='assigned_object', is_generic=True),
+        'assigned_object_front_port': RefInfo(object_type='dcim.frontport', field_name='assigned_object', is_generic=True),
+        'assigned_object_ike_policy': RefInfo(object_type='vpn.ikepolicy', field_name='assigned_object', is_generic=True),
+        'assigned_object_ike_proposal': RefInfo(object_type='vpn.ikeproposal', field_name='assigned_object', is_generic=True),
+        'assigned_object_ip_address': RefInfo(object_type='ipam.ipaddress', field_name='assigned_object', is_generic=True),
+        'assigned_object_ip_range': RefInfo(object_type='ipam.iprange', field_name='assigned_object', is_generic=True),
+        'assigned_object_ip_sec_policy': RefInfo(object_type='vpn.ipsecpolicy', field_name='assigned_object', is_generic=True),
+        'assigned_object_ip_sec_profile': RefInfo(object_type='vpn.ipsecprofile', field_name='assigned_object', is_generic=True),
+        'assigned_object_ip_sec_proposal': RefInfo(object_type='vpn.ipsecproposal', field_name='assigned_object', is_generic=True),
+        'assigned_object_inventory_item': RefInfo(object_type='dcim.inventoryitem', field_name='assigned_object', is_generic=True),
+        'assigned_object_inventory_item_role': RefInfo(object_type='dcim.inventoryitemrole', field_name='assigned_object', is_generic=True),
+        'assigned_object_journal_entry': RefInfo(object_type='extras.journalentry', field_name='assigned_object', is_generic=True),
+        'assigned_object_l2vpn': RefInfo(object_type='vpn.l2vpn', field_name='assigned_object', is_generic=True),
+        'assigned_object_l2vpn_termination': RefInfo(object_type='vpn.l2vpntermination', field_name='assigned_object', is_generic=True),
+        'assigned_object_location': RefInfo(object_type='dcim.location', field_name='assigned_object', is_generic=True),
+        'assigned_object_mac_address': RefInfo(object_type='dcim.macaddress', field_name='assigned_object', is_generic=True),
+        'assigned_object_manufacturer': RefInfo(object_type='dcim.manufacturer', field_name='assigned_object', is_generic=True),
+        'assigned_object_module': RefInfo(object_type='dcim.module', field_name='assigned_object', is_generic=True),
+        'assigned_object_module_bay': RefInfo(object_type='dcim.modulebay', field_name='assigned_object', is_generic=True),
+        'assigned_object_module_type': RefInfo(object_type='dcim.moduletype', field_name='assigned_object', is_generic=True),
+        'assigned_object_module_type_profile': RefInfo(object_type='dcim.moduletypeprofile', field_name='assigned_object', is_generic=True),
+        'assigned_object_platform': RefInfo(object_type='dcim.platform', field_name='assigned_object', is_generic=True),
+        'assigned_object_power_feed': RefInfo(object_type='dcim.powerfeed', field_name='assigned_object', is_generic=True),
+        'assigned_object_power_outlet': RefInfo(object_type='dcim.poweroutlet', field_name='assigned_object', is_generic=True),
+        'assigned_object_power_panel': RefInfo(object_type='dcim.powerpanel', field_name='assigned_object', is_generic=True),
+        'assigned_object_power_port': RefInfo(object_type='dcim.powerport', field_name='assigned_object', is_generic=True),
+        'assigned_object_prefix': RefInfo(object_type='ipam.prefix', field_name='assigned_object', is_generic=True),
+        'assigned_object_provider': RefInfo(object_type='circuits.provider', field_name='assigned_object', is_generic=True),
+        'assigned_object_provider_account': RefInfo(object_type='circuits.provideraccount', field_name='assigned_object', is_generic=True),
+        'assigned_object_provider_network': RefInfo(object_type='circuits.providernetwork', field_name='assigned_object', is_generic=True),
+        'assigned_object_rir': RefInfo(object_type='ipam.rir', field_name='assigned_object', is_generic=True),
+        'assigned_object_rack': RefInfo(object_type='dcim.rack', field_name='assigned_object', is_generic=True),
+        'assigned_object_rack_reservation': RefInfo(object_type='dcim.rackreservation', field_name='assigned_object', is_generic=True),
+        'assigned_object_rack_role': RefInfo(object_type='dcim.rackrole', field_name='assigned_object', is_generic=True),
+        'assigned_object_rack_type': RefInfo(object_type='dcim.racktype', field_name='assigned_object', is_generic=True),
+        'assigned_object_rear_port': RefInfo(object_type='dcim.rearport', field_name='assigned_object', is_generic=True),
+        'assigned_object_region': RefInfo(object_type='dcim.region', field_name='assigned_object', is_generic=True),
+        'assigned_object_role': RefInfo(object_type='ipam.role', field_name='assigned_object', is_generic=True),
+        'assigned_object_route_target': RefInfo(object_type='ipam.routetarget', field_name='assigned_object', is_generic=True),
+        'assigned_object_service': RefInfo(object_type='ipam.service', field_name='assigned_object', is_generic=True),
+        'assigned_object_site': RefInfo(object_type='dcim.site', field_name='assigned_object', is_generic=True),
+        'assigned_object_site_group': RefInfo(object_type='dcim.sitegroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_tag': RefInfo(object_type='extras.tag', field_name='assigned_object', is_generic=True),
+        'assigned_object_tenant': RefInfo(object_type='tenancy.tenant', field_name='assigned_object', is_generic=True),
+        'assigned_object_tenant_group': RefInfo(object_type='tenancy.tenantgroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_tunnel': RefInfo(object_type='vpn.tunnel', field_name='assigned_object', is_generic=True),
+        'assigned_object_tunnel_group': RefInfo(object_type='vpn.tunnelgroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_tunnel_termination': RefInfo(object_type='vpn.tunneltermination', field_name='assigned_object', is_generic=True),
+        'assigned_object_vlan_group': RefInfo(object_type='ipam.vlangroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_vlan_translation_policy': RefInfo(object_type='ipam.vlantranslationpolicy', field_name='assigned_object', is_generic=True),
+        'assigned_object_vlan_translation_rule': RefInfo(object_type='ipam.vlantranslationrule', field_name='assigned_object', is_generic=True),
+        'assigned_object_vrf': RefInfo(object_type='ipam.vrf', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_chassis': RefInfo(object_type='dcim.virtualchassis', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_circuit': RefInfo(object_type='circuits.virtualcircuit', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_circuit_termination': RefInfo(object_type='circuits.virtualcircuittermination', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_circuit_type': RefInfo(object_type='circuits.virtualcircuittype', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_device_context': RefInfo(object_type='dcim.virtualdevicecontext', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_disk': RefInfo(object_type='virtualization.virtualdisk', field_name='assigned_object', is_generic=True),
+        'assigned_object_virtual_machine': RefInfo(object_type='virtualization.virtualmachine', field_name='assigned_object', is_generic=True),
+        'assigned_object_wireless_lan': RefInfo(object_type='wireless.wirelesslan', field_name='assigned_object', is_generic=True),
+        'assigned_object_wireless_lan_group': RefInfo(object_type='wireless.wirelesslangroup', field_name='assigned_object', is_generic=True),
+        'assigned_object_wireless_link': RefInfo(object_type='wireless.wirelesslink', field_name='assigned_object', is_generic=True),
+        'assigned_object_custom_link': RefInfo(object_type='extras.customlink', field_name='assigned_object', is_generic=True),
         'l2vpn': RefInfo(object_type='vpn.l2vpn', field_name='l2vpn'),
         'tags': RefInfo(object_type='extras.tag', field_name='tags', is_many=True),
     },
@@ -861,6 +1078,11 @@ _JSON_REF_INFO = {
         'termination_wireless_lan': RefInfo(object_type='wireless.wirelesslan', field_name='termination', is_generic=True),
         'termination_wireless_lan_group': RefInfo(object_type='wireless.wirelesslangroup', field_name='termination', is_generic=True),
         'termination_wireless_link': RefInfo(object_type='wireless.wirelesslink', field_name='termination', is_generic=True),
+        'termination_custom_field': RefInfo(object_type='extras.customfield', field_name='termination', is_generic=True),
+        'termination_custom_field_choice_set': RefInfo(object_type='extras.customfieldchoiceset', field_name='termination', is_generic=True),
+        'termination_journal_entry': RefInfo(object_type='extras.journalentry', field_name='termination', is_generic=True),
+        'termination_module_type_profile': RefInfo(object_type='dcim.moduletypeprofile', field_name='termination', is_generic=True),
+        'termination_custom_link': RefInfo(object_type='extras.customlink', field_name='termination', is_generic=True),
         'tunnel': RefInfo(object_type='vpn.tunnel', field_name='tunnel'),
     },
     'wireless.wirelesslan': {
@@ -909,57 +1131,62 @@ _LEGAL_FIELDS = {
     'dcim.consoleserverport': frozenset(['custom_fields', 'description', 'device', 'label', 'mark_connected', 'module', 'name', 'speed', 'tags', 'type']),
     'dcim.device': frozenset(['airflow', 'asset_tag', 'cluster', 'comments', 'custom_fields', 'description', 'device_type', 'face', 'latitude', 'location', 'longitude', 'name', 'oob_ip', 'platform', 'position', 'primary_ip4', 'primary_ip6', 'rack', 'role', 'serial', 'site', 'status', 'tags', 'tenant', 'vc_position', 'vc_priority', 'virtual_chassis']),
     'dcim.devicebay': frozenset(['custom_fields', 'description', 'device', 'installed_device', 'label', 'name', 'tags']),
-    'dcim.devicerole': frozenset(['color', 'custom_fields', 'description', 'name', 'slug', 'tags', 'vm_role']),
+    'dcim.devicerole': frozenset(['color', 'comments', 'custom_fields', 'description', 'name', 'parent', 'slug', 'tags', 'vm_role']),
     'dcim.devicetype': frozenset(['airflow', 'comments', 'custom_fields', 'default_platform', 'description', 'exclude_from_utilization', 'is_full_depth', 'manufacturer', 'model', 'part_number', 'slug', 'subdevice_role', 'tags', 'u_height', 'weight', 'weight_unit']),
     'dcim.frontport': frozenset(['color', 'custom_fields', 'description', 'device', 'label', 'mark_connected', 'module', 'name', 'rear_port', 'rear_port_position', 'tags', 'type']),
     'dcim.interface': frozenset(['bridge', 'custom_fields', 'description', 'device', 'duplex', 'enabled', 'label', 'lag', 'mark_connected', 'mgmt_only', 'mode', 'module', 'mtu', 'name', 'parent', 'poe_mode', 'poe_type', 'primary_mac_address', 'qinq_svlan', 'rf_channel', 'rf_channel_frequency', 'rf_channel_width', 'rf_role', 'speed', 'tagged_vlans', 'tags', 'tx_power', 'type', 'untagged_vlan', 'vdcs', 'vlan_translation_policy', 'vrf', 'wireless_lans', 'wwn']),
     'dcim.inventoryitem': frozenset(['asset_tag', 'component_id', 'component_type', 'custom_fields', 'description', 'device', 'discovered', 'label', 'manufacturer', 'name', 'parent', 'part_id', 'role', 'serial', 'status', 'tags']),
     'dcim.inventoryitemrole': frozenset(['color', 'custom_fields', 'description', 'name', 'slug', 'tags']),
-    'dcim.location': frozenset(['custom_fields', 'description', 'facility', 'name', 'parent', 'site', 'slug', 'status', 'tags', 'tenant']),
+    'dcim.location': frozenset(['comments', 'custom_fields', 'description', 'facility', 'name', 'parent', 'site', 'slug', 'status', 'tags', 'tenant']),
     'dcim.macaddress': frozenset(['assigned_object_id', 'assigned_object_type', 'comments', 'custom_fields', 'description', 'mac_address', 'tags']),
     'dcim.manufacturer': frozenset(['custom_fields', 'description', 'name', 'slug', 'tags']),
     'dcim.module': frozenset(['asset_tag', 'comments', 'custom_fields', 'description', 'device', 'module_bay', 'module_type', 'serial', 'status', 'tags']),
     'dcim.modulebay': frozenset(['custom_fields', 'description', 'device', 'installed_module', 'label', 'module', 'name', 'position', 'tags']),
-    'dcim.moduletype': frozenset(['airflow', 'comments', 'custom_fields', 'description', 'manufacturer', 'model', 'part_number', 'tags', 'weight', 'weight_unit']),
-    'dcim.platform': frozenset(['custom_fields', 'description', 'manufacturer', 'name', 'slug', 'tags']),
+    'dcim.moduletype': frozenset(['airflow', 'attributes', 'comments', 'custom_fields', 'description', 'manufacturer', 'model', 'part_number', 'profile', 'tags', 'weight', 'weight_unit']),
+    'dcim.moduletypeprofile': frozenset(['comments', 'custom_fields', 'description', 'name', 'schema', 'tags']),
+    'dcim.platform': frozenset(['comments', 'custom_fields', 'description', 'manufacturer', 'name', 'parent', 'slug', 'tags']),
     'dcim.powerfeed': frozenset(['amperage', 'comments', 'custom_fields', 'description', 'mark_connected', 'max_utilization', 'name', 'phase', 'power_panel', 'rack', 'status', 'supply', 'tags', 'tenant', 'type', 'voltage']),
-    'dcim.poweroutlet': frozenset(['color', 'custom_fields', 'description', 'device', 'feed_leg', 'label', 'mark_connected', 'module', 'name', 'power_port', 'tags', 'type']),
+    'dcim.poweroutlet': frozenset(['color', 'custom_fields', 'description', 'device', 'feed_leg', 'label', 'mark_connected', 'module', 'name', 'power_port', 'status', 'tags', 'type']),
     'dcim.powerpanel': frozenset(['comments', 'custom_fields', 'description', 'location', 'name', 'site', 'tags']),
     'dcim.powerport': frozenset(['allocated_draw', 'custom_fields', 'description', 'device', 'label', 'mark_connected', 'maximum_draw', 'module', 'name', 'tags', 'type']),
-    'dcim.rack': frozenset(['airflow', 'asset_tag', 'comments', 'custom_fields', 'desc_units', 'description', 'facility_id', 'form_factor', 'location', 'max_weight', 'mounting_depth', 'name', 'outer_depth', 'outer_unit', 'outer_width', 'rack_type', 'role', 'serial', 'site', 'starting_unit', 'status', 'tags', 'tenant', 'u_height', 'weight', 'weight_unit', 'width']),
-    'dcim.rackreservation': frozenset(['comments', 'custom_fields', 'description', 'rack', 'tags', 'tenant', 'units']),
+    'dcim.rack': frozenset(['airflow', 'asset_tag', 'comments', 'custom_fields', 'desc_units', 'description', 'facility_id', 'form_factor', 'location', 'max_weight', 'mounting_depth', 'name', 'outer_depth', 'outer_height', 'outer_unit', 'outer_width', 'rack_type', 'role', 'serial', 'site', 'starting_unit', 'status', 'tags', 'tenant', 'u_height', 'weight', 'weight_unit', 'width']),
+    'dcim.rackreservation': frozenset(['comments', 'custom_fields', 'description', 'rack', 'status', 'tags', 'tenant', 'units']),
     'dcim.rackrole': frozenset(['color', 'custom_fields', 'description', 'name', 'slug', 'tags']),
-    'dcim.racktype': frozenset(['comments', 'custom_fields', 'desc_units', 'description', 'form_factor', 'manufacturer', 'max_weight', 'model', 'mounting_depth', 'outer_depth', 'outer_unit', 'outer_width', 'slug', 'starting_unit', 'tags', 'u_height', 'weight', 'weight_unit', 'width']),
+    'dcim.racktype': frozenset(['comments', 'custom_fields', 'desc_units', 'description', 'form_factor', 'manufacturer', 'max_weight', 'model', 'mounting_depth', 'outer_depth', 'outer_height', 'outer_unit', 'outer_width', 'slug', 'starting_unit', 'tags', 'u_height', 'weight', 'weight_unit', 'width']),
     'dcim.rearport': frozenset(['color', 'custom_fields', 'description', 'device', 'label', 'mark_connected', 'module', 'name', 'positions', 'tags', 'type']),
-    'dcim.region': frozenset(['custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
+    'dcim.region': frozenset(['comments', 'custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
     'dcim.site': frozenset(['asns', 'comments', 'custom_fields', 'description', 'facility', 'group', 'latitude', 'longitude', 'name', 'physical_address', 'region', 'shipping_address', 'slug', 'status', 'tags', 'tenant', 'time_zone']),
-    'dcim.sitegroup': frozenset(['custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
+    'dcim.sitegroup': frozenset(['comments', 'custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
     'dcim.virtualchassis': frozenset(['comments', 'custom_fields', 'description', 'domain', 'master', 'name', 'tags']),
     'dcim.virtualdevicecontext': frozenset(['comments', 'custom_fields', 'description', 'device', 'identifier', 'name', 'primary_ip4', 'primary_ip6', 'status', 'tags', 'tenant']),
-    'extras.tag': frozenset(['color', 'name', 'slug']),
+    'extras.customfield': frozenset(['choice_set', 'comments', 'default', 'description', 'filter_logic', 'group_name', 'is_cloneable', 'label', 'name', 'object_types', 'related_object_filter', 'related_object_type', 'required', 'search_weight', 'type', 'ui_editable', 'ui_visible', 'unique', 'validation_maximum', 'validation_minimum', 'validation_regex', 'weight']),
+    'extras.customfieldchoiceset': frozenset(['base_choices', 'description', 'extra_choices', 'name', 'order_alphabetically']),
+    'extras.customlink': frozenset(['button_class', 'enabled', 'group_name', 'link_text', 'link_url', 'name', 'new_window', 'object_types', 'weight']),
+    'extras.journalentry': frozenset(['assigned_object_id', 'assigned_object_type', 'comments', 'custom_fields', 'kind', 'tags']),
+    'extras.tag': frozenset(['color', 'description', 'name', 'object_types', 'slug', 'weight']),
     'ipam.aggregate': frozenset(['comments', 'custom_fields', 'date_added', 'description', 'prefix', 'rir', 'tags', 'tenant']),
     'ipam.asn': frozenset(['asn', 'comments', 'custom_fields', 'description', 'rir', 'tags', 'tenant']),
     'ipam.asnrange': frozenset(['custom_fields', 'description', 'end', 'name', 'rir', 'slug', 'start', 'tags', 'tenant']),
     'ipam.fhrpgroup': frozenset(['auth_key', 'auth_type', 'comments', 'custom_fields', 'description', 'group_id', 'name', 'protocol', 'tags']),
     'ipam.fhrpgroupassignment': frozenset(['group', 'interface_id', 'interface_type', 'priority']),
     'ipam.ipaddress': frozenset(['address', 'assigned_object_id', 'assigned_object_type', 'comments', 'custom_fields', 'description', 'dns_name', 'nat_inside', 'role', 'status', 'tags', 'tenant', 'vrf']),
-    'ipam.iprange': frozenset(['comments', 'custom_fields', 'description', 'end_address', 'mark_utilized', 'role', 'start_address', 'status', 'tags', 'tenant', 'vrf']),
+    'ipam.iprange': frozenset(['comments', 'custom_fields', 'description', 'end_address', 'mark_populated', 'mark_utilized', 'role', 'start_address', 'status', 'tags', 'tenant', 'vrf']),
     'ipam.prefix': frozenset(['comments', 'custom_fields', 'description', 'is_pool', 'mark_utilized', 'prefix', 'role', 'scope_id', 'scope_type', 'status', 'tags', 'tenant', 'vlan', 'vrf']),
     'ipam.rir': frozenset(['custom_fields', 'description', 'is_private', 'name', 'slug', 'tags']),
     'ipam.role': frozenset(['custom_fields', 'description', 'name', 'slug', 'tags', 'weight']),
     'ipam.routetarget': frozenset(['comments', 'custom_fields', 'description', 'name', 'tags', 'tenant']),
-    'ipam.service': frozenset(['comments', 'custom_fields', 'description', 'device', 'ipaddresses', 'name', 'ports', 'protocol', 'tags', 'virtual_machine']),
+    'ipam.service': frozenset(['comments', 'custom_fields', 'description', 'device', 'ipaddresses', 'name', 'parent_object_id', 'parent_object_type', 'ports', 'protocol', 'tags', 'virtual_machine']),
     'ipam.vlan': frozenset(['comments', 'custom_fields', 'description', 'group', 'name', 'qinq_role', 'qinq_svlan', 'role', 'site', 'status', 'tags', 'tenant', 'vid']),
-    'ipam.vlangroup': frozenset(['custom_fields', 'description', 'name', 'scope_id', 'scope_type', 'slug', 'tags', 'vid_ranges']),
+    'ipam.vlangroup': frozenset(['custom_fields', 'description', 'name', 'scope_id', 'scope_type', 'slug', 'tags', 'tenant', 'vid_ranges']),
     'ipam.vlantranslationpolicy': frozenset(['description', 'name']),
     'ipam.vlantranslationrule': frozenset(['description', 'local_vid', 'policy', 'remote_vid']),
     'ipam.vrf': frozenset(['comments', 'custom_fields', 'description', 'enforce_unique', 'export_targets', 'import_targets', 'name', 'rd', 'tags', 'tenant']),
-    'tenancy.contact': frozenset(['address', 'comments', 'custom_fields', 'description', 'email', 'group', 'link', 'name', 'phone', 'tags', 'title']),
+    'tenancy.contact': frozenset(['address', 'comments', 'custom_fields', 'description', 'email', 'group', 'groups', 'link', 'name', 'phone', 'tags', 'title']),
     'tenancy.contactassignment': frozenset(['contact', 'custom_fields', 'object_id', 'object_type', 'priority', 'role', 'tags']),
-    'tenancy.contactgroup': frozenset(['custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
+    'tenancy.contactgroup': frozenset(['comments', 'custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
     'tenancy.contactrole': frozenset(['custom_fields', 'description', 'name', 'slug', 'tags']),
     'tenancy.tenant': frozenset(['comments', 'custom_fields', 'description', 'group', 'name', 'slug', 'tags']),
-    'tenancy.tenantgroup': frozenset(['custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
+    'tenancy.tenantgroup': frozenset(['comments', 'custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
     'virtualization.cluster': frozenset(['comments', 'custom_fields', 'description', 'group', 'name', 'scope_id', 'scope_type', 'status', 'tags', 'tenant', 'type']),
     'virtualization.clustergroup': frozenset(['custom_fields', 'description', 'name', 'slug', 'tags']),
     'virtualization.clustertype': frozenset(['custom_fields', 'description', 'name', 'slug', 'tags']),
@@ -971,13 +1198,13 @@ _LEGAL_FIELDS = {
     'vpn.ipsecpolicy': frozenset(['comments', 'custom_fields', 'description', 'name', 'pfs_group', 'proposals', 'tags']),
     'vpn.ipsecprofile': frozenset(['comments', 'custom_fields', 'description', 'ike_policy', 'ipsec_policy', 'mode', 'name', 'tags']),
     'vpn.ipsecproposal': frozenset(['authentication_algorithm', 'comments', 'custom_fields', 'description', 'encryption_algorithm', 'name', 'sa_lifetime_data', 'sa_lifetime_seconds', 'tags']),
-    'vpn.l2vpn': frozenset(['comments', 'custom_fields', 'description', 'export_targets', 'identifier', 'import_targets', 'name', 'slug', 'tags', 'tenant', 'type']),
+    'vpn.l2vpn': frozenset(['comments', 'custom_fields', 'description', 'export_targets', 'identifier', 'import_targets', 'name', 'slug', 'status', 'tags', 'tenant', 'type']),
     'vpn.l2vpntermination': frozenset(['assigned_object_id', 'assigned_object_type', 'custom_fields', 'l2vpn', 'tags']),
     'vpn.tunnel': frozenset(['comments', 'custom_fields', 'description', 'encapsulation', 'group', 'ipsec_profile', 'name', 'status', 'tags', 'tenant', 'tunnel_id']),
     'vpn.tunnelgroup': frozenset(['custom_fields', 'description', 'name', 'slug', 'tags']),
     'vpn.tunneltermination': frozenset(['custom_fields', 'outside_ip', 'role', 'tags', 'termination_id', 'termination_type', 'tunnel']),
     'wireless.wirelesslan': frozenset(['auth_cipher', 'auth_psk', 'auth_type', 'comments', 'custom_fields', 'description', 'group', 'scope_id', 'scope_type', 'ssid', 'status', 'tags', 'tenant', 'vlan']),
-    'wireless.wirelesslangroup': frozenset(['custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
+    'wireless.wirelesslangroup': frozenset(['comments', 'custom_fields', 'description', 'name', 'parent', 'slug', 'tags']),
     'wireless.wirelesslink': frozenset(['auth_cipher', 'auth_psk', 'auth_type', 'comments', 'custom_fields', 'description', 'distance', 'distance_unit', 'interface_a', 'interface_b', 'ssid', 'status', 'tags', 'tenant']),
 }
 
@@ -985,6 +1212,10 @@ def legal_fields(object_type: str|Type[models.Model]) -> frozenset[str]:
     if not isinstance(object_type, str):
         object_type = get_object_type(object_type)
     return _LEGAL_FIELDS.get(object_type, frozenset())
+
+def legal_object_types() -> frozenset[str]:
+    return frozenset(_LEGAL_FIELDS.keys())
+
 
 _OBJECT_TYPE_PRIMARY_VALUE_FIELD_MAP = {
     'circuits.circuit': 'cid',
@@ -1091,16 +1322,42 @@ def ip_network_defaulting(value: str) -> str:
     except netaddr.AddrFormatError:
         raise ValueError(f'Invalid IP network value: {value}')
 
-def collect_integer_pairs(value: list[int]) -> list[tuple[int, int]]:
-    if len(value) % 2 != 0:
-        raise ValueError('Array must have an even number of elements')
-    return sorted([(value[i], value[i+1]) for i in range(0, len(value), 2)])
+def parse_json(value: str) -> dict:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
 
-def for_all(transform):
+def collect_tuples(value, tuple_length, sort=False, reverse=False, base_transform=None):
+   if len(value) % tuple_length != 0:
+       raise ValueError(f'Array length is not a multiple of {tuple_length}')
+   if base_transform is None:
+       base_transform = lambda v: v
+   vs = [[base_transform(v) for v in value[i:i+tuple_length]] for i in range(0, len(value), tuple_length)]
+   return sorted(vs, reverse=reverse) if sort else vs
+
+
+def delimited_tuples(value, tuple_length, delimiter, sort=False, reverse=False, base_transform=None):
+   if base_transform is None:
+       base_transform = lambda v: v
+   vs = []
+   for v in value:
+       vt = re.split(r'(?<!\\)' + delimiter, v, maxsplit=tuple_length-1)
+       if len(vt) < tuple_length:
+           vt = [v] * tuple_length
+       else:
+           vt = [value.replace('\\' + delimiter, delimiter) for value in vt]
+       vs.append(vt)
+   vs = [[base_transform(v) for v in vt] for vt in vs]
+   return sorted(vs, reverse=reverse) if sort else vs
+
+def for_all(transform, sort=False, reverse=False):
+    tx = transform or (lambda v: v)
     def wrapper(value):
         if isinstance(value, list):
-            return [transform(v) for v in value]
-        return transform(value)
+            vs = [tx(v) for v in value]
+            return sorted(vs, reverse=reverse) if sort else vs
+        return tx(value)
     return wrapper
 
 _FORMAT_TRANSFORMATIONS = {
@@ -1145,7 +1402,11 @@ _FORMAT_TRANSFORMATIONS = {
         'tx_power': int_from_int64string,
     },
     'dcim.moduletype': {
+        'attributes': parse_json,
         'weight': transform_float_to_decimal,
+    },
+    'dcim.moduletypeprofile': {
+        'schema': parse_json,
     },
     'dcim.powerfeed': {
         'amperage': int_from_int64string,
@@ -1160,6 +1421,7 @@ _FORMAT_TRANSFORMATIONS = {
         'max_weight': int_from_int64string,
         'mounting_depth': int_from_int64string,
         'outer_depth': int_from_int64string,
+        'outer_height': int_from_int64string,
         'outer_width': int_from_int64string,
         'starting_unit': int_from_int64string,
         'u_height': int_from_int64string,
@@ -1167,12 +1429,13 @@ _FORMAT_TRANSFORMATIONS = {
         'width': int_from_int64string,
     },
     'dcim.rackreservation': {
-        'units': for_all(int_from_int64string),
+        'units': for_all(int_from_int64string, False, False),
     },
     'dcim.racktype': {
         'max_weight': int_from_int64string,
         'mounting_depth': int_from_int64string,
         'outer_depth': int_from_int64string,
+        'outer_height': int_from_int64string,
         'outer_width': int_from_int64string,
         'starting_unit': int_from_int64string,
         'u_height': int_from_int64string,
@@ -1188,6 +1451,26 @@ _FORMAT_TRANSFORMATIONS = {
     },
     'dcim.virtualdevicecontext': {
         'identifier': int_from_int64string,
+    },
+    'extras.customfield': {
+        'default': parse_json,
+        'object_types': for_all(None, True, False),
+        'related_object_filter': parse_json,
+        'search_weight': int_from_int64string,
+        'validation_maximum': transform_float_to_decimal,
+        'validation_minimum': transform_float_to_decimal,
+        'weight': int_from_int64string,
+    },
+    'extras.customfieldchoiceset': {
+        'extra_choices': lambda v: delimited_tuples(v, 2, ':', False, False, None),
+    },
+    'extras.customlink': {
+        'object_types': for_all(None, True, False),
+        'weight': int_from_int64string,
+    },
+    'extras.tag': {
+        'object_types': for_all(None, True, False),
+        'weight': int_from_int64string,
     },
     'ipam.aggregate': {
         'date_added': transform_timestamp_to_date_only,
@@ -1220,13 +1503,13 @@ _FORMAT_TRANSFORMATIONS = {
         'weight': int_from_int64string,
     },
     'ipam.service': {
-        'ports': for_all(int_from_int64string),
+        'ports': for_all(int_from_int64string, False, False),
     },
     'ipam.vlan': {
         'vid': int_from_int64string,
     },
     'ipam.vlangroup': {
-        'vid_ranges': collect_integer_pairs,
+        'vid_ranges': lambda v: collect_tuples(v, 2, True, False, int_from_int64string),
     },
     'ipam.vlantranslationrule': {
         'local_vid': int_from_int64string,
@@ -1280,7 +1563,7 @@ def apply_format_transformations(data: dict, object_type: str):
         except ValueError as e:
             sanitized_object_type = object_type.replace('\n', '').replace('\r', '')
             sanitized_val = str(val).replace('\n', '').replace('\r', '')
-            logger.error(f"Error processing field {key} in {sanitized_object_type} with value {sanitized_val}: {e}")
-            raise ValidationError(f"Invalid value for field {key} in {sanitized_object_type}.")
+            logger.error(f'Error processing field {key} in {sanitized_object_type} with value {sanitized_val}: {e}')
+            raise ValidationError(f'Invalid value for field {key} in {sanitized_object_type}.')
         except Exception as e:
             raise ValidationError(f'Invalid value {val} for field {key} in {object_type}')

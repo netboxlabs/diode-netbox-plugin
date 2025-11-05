@@ -15,7 +15,7 @@ from circuits.models import Circuit, Provider
 from core.models import ObjectType
 from dcim.models import Device, Interface, ModuleBay, Site
 from extras.models import CustomField
-from extras.models.customfields import CustomFieldTypeChoices
+from extras.models.customfields import CustomFieldChoiceSet, CustomFieldChoiceSetBaseChoices, CustomFieldTypeChoices
 from ipam.models import IPAddress, VLANGroup
 from rest_framework import status
 from utilities.testing import APITestCase
@@ -97,6 +97,59 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         )
         self.decimal_field.object_types.set([self.object_type])
         self.decimal_field.save()
+
+        self.long_text_field = CustomField.objects.create(
+            name='my_long_text',
+            type=CustomFieldTypeChoices.TYPE_LONGTEXT,
+            required=False,
+            unique=False,
+        )
+        self.long_text_field.object_types.set([self.object_type])
+        self.long_text_field.save()
+
+        choices = CustomFieldChoiceSet.objects.create(
+            name='my_choices',
+            base_choices=CustomFieldChoiceSetBaseChoices.IATA,
+        )
+        self.selection_field = CustomField.objects.create(
+            name='my_selection',
+            type=CustomFieldTypeChoices.TYPE_SELECT,
+            required=False,
+            unique=False,
+            choice_set=choices,
+        )
+        self.selection_field.object_types.set([self.object_type])
+        self.selection_field.save()
+
+        self.multiple_selection_field = CustomField.objects.create(
+            name='my_multiple_selection',
+            type=CustomFieldTypeChoices.TYPE_MULTISELECT,
+            required=False,
+            unique=False,
+            choice_set=choices,
+        )
+        self.multiple_selection_field.object_types.set([self.object_type])
+        self.multiple_selection_field.save()
+
+        self.object_field = CustomField.objects.create(
+            name='my_object',
+            type=CustomFieldTypeChoices.TYPE_OBJECT,
+            required=False,
+            unique=False,
+            related_object_type=self.object_type,
+        )
+        self.object_field.object_types.set([self.object_type])
+        self.object_field.save()
+
+        self.multiple_objects_field = CustomField.objects.create(
+            name='my_multiple_objects',
+            type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            required=False,
+            unique=False,
+            related_object_type=self.object_type,
+        )
+        self.multiple_objects_field.object_types.set([self.object_type])
+        self.multiple_objects_field.save()
 
     def tearDown(self):
         """Clean up after tests."""
@@ -539,6 +592,36 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                         "some_json": {
                             "json": '{"some_key": 9876543210}',
                         },
+                        "my_long_text": {
+                            "long_text": "This is a long text",
+                        },
+                        "my_selection": {
+                            "selection": "LAX",
+                        },
+                        "my_multiple_selection": {
+                            "multiple_selection": ["JFK", "LAX"],
+                        },
+                        "my_object": {
+                            "object": {
+                                "site": {
+                                    "name": "Custom Object Site Ref 1",
+                                }
+                            },
+                        },
+                        "my_multiple_objects": {
+                            "multiple_objects": [
+                                {
+                                    "site": {
+                                        "name": "Custom Object Site Ref 2",
+                                    }
+                                },
+                                {
+                                    "site": {
+                                        "name": "Custom Object Site Ref 3",
+                                    }
+                                },
+                            ],
+                        },
                     },
                 },
             }
@@ -549,6 +632,19 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_site.custom_field_data[self.uuid_field.name], site_uuid)
         self.assertEqual(new_site.custom_field_data[self.json_field.name], {"some_key": 9876543210})
         self.assertEqual(new_site.custom_field_data[self.decimal_field.name], 1234.567)
+        self.assertEqual(new_site.custom_field_data[self.long_text_field.name], "This is a long text")
+        self.assertEqual(new_site.custom_field_data[self.selection_field.name], "LAX")
+        self.assertEqual(new_site.custom_field_data[self.multiple_selection_field.name], ["JFK", "LAX"])
+
+        siteRef1 = Site.objects.get(name="Custom Object Site Ref 1")
+        self.assertIsNotNone(siteRef1)
+        self.assertEqual(new_site.custom_field_data[self.object_field.name], siteRef1.pk)
+        siteRef2 = Site.objects.get(name="Custom Object Site Ref 2")
+        self.assertIsNotNone(siteRef2)
+        self.assertEqual(new_site.custom_field_data[self.multiple_objects_field.name][0], siteRef2.pk)
+        siteRef3 = Site.objects.get(name="Custom Object Site Ref 3")
+        self.assertIsNotNone(siteRef3)
+        self.assertEqual(new_site.custom_field_data[self.multiple_objects_field.name][1], siteRef3.pk)
 
         payload = {
             "timestamp": 1,
@@ -596,6 +692,21 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                         "mydate": {
                             "date": "2026-01-02T00:00:00Z",
                         },
+                        "my_multiple_objects": {
+                            "multiple_objects": [
+                                {
+                                    "site": {
+                                        "name": "Custom Object Site Ref 2",
+                                    }
+                                },
+                                {
+                                    "site": {
+                                        "name": "Custom Object Site Ref 4",
+                                    }
+                                },
+                            ],
+                        },
+
                     },
                 },
             }
@@ -607,6 +718,15 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_site.cf[self.json_field.name], {"some_key": 1234567890})
         self.assertEqual(new_site.cf[self.datetime_field.name], datetime.datetime(2026, 1, 1, 10, 0, 0, tzinfo=datetime.timezone.utc))
         self.assertEqual(new_site.cf[self.date_field.name], datetime.date(2026, 1, 2))
+
+        self.assertEqual(len(new_site.custom_field_data[self.multiple_objects_field.name]), 2)
+        siteRef2 = Site.objects.get(name="Custom Object Site Ref 2")
+        self.assertIsNotNone(siteRef2)
+        self.assertEqual(new_site.custom_field_data[self.multiple_objects_field.name][0], siteRef2.pk)
+        siteRef4 = Site.objects.get(name="Custom Object Site Ref 4")
+        self.assertIsNotNone(siteRef3)
+        self.assertEqual(new_site.custom_field_data[self.multiple_objects_field.name][1], siteRef4.pk)
+
 
         payload = {
             "timestamp": 1,
@@ -1367,7 +1487,6 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         )
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         diff = response1.json().get("change_set", {})
-
         response2 = self.client.post(
             self.apply_url, data=diff, format="json", **self.authorization_header
         )

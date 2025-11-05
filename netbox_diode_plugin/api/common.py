@@ -9,6 +9,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
+from zoneinfo import ZoneInfo
 
 import netaddr
 from django.apps import apps
@@ -20,7 +21,6 @@ from django.db.backends.postgresql.psycopg_any import NumericRange
 from extras.models import CustomField
 from netaddr.eui import EUI
 from rest_framework import status
-from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -98,14 +98,18 @@ class ChangeSet:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     changes: list[Change] = field(default_factory=list)
     branch: dict[str, str] | None = field(default=None)  # {"id": str, "name": str}
+    warnings: dict | None = field(default=None)
 
     def to_dict(self) -> dict:
         """Convert the change set to a dictionary."""
-        return {
+        d = {
             "id": self.id,
             "changes": [change.to_dict() for change in self.changes],
             "branch": self.branch,
         }
+        if self.warnings:
+            d["warnings"] = self.warnings
+        return d
 
     def validate(self) -> dict[str, list[str]]:
         """Validate basics of the change set data."""
@@ -166,7 +170,7 @@ class ChangeSet:
         excluded_relation_fields = []
         rel_errors = defaultdict(list)
         for f in model._meta.get_fields():
-            if isinstance(f, (GenericRelation, GenericForeignKey)):
+            if isinstance(f, GenericRelation | GenericForeignKey):
                 excluded_relation_fields.append(f.name)
                 continue
             if not f.is_relation:
@@ -244,14 +248,13 @@ class AutoSlug:
     field_name: str
     value: str
 
-
 def error_from_validation_error(e, object_name):
     """Convert a from DRF ValidationError to a ChangeSetException."""
     errors = {}
     if e.detail:
         if isinstance(e.detail, dict):
             errors[object_name] = e.detail
-        elif isinstance(e.detail, (list, tuple)):
+        elif isinstance(e.detail, list | tuple):
             errors[object_name] = {
                 NON_FIELD_ERRORS: e.detail
             }
@@ -277,7 +280,7 @@ def harmonize_formats(data):
         case datetime.date():
             return data.strftime("%Y-%m-%d")
         case NumericRange():
-            return (data.lower, data.upper-1)
+            return [data.lower, data.upper-1]
         case netaddr.IPNetwork() | EUI() | ZoneInfo():
             return str(data)
         case _:

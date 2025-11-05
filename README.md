@@ -17,6 +17,10 @@ at [https://netboxlabs.com/blog/introducing-diode-streamlining-data-ingestion-in
 |    >= 3.7.2    |     0.1.0      |
 |    >= 4.1.0    |     0.4.0      |
 |    >= 4.2.3    |     1.0.0      |
+|    >= 4.2.3    |     1.1.0      |
+|    >= 4.2.3    |     1.2.0      |
+|    >= 4.4.0    |     1.4.0      |
+|    >= 4.4.0    |     1.4.1      |
 
 ## Installation
 
@@ -95,6 +99,12 @@ cd /opt/netbox/netbox
 
 ```shell
 make docker-compose-netbox-plugin-test
+```
+
+## Generating Documentation
+Generates documentation on how diode entities are matched. The generated documentation is output to [here](./docs/matching-criteria-documentation.md).
+```shell
+make docker-compose-generate-matching-docs
 ```
 
 ## License

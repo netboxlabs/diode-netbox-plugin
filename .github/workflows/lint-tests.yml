@@ -26,6 +26,7 @@ jobs:
     strategy:
       matrix:
         python: [ "3.10" ]
+        netbox: [ "", "v4.2.3" ]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,15 +41,25 @@ jobs:
           pip install .[dev]
           pip install .[test]
       - name: Lint with Ruff
+        id: lint
         run: |
           ruff check --output-format=github netbox_diode_plugin/
         continue-on-error: true
       - name: Test
+        id: test
         run: |
-          make docker-compose-netbox-plugin-test-cover
+          make NETBOX_VERSION=${{ matrix.netbox }} docker-compose-netbox-plugin-test-cover
+        continue-on-error: true
+      - name: Check results
+        if: always()
+        run: |
+          if [[ "${{ steps.lint.outcome }}" == "failure" || "${{ steps.test.outcome }}" == "failure" ]]; then
+            echo "Either linting or tests failed"
+            exit 1
+          fi
       - name: Coverage comment
         uses: orgoro/coverage@3f13a558c5af7376496aa4848bf0224aead366ac # v3.2
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event.pull_request.head.repo.full_name == github.repository && matrix.netbox == ''
         with:
           coverageFile: ./docker/coverage/report.xml
           token: ${{ secrets.GITHUB_TOKEN }}

@@ -66,46 +66,37 @@ class GenerateDiffView(views.APIView):
         """Generate diff for entity."""
         try:
             return self._post(request, *args, **kwargs)
-        except Exception:
-            import traceback
-
-            traceback.print_exc()
-            raise
-
-    def _post(self, request, *args, **kwargs):
-        entity = request.data.get("entity")
-        object_type = request.data.get("object_type")
-
-        if not entity:
-            raise ValidationError("Entity is required")
-        if not object_type:
-            raise ValidationError("Object type is required")
-
-        app_label, model_name = object_type.split(".")
-        model_class = apps.get_model(app_label, model_name)
-
-        for entity_key in get_valid_entity_keys(model_class.__name__):
-            original_entity_data = entity.get(entity_key)
-            if original_entity_data:
-                break
-
-        if original_entity_data is None:
-            raise ValidationError(
-                f"No data found for {entity_key} in entity got: {entity.keys()}"
-            )
-
-        try:
-            result = generate_changeset(original_entity_data, object_type)
         except ChangeSetException as e:
-            logger.error(f"Error generating change set: {e}")
             result = ChangeSetResult(
                 errors=e.errors,
             )
             return Response(result.to_dict(), status=result.get_status_code())
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
 
+    def _get_branch_schema_id(self, request):
+        """Get branch schema ID from request header or settings."""
         branch_schema_id = request.headers.get("X-NetBox-Branch")
 
-        # If branch schema ID is provided and branching plugin is installed, get branch name
+        # If no branch specified in header, check for default branch in settings
+        if not branch_schema_id and Branch is not None:
+            try:
+                from netbox_diode_plugin.models import Setting
+                settings = Setting.objects.first()
+                if settings and settings.branch:
+                    branch_schema_id = settings.branch.schema_id
+                    logger.debug(
+                        f"Using default branch from settings: {settings.branch.name} ({branch_schema_id})"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not retrieve default branch from settings: {e}")
+
+        return branch_schema_id
+
+    def _add_branch_to_result(self, result, branch_schema_id):
+        """Add branch information to the result if branch is available."""
         if branch_schema_id and Branch is not None:
             try:
                 branch = Branch.objects.get(schema_id=branch_schema_id)
@@ -113,6 +104,61 @@ class GenerateDiffView(views.APIView):
             except Branch.DoesNotExist:
                 sanitized_branch_id = branch_schema_id.replace('\n', '').replace('\r', '')
                 logger.warning(f"Branch with ID {sanitized_branch_id} does not exist")
+
+    def _post(self, request, *args, **kwargs):
+        entity = request.data.get("entity")
+        object_type = request.data.get("object_type")
+
+        if not entity:
+            raise ChangeSetException(
+                "validation error",
+                errors={
+                    "request": {
+                        "entity": ["entity is required"]
+                    }
+                }
+            )
+        if not object_type:
+            raise ChangeSetException(
+                "validation error",
+                errors={
+                    "request": {
+                        "object_type": ["object_type is required"]
+                    }
+                }
+            )
+
+        app_label, model_name = object_type.split(".")
+        try:
+            model_class = apps.get_model(app_label, model_name)
+        except LookupError:
+            raise ChangeSetException(
+                "validation error",
+                errors={
+                    "request": {
+                        "object_type": [f"{object_type} is not supported in this version."]
+                    }
+                }
+            )
+
+        for entity_key in get_valid_entity_keys(model_class.__name__):
+            original_entity_data = entity.get(entity_key)
+            if original_entity_data:
+                break
+
+        if original_entity_data is None:
+            raise ChangeSetException(
+                "validation error",
+                errors={
+                    "entity": {
+                        entity_key: [f"No data found in expected entity key, got: {entity.keys()}"]
+                    }
+                }
+            )
+
+        result = generate_changeset(original_entity_data, object_type)
+        branch_schema_id = self._get_branch_schema_id(request)
+        self._add_branch_to_result(result, branch_schema_id)
 
         return Response(result.to_dict(), status=result.get_status_code())
 
@@ -165,3 +211,32 @@ class ApplyChangeSetView(views.APIView):
             )
 
         return Response(result.to_dict(), status=result.get_status_code())
+
+
+class GetDefaultBranchView(views.APIView):
+    """GetDefaultBranch view."""
+
+    authentication_classes = [DiodeOAuth2Authentication]
+    permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_READ)]
+
+    def get(self, request, *args, **kwargs):
+        """Get default branch from settings."""
+        branch_data = None
+
+        # Check for default branch in settings
+        if Branch is not None:
+            try:
+                from netbox_diode_plugin.models import Setting
+                settings = Setting.objects.first()
+                if settings and settings.branch:
+                    branch_data = {
+                        "id": settings.branch.schema_id,
+                        "name": settings.branch.name
+                    }
+                    logger.debug(
+                        f"Default branch from settings: {settings.branch.name} ({settings.branch.schema_id})"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not retrieve default branch from settings: {e}")
+
+        return Response({"branch": branch_data})

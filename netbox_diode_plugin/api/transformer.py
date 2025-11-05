@@ -4,6 +4,7 @@
 
 import copy
 import datetime
+import graphlib
 import json
 import logging
 import re
@@ -11,12 +12,12 @@ from collections import defaultdict
 from functools import lru_cache
 from uuid import uuid4
 
-import graphlib
 from django.utils.text import slugify
 from extras.models.customfields import CustomField
 from rest_framework import serializers
 
 from .common import NON_FIELD_ERRORS, AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats, sort_ints_first
+from .compat import apply_entity_migrations
 from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -94,7 +95,7 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     This also handles placing `_type` fields for generic references,
     a certain form of deduplication and resolution of existing objects.
     """
-    entities = _transform_proto_json_1(proto_json, object_type)
+    entities = _transform_proto_json_1(proto_json, object_type, supported_models)
 
     entities = _topo_sort(entities)
     deduplicated = _fingerprint_dedupe(entities)
@@ -114,17 +115,19 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
 
     return output
 
-def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) -> list[dict]: # noqa: C901
+def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models: dict, context=None) -> list[dict]: # noqa: C901
     uuid = str(uuid4())
     node = {
         "_object_type": object_type,
         "_uuid": uuid,
         "_refs": set(),
+        "_warnings": {},
     }
 
     # handle camelCase protoJSON if provided...
     proto_json = _ensure_snake_case(proto_json, object_type)
     apply_format_transformations(proto_json, object_type)
+    apply_entity_migrations(proto_json, object_type)
 
     # context pushed down from parent nodes
     if context is not None:
@@ -140,13 +143,27 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
     # special handling for custom fields
     custom_fields = dict.pop(proto_json, "custom_fields", {})
     if custom_fields:
-        custom_fields, custom_fields_refs, nested = _prepare_custom_fields(object_type, custom_fields)
+        custom_fields, custom_fields_refs, nested = _prepare_custom_fields(object_type, custom_fields, supported_models)
         node['custom_fields'] = custom_fields
         node['_refs'].update(custom_fields_refs)
         nodes += nested
 
+    supported_fields = _supported_diode_fields(object_type, supported_models)
+    def is_supported(field_name, ref_info):
+        if ref_info is None:
+            return field_name in supported_fields
+        if ref_info.object_type not in supported_models:
+            return False
+        if ref_info.is_generic:
+            return ref_info.field_name + "_type" in supported_fields
+        return ref_info.field_name in supported_fields
+
     for key, value in proto_json.items():
         ref_info = get_json_ref_info(object_type, key)
+        if not is_supported(key, ref_info):
+            node['_warnings'][key] = ["Ignored unsupported field."]
+            continue
+
         if ref_info is None:
             node[key] = copy.deepcopy(value)
             continue
@@ -164,7 +181,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
         if isinstance(value, list):
             ref_value = []
             for item in value:
-                nested = _transform_proto_json_1(item, ref_info.object_type, nested_context)
+                nested = _transform_proto_json_1(item, ref_info.object_type, supported_models, nested_context)
                 nodes += nested
                 ref_uuid = nested[0]['_uuid']
                 ref_value.append(UnresolvedReference(
@@ -173,7 +190,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, context=None) ->
                 ))
                 refs.append(ref_uuid)
         else:
-            nested = _transform_proto_json_1(value, ref_info.object_type, nested_context)
+            nested = _transform_proto_json_1(value, ref_info.object_type, supported_models, nested_context)
             nodes += nested
             ref_uuid = nested[0]['_uuid']
             ref_value = UnresolvedReference(
@@ -474,7 +491,7 @@ def _update_dict_refs(data, new_refs):
     for k, v in data.items():
         if isinstance(v, UnresolvedReference) and v.uuid in new_refs:
             v.uuid = new_refs[v.uuid]
-        elif isinstance(v, (list, tuple)):
+        elif isinstance(v, list | tuple):
             for item in v:
                 if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
                     item.uuid = new_refs[item.uuid]
@@ -517,7 +534,7 @@ def _update_resolved_refs(data, new_refs):
     for k, v in list(data.items()):
         if isinstance(v, UnresolvedReference) and v.uuid in new_refs:
             data[k] = new_refs[v.uuid]
-        elif isinstance(v, (list, tuple)):
+        elif isinstance(v, list | tuple):
             new_items = []
             has_refs = False
             for item in v:
@@ -539,7 +556,7 @@ def cleanup_unresolved_references(data: dict) -> list[str]:
             if k != 'id':
                 unresolved.add(k)
             data[k] = str(v)
-        elif isinstance(v, (list, tuple)):
+        elif isinstance(v, list | tuple):
             items = []
             for item in v:
                 if isinstance(item, UnresolvedReference):
@@ -599,7 +616,7 @@ def _check_unresolved_refs(entities: list[dict]) -> list[str]:
                     )
 
 
-def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict, set, list]: # noqa: C901
+def _prepare_custom_fields(object_type: str, custom_fields: dict, supported_models: dict) -> tuple[dict, set, list]: # noqa: C901
     """Prepare custom fields for transformation."""
     out = {}
     refs = set()
@@ -608,7 +625,7 @@ def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict,
         keyname = key
         try:
             value_type, value = _pop_custom_field_type_and_value(value)
-            if value_type in ("text", "longText", "decimal", "boolean", "datetime", "selection", "url", "multipleSelection"):
+            if value_type in ("text", "long_text", "decimal", "boolean", "datetime", "selection", "url", "multiple_selection"):
                 out[key] = value
             elif value_type == "date":
                 # truncate to YYYY-MM-DD
@@ -621,7 +638,7 @@ def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict,
             elif value_type == "json":
                 out[key] = _prepare_custom_json(value)
             elif value_type == "object":
-                nested = _prepare_custom_ref(value)
+                nested = _prepare_custom_ref(value, supported_models)
                 ref = nested[0]
                 refs.add(ref['_uuid'])
                 nodes += nested
@@ -629,11 +646,11 @@ def _prepare_custom_fields(object_type: str, custom_fields: dict) -> tuple[dict,
                     object_type=ref['_object_type'],
                     uuid=ref['_uuid'],
                 )
-            elif value_type == "multipleObjects":
+            elif value_type == "multiple_objects":
                 vals = []
                 for i, item in enumerate(value):
                     keyname = f"{key}[{i}]"
-                    nested = _prepare_custom_ref(value)
+                    nested = _prepare_custom_ref(item, supported_models)
                     ref = nested[0]
                     refs.add(ref['_uuid'])
                     nodes += nested
@@ -670,7 +687,7 @@ def _pop_custom_field_type_and_value(data: dict):
     return value_type, value
 
 
-def _prepare_custom_ref(data: dict) -> list[dict]:
+def _prepare_custom_ref(data: dict, supported_models: dict) -> list[dict]:
     if not isinstance(data, dict) or len(data) != 1:
         raise ValueError("must be a dictionary with a single key")
 
@@ -682,4 +699,21 @@ def _prepare_custom_ref(data: dict) -> list[dict]:
         raise ValueError(f"{field_name} is not a supported custom field reference type")
 
     object_type = ref_info.object_type
-    return _transform_proto_json_1(value, object_type)
+    return _transform_proto_json_1(value, object_type, supported_models)
+
+def _supported_diode_fields(object_type, supported_models: dict) -> list[str]:
+    """
+    Get the supported diode fields for a model.
+
+    This excludes fields that are not supported by the current version of NetBox
+    that the plugin is installed in. i.e. fields from older or newer versions of
+    NetBox that are also supported by the plugin.
+    """
+    model = supported_models.get(object_type)
+    if not model:
+        raise serializers.ValidationError({
+            NON_FIELD_ERRORS: [f"{object_type} is not supported in this version."]
+        })
+    model_fields = set(model.get("fields", {}).keys())
+    diode_fields = set(legal_fields(object_type))
+    return list(model_fields.intersection(diode_fields))

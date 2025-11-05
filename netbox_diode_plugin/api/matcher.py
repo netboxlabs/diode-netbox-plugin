@@ -5,7 +5,6 @@
 import logging
 from dataclasses import dataclass
 from functools import cache, lru_cache
-from typing import Type
 
 import netaddr
 from django.contrib.contenttypes.fields import ContentType
@@ -18,6 +17,7 @@ from django.db.models.query_utils import Q
 from extras.models.customfields import CustomField
 
 from .common import NON_FIELD_ERRORS, ChangeSetException, UnresolvedReference
+from .compat import in_version_range
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model, get_primary_value_field
 
 logger = logging.getLogger(__name__)
@@ -137,9 +137,15 @@ _LOGICAL_MATCHERS = {
     "ipam.vlan": lambda: [
         ObjectMatchCriteria(
             fields=("vid",),
-            name="logical_vlan_vid_no_group_or_svlan",
+            name="logical_vlan_vid_no_group_or_svlan_or_site",
             model_class=get_object_type_model("ipam.vlan"),
-            condition=Q(group__isnull=True, qinq_svlan__isnull=True),
+            condition=Q(group__isnull=True, qinq_svlan__isnull=True, site__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("vid", "site"),
+            name="logical_vlan_in_site",
+            model_class=get_object_type_model("ipam.vlan"),
+            condition=Q(group__isnull=True, qinq_svlan__isnull=True, site__isnull=False),
         ),
     ],
     "ipam.vlangroup": lambda: [
@@ -184,18 +190,28 @@ _LOGICAL_MATCHERS = {
             name="logical_service_name_no_device_or_vm",
             model_class=get_object_type_model("ipam.service"),
             condition=Q(device__isnull=True, virtual_machine__isnull=True),
+            max_version="4.2.99",
         ),
         ObjectMatchCriteria(
             fields=("name", "device"),
             name="logical_service_name_on_device",
             model_class=get_object_type_model("ipam.service"),
             condition=Q(device__isnull=False),
+            max_version="4.2.99",
         ),
         ObjectMatchCriteria(
             fields=("name", "virtual_machine"),
             name="logical_service_name_on_vm",
             model_class=get_object_type_model("ipam.service"),
             condition=Q(virtual_machine__isnull=False),
+            max_version="4.2.99",
+        ),
+        ObjectMatchCriteria(
+            fields=("name", "parent_object_type", "parent_object_id"),
+            name="logical_service_name_on_parent",
+            model_class=get_object_type_model("ipam.service"),
+            condition=Q(parent_object_type__isnull=False),
+            min_version="4.3.0"
         ),
     ],
     "dcim.modulebay": lambda: [
@@ -223,6 +239,39 @@ _LOGICAL_MATCHERS = {
             model_class=get_object_type_model("ipam.fhrpgroup"),
         )
     ],
+    "tenancy.contact": lambda: [
+        ObjectMatchCriteria(
+            # contacts are unconstrained in 4.3.0
+            # in 4.2 they are constrained by unique name per group
+            fields=("name", ),
+            name="logical_contact_name",
+            model_class=get_object_type_model("tenancy.contact"),
+            min_version="4.3.0",
+        )
+    ],
+    "dcim.devicerole": lambda: [
+        ObjectMatchCriteria(
+            fields=("name",),
+            name="logical_device_role_name_no_parent",
+            model_class=get_object_type_model("dcim.devicerole"),
+            condition=Q(parent__isnull=True),
+            min_version="4.3.0",
+        ),
+        ObjectMatchCriteria(
+            fields=("slug",),
+            name="logical_device_role_slug_no_parent",
+            model_class=get_object_type_model("dcim.devicerole"),
+            condition=Q(parent__isnull=True),
+            min_version="4.3.0",
+        )
+    ],
+    "extras.journalentry": lambda: [
+        ObjectMatchCriteria(
+            fields=("assigned_object_id", "assigned_object_type", "comments"),
+            name="logical_journal_entry_assigned_object_comments",
+            model_class=get_object_type_model("extras.journalentry"),
+        )
+    ],
 }
 
 @dataclass
@@ -235,15 +284,18 @@ class ObjectMatchCriteria:
     the model fields and any references to another object
     specify a specific id in the appropriate field name.
     eg device_id=123 etc and for any generic references,
-    both the type and idshould be specified, eg:
+    both the type and id should be specified, eg:
     scope_type="dcim.site" and scope_id=123
     """
 
     fields: tuple[str] | None = None
     expressions: tuple | None = None
     condition: Q | None = None
-    model_class: Type[models.Model] | None = None
+    model_class: type[models.Model] | None = None
     name: str | None = None
+
+    min_version: str | None = None
+    max_version: str | None = None
 
     def __hash__(self):
         """Hash the object match criteria."""
@@ -390,7 +442,7 @@ class ObjectMatchCriteria:
         """Builds a queryset for the constraint with the given data."""
         data = self._prepare_data(data)
         replacements = {
-            F(field): Value(value) if isinstance(value, (str, int, float, bool)) else value
+            F(field): Value(value) if isinstance(value, str | int | float | bool) else value
             for field, value in data.items()
         }
 
@@ -422,7 +474,11 @@ class ObjectMatchCriteria:
                 field = self.model_class._meta.get_field(field_name)
                 # special handling for object type -> content type id
                 if field.is_relation and hasattr(field, "related_model") and field.related_model == ContentType:
-                    prepared[field_name] = content_type_id(value)
+                    # Handle ManyToMany fields (list of object types) and ForeignKey fields (single object type)
+                    if isinstance(value, list):
+                        prepared[field_name] = [content_type_id(v) for v in value]
+                    else:
+                        prepared[field_name] = content_type_id(value)
                 else:
                     prepared[field_name] = value
 
@@ -438,7 +494,10 @@ class CustomFieldMatcher:
 
     name: str
     custom_field: str
-    model_class: Type[models.Model]
+    model_class: type[models.Model]
+
+    min_version: str | None = None
+    max_version: str | None = None
 
     def describe(self, data: dict) -> str:
         """Returns a description of the data used to match the object."""
@@ -477,9 +536,12 @@ class IPNetworkIPMatcher:
 
     ip_fields: tuple[str]
     vrf_field: str
-    model_class: Type[models.Model]
+    model_class: type[models.Model]
     name: str
     global_only: bool = False
+
+    min_version: str | None = None
+    max_version: str | None = None
 
     def _check_condition(self, data: dict) -> bool:
         """Check the condition for the custom field."""
@@ -550,8 +612,11 @@ class VRFIPNetworkIPMatcher:
 
     ip_fields: tuple[str]
     vrf_field: str
-    model_class: Type[models.Model]
+    model_class: type[models.Model]
     name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
 
     def _check_condition(self, data: dict) -> bool:
         """Check the condition for the custom field."""
@@ -631,7 +696,10 @@ class AutoSlugMatcher:
 
     name: str
     slug_field: str
-    model_class: Type[models.Model]
+    model_class: type[models.Model]
+
+    min_version: str | None = None
+    max_version: str | None = None
 
     def describe(self, data: dict) -> str:
         """Returns a description of the data used to match the object."""
@@ -703,7 +771,10 @@ def _get_autoslug_matchers(model_class) -> list:
 @lru_cache(maxsize=256)
 def _get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
     object_type = get_object_type(model_class)
-    matchers = _LOGICAL_MATCHERS.get(object_type, lambda: [])()
+    matchers = [
+        x for x in _LOGICAL_MATCHERS.get(object_type, lambda: [])()
+        if in_version_range(x.min_version, x.max_version)
+    ]
 
     # collect single fields that are unique
     for field in model_class._meta.fields:
@@ -813,19 +884,30 @@ def _fingerprint_all(data: dict, object_type: str|None = None) -> str:
     if data is None:
         return None
 
-    values = ["object_type", object_type]
-    for k, v in sorted(data.items()):
-        if k.startswith("_"):
-            continue
-        values.append(k)
-        if isinstance(v, (list, tuple)):
-            values.extend(sorted(v))
-        elif isinstance(v, dict):
-            values.append(_fingerprint_all(v))
-        else:
-            values.append(v)
+    try:
+        values = ["object_type", object_type]
+        for k, v in sorted(data.items()):
+            if k.startswith("_"):
+                continue
+            values.append(k)
+            if isinstance(v, list | tuple):
+                values.extend(sorted(_as_tuples(v)))
+            elif isinstance(v, dict):
+                values.append(_fingerprint_all(v))
+            else:
+                values.append(v)
 
-    return hash(tuple(values))
+        return hash(tuple(values))
+    except Exception as e:
+        logger.error(f"Error fingerprinting data: {e}")
+        raise
+
+def _as_tuples(vs):
+    if isinstance(vs, list):
+        return tuple(_as_tuples(v) for v in vs)
+    if isinstance(vs, dict):
+        return tuple((k, _as_tuples(v)) for k, v in vs.items())
+    return vs
 
 def fingerprints(data: dict, object_type: str) -> list[str]:
     """

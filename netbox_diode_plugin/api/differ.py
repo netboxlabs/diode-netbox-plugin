@@ -5,6 +5,7 @@
 import copy
 import datetime
 import logging
+from collections import defaultdict
 
 from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
@@ -27,9 +28,6 @@ from .transformer import cleanup_unresolved_references, set_custom_field_default
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_MODELS = extract_supported_models()
-
-
 def prechange_data_from_instance(instance) -> dict: # noqa: C901
     """Convert model instance data to a dictionary format for comparison."""
     prechange_data = {}
@@ -40,10 +38,11 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
     model_class = instance.__class__
     object_type = f"{model_class._meta.app_label}.{model_class._meta.model_name}"
 
-    model = SUPPORTED_MODELS.get(object_type)
+    supported_models = extract_supported_models()
+    model = supported_models.get(object_type)
     if not model:
         raise serializers.ValidationError({
-            NON_FIELD_ERRORS: [f"Model {model_class.__name__} is not supported"]
+            NON_FIELD_ERRORS: [f"{object_type} is not supported in this version."]
         })
 
     fields = model.get("fields", {})
@@ -66,17 +65,11 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         if hasattr(value, "all"):  # Handle many-to-many and many-to-one relationships
             # For any relationship that has an 'all' method, get all related objects' primary keys
             prechange_data[field_name] = (
-                sorted([item.pk for item in value.all()] if value is not None else [])
+                sorted([_pk_or_content_type_ref(item) for item in value.all()] if value is not None else [])
             )
-        elif hasattr(
-            value, "pk"
-        ):  # Handle regular related fields (ForeignKey, OneToOne)
-            # Handle ContentType fields
-            if isinstance(value, ContentType):
-                prechange_data[field_name] = f"{value.app_label}.{value.model}"
-            else:
-                # For regular related fields, get the primary key
-                prechange_data[field_name] = value.pk if value is not None else None
+        elif hasattr(value, "pk"):
+            # Handle regular related fields (ForeignKey, OneToOne) andContentType fields
+            prechange_data[field_name] = _pk_or_content_type_ref(value)
         else:
             prechange_data[field_name] = value
 
@@ -84,7 +77,7 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         custom_field_values = instance.get_custom_fields()
         cfmap = {}
         for cf, value in custom_field_values.items():
-            if isinstance(value, (datetime.datetime, datetime.date)):
+            if isinstance(value, datetime.datetime | datetime.date):
                 cfmap[cf.name] = value
             else:
                 cfmap[cf.name] = cf.serialize(value)
@@ -93,6 +86,11 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
 
     return prechange_data
 
+def _pk_or_content_type_ref(value):
+    if isinstance(value, ContentType):
+        return f"{value.app_label}.{value.model}"
+    # For regular related fields, get the primary key
+    return  value.pk if value is not None else None
 
 def clean_diff_data(data: dict, exclude_empty_values: bool = True) -> dict:
     """Clean diff data by removing null values."""
@@ -176,7 +174,9 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
     """Generate a changeset for an entity."""
     change_set = ChangeSet()
 
-    entities = transform_proto_json(entity, object_type, SUPPORTED_MODELS)
+    warnings = {}
+    supported_models = extract_supported_models()
+    entities = transform_proto_json(entity, object_type, supported_models)
     by_uuid = {x['_uuid']: x for x in entities}
     for entity in entities:
         prechange_data = {}
@@ -185,7 +185,7 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
         object_type = entity.pop("_object_type")
         _ = entity.pop("_uuid")
         instance = entity.pop("_instance", None)
-
+        _merge_warnings(warnings, object_type, entity.pop("_warnings", None))
         if instance:
             # the prior state is another new object...
             if isinstance(instance, str):
@@ -222,6 +222,8 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
     if errors := change_set.validate():
         raise ChangeSetException("Invalid change set", errors)
 
+    if warnings:
+        change_set.warnings = warnings
 
     cs = ChangeSetResult(
         id=change_set.id,
@@ -253,3 +255,13 @@ def _merge_reference_list(prechange_list: list, postchange_list: list) -> list:
     result = set(prechange_list)
     result.update(postchange_list)
     return sort_ints_first(result)
+
+def _merge_warnings(warnings: dict, object_type: str, entity_warnings: dict):
+    """Merge warnings for an object type."""
+    if not entity_warnings:
+        return
+
+    if object_type not in warnings:
+        warnings[object_type] = defaultdict(list)
+    for key, value in entity_warnings.items():
+        warnings[object_type][key] += value
