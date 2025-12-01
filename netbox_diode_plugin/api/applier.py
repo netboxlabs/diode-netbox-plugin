@@ -71,8 +71,8 @@ def _is_auto_created_component(object_type: str) -> bool:
     return object_type in auto_created_components
 
 
-def _try_find_and_update_existing(data: dict, object_type: str, serializer_class, request):
-    """Try to find existing auto-created object and update it."""
+def _try_find_and_update_existing_instance(data: dict, object_type: str, serializer_class, request):
+    """Try to find existing auto-created instance and update it."""
     try:
         instance = find_existing_object(data, object_type)
         if instance:
@@ -107,7 +107,7 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         # This prevents duplicates when components are instantiated during Device/Module save()
         instance = None
         if _is_auto_created_component(change.object_type):
-            instance = _try_find_and_update_existing(data, change.object_type, serializer_class, request)
+            instance = _try_find_and_update_existing_instance(data, change.object_type, serializer_class, request)
 
         if not instance:
             instance = _create_or_find_instance(data, change.object_type, serializer_class, request)
