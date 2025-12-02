@@ -54,19 +54,67 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         id=change_set.id,
     )
 
+def _is_auto_created_component(object_type: str) -> bool:
+    """Check if the object type is auto-created from templates."""
+    auto_created_components = [
+        "dcim.consoleport",
+        "dcim.consoleserverport",
+        "dcim.powerport",
+        "dcim.poweroutlet",
+        "dcim.interface",
+        "dcim.rearport",
+        "dcim.frontport",
+        "dcim.modulebay",
+        "dcim.devicebay",
+        "dcim.inventoryitem",
+    ]
+    return object_type in auto_created_components
+
+
+def _try_find_and_update_existing_instance(data: dict, object_type: str, serializer_class, request):
+    """Try to find existing auto-created instance and update it."""
+    try:
+        instance = find_existing_object(data, object_type)
+        if instance:
+            serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
+            serializer.is_valid(raise_exception=True)
+            return serializer.save()
+    except (ValueError, TypeError) as e:
+        logger.debug(f"Could not find existing {object_type}: {e}")
+    return None
+
+
+def _create_or_find_instance(data: dict, object_type: str, serializer_class, request):
+    """Create new instance or find existing one on conflict."""
+    serializer = serializer_class(data=data, context={"request": request})
+    try:
+        serializer.is_valid(raise_exception=True)
+        return serializer.save()
+    except ValidationError as e:
+        instance = find_existing_object(data, object_type)
+        if not instance:
+            raise e
+        return instance
+
+
 def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict, request):
     serializer_class = get_serializer_for_model(model_class)
     change_type = change.change_type
+
     if change_type == ChangeType.CREATE.value:
-        serializer = serializer_class(data=data, context={"request": request})
-        try:
-            serializer.is_valid(raise_exception=True)
-            instance = serializer.save()
-        except ValidationError as e:
-            instance = find_existing_object(data, change.object_type)
-            if not instance:
-                raise e
-        created[change.ref_id] = instance
+        # For component types that may be auto-created from e.g. DeviceType or ModuleType templates,
+        # try to find existing object first before attempting to create.
+        # This prevents duplicates when components are instantiated during Device/Module save()
+        instance = None
+        if _is_auto_created_component(change.object_type):
+            instance = _try_find_and_update_existing_instance(data, change.object_type, serializer_class, request)
+
+        if not instance:
+            instance = _create_or_find_instance(data, change.object_type, serializer_class, request)
+
+        # Always add the instance to created dict so it can be referenced by subsequent changes
+        if change.ref_id:
+            created[change.ref_id] = instance
 
     elif change_type == ChangeType.UPDATE.value:
         if object_id := change.object_id:
