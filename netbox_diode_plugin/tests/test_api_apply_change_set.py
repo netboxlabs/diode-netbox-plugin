@@ -931,3 +931,206 @@ class ApplyChangeSetTestCase(BaseApplyChangeSet):
             ],
         }
         _ = self.send_request(payload2)
+
+    def test_module_bay_from_template_no_duplicate(self):
+        """Test that module bays created from templates are reused and updated, not duplicated."""
+        from dcim.models import Module, ModuleBay, ModuleBayTemplate, ModuleType
+
+        # Create a device type with a module bay template
+        device_type = DeviceType.objects.create(
+            manufacturer=Manufacturer.objects.first(),
+            model="Device with Module Bay Template",
+            slug="device-with-module-bay-template",
+        )
+
+        # Create module bay template
+        ModuleBayTemplate.objects.create(
+            device_type=device_type,
+            name="Tray",
+        )
+
+        # Create module type
+        module_type = ModuleType.objects.create(
+            manufacturer=Manufacturer.objects.first(),
+            model="Test Module Type",
+        )
+
+        # Step 1: Create a device - this will auto-create module bay "Tray" from template
+        device_payload = {
+            "id": str(uuid.uuid4()),
+            "changes": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.device",
+                    "object_id": None,
+                    "ref_id": "device-1",
+                    "data": {
+                        "name": "Test Device with Module Bay",
+                        "device_type": device_type.id,
+                        "role": self.roles[0].id,
+                        "site": self.sites[0].id,
+                    },
+                },
+            ],
+        }
+        self.send_request(device_payload)
+
+        # Verify device was created
+        device = Device.objects.get(name="Test Device with Module Bay")
+
+        # Verify module bay was auto-created from template
+        module_bays_before = ModuleBay.objects.filter(device=device, name="Tray")
+        self.assertEqual(module_bays_before.count(), 1)
+        module_bay = module_bays_before.first()
+        self.assertIsNone(module_bay.module)  # No module installed yet
+        self.assertEqual(module_bay.description, "")  # Template has no description
+
+        # Step 2: Create a module with the module bay - should reuse existing bay and update it
+        module_payload = {
+            "id": str(uuid.uuid4()),
+            "changes": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.modulebay",
+                    "object_id": None,
+                    "ref_id": "modulebay-1",
+                    "data": {
+                        "name": "Tray",
+                        "device": device.id,
+                        "description": "Ingested module bay",
+                    },
+                },
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.module",
+                    "object_id": None,
+                    "ref_id": "module-1",
+                    "new_refs": ["module_bay"],
+                    "data": {
+                        "device": device.id,
+                        "module_bay": "modulebay-1",
+                        "module_type": module_type.id,
+                        "description": "Ingested module",
+                    },
+                },
+            ],
+        }
+        self.send_request(module_payload)
+
+        # Verify NO duplicate module bays were created
+        module_bays_after = ModuleBay.objects.filter(device=device, name="Tray")
+        self.assertEqual(
+            module_bays_after.count(),
+            1,
+            "Module bay should be reused, not duplicated"
+        )
+
+        # Verify the module bay was updated with the description
+        module_bay.refresh_from_db()
+        self.assertEqual(
+            module_bay.description,
+            "Ingested module bay",
+            "Module bay should be updated with ingested data"
+        )
+
+        # Verify module was created successfully
+        modules = Module.objects.filter(device=device, module_bay=module_bay)
+        self.assertEqual(modules.count(), 1)
+        module = modules.first()
+        self.assertEqual(module.module_type, module_type)
+        self.assertEqual(module.description, "Ingested module")
+
+    def test_interface_from_template_no_duplicate(self):
+        """Test that interfaces created from templates are reused and updated, not duplicated."""
+        from dcim.models import InterfaceTemplate
+
+        # Create a device type with an interface template
+        device_type = DeviceType.objects.create(
+            manufacturer=Manufacturer.objects.first(),
+            model="Device with Interface Template",
+            slug="device-with-interface-template",
+        )
+
+        # Create interface template
+        InterfaceTemplate.objects.create(
+            device_type=device_type,
+            name="eth0",
+            type="1000base-t",
+        )
+
+        # Step 1: Create a device - this will auto-create interface "eth0" from template
+        device_payload = {
+            "id": str(uuid.uuid4()),
+            "changes": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.device",
+                    "object_id": None,
+                    "ref_id": "device-1",
+                    "data": {
+                        "name": "Test Device with Interface",
+                        "device_type": device_type.id,
+                        "role": self.roles[0].id,
+                        "site": self.sites[0].id,
+                    },
+                },
+            ],
+        }
+        self.send_request(device_payload)
+
+        # Verify device was created
+        device = Device.objects.get(name="Test Device with Interface")
+
+        # Verify interface was auto-created from template
+        interfaces_before = Interface.objects.filter(device=device, name="eth0")
+        self.assertEqual(interfaces_before.count(), 1)
+        interface = interfaces_before.first()
+        self.assertEqual(interface.description, "")  # Template has no description
+
+        # Step 2: Try to create the same interface with additional data - should reuse and update
+        interface_payload = {
+            "id": str(uuid.uuid4()),
+            "changes": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.interface",
+                    "object_id": None,
+                    "ref_id": "interface-1",
+                    "data": {
+                        "name": "eth0",
+                        "device": device.id,
+                        "type": "1000base-t",
+                        "description": "Ingested interface",
+                        "enabled": True,
+                    },
+                },
+            ],
+        }
+        self.send_request(interface_payload)
+
+        # Verify NO duplicate interfaces were created
+        interfaces_after = Interface.objects.filter(device=device, name="eth0")
+        self.assertEqual(
+            interfaces_after.count(),
+            1,
+            "Interface should be reused, not duplicated"
+        )
+
+        # Verify the interface was updated with the description
+        interface.refresh_from_db()
+        self.assertEqual(
+            interface.description,
+            "Ingested interface",
+            "Interface should be updated with ingested data"
+        )
+        self.assertTrue(interface.enabled)
