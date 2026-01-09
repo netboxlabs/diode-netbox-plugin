@@ -1,7 +1,7 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Timestamp: 2025-11-14 18:10:23Z
+# Timestamp: 2026-01-08 12:51:01Z
 
 from dataclasses import dataclass
 import datetime
@@ -345,6 +345,15 @@ _JSON_REF_INFO = {
         "custom_link": RefInfo(
             object_type="extras.customlink", field_name="object", is_generic=True
         ),
+        "owner": RefInfo(
+            object_type="users.owner", field_name="object", is_generic=True
+        ),
+        "owner_group": RefInfo(
+            object_type="users.ownergroup", field_name="object", is_generic=True
+        ),
+        "port_mapping": RefInfo(
+            object_type="dcim.portmapping", field_name="object", is_generic=True
+        ),
     },
     "circuits.circuit": {
         "assignments": RefInfo(
@@ -352,6 +361,7 @@ _JSON_REF_INFO = {
             field_name="assignments",
             is_many=True,
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "provider": RefInfo(object_type="circuits.provider", field_name="provider"),
         "provider_account": RefInfo(
             object_type="circuits.provideraccount", field_name="provider_account"
@@ -361,6 +371,7 @@ _JSON_REF_INFO = {
         "type": RefInfo(object_type="circuits.circuittype", field_name="type"),
     },
     "circuits.circuitgroup": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
@@ -396,6 +407,7 @@ _JSON_REF_INFO = {
         ),
     },
     "circuits.circuittype": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "circuits.provider": {
@@ -403,17 +415,21 @@ _JSON_REF_INFO = {
             object_type="circuits.provideraccount", field_name="accounts", is_many=True
         ),
         "asns": RefInfo(object_type="ipam.asn", field_name="asns", is_many=True),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "circuits.provideraccount": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "provider": RefInfo(object_type="circuits.provider", field_name="provider"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "circuits.providernetwork": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "provider": RefInfo(object_type="circuits.provider", field_name="provider"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "circuits.virtualcircuit": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "provider_account": RefInfo(
             object_type="circuits.provideraccount", field_name="provider_account"
         ),
@@ -432,9 +448,11 @@ _JSON_REF_INFO = {
         ),
     },
     "circuits.virtualcircuittype": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.cable": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
@@ -475,11 +493,13 @@ _JSON_REF_INFO = {
     "dcim.consoleport": {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
         "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.consoleserverport": {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
         "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.device": {
@@ -487,6 +507,7 @@ _JSON_REF_INFO = {
         "device_type": RefInfo(object_type="dcim.devicetype", field_name="device_type"),
         "location": RefInfo(object_type="dcim.location", field_name="location"),
         "oob_ip": RefInfo(object_type="ipam.ipaddress", field_name="oob_ip"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "platform": RefInfo(object_type="dcim.platform", field_name="platform"),
         "primary_ip4": RefInfo(object_type="ipam.ipaddress", field_name="primary_ip4"),
         "primary_ip6": RefInfo(object_type="ipam.ipaddress", field_name="primary_ip6"),
@@ -504,9 +525,11 @@ _JSON_REF_INFO = {
         "installed_device": RefInfo(
             object_type="dcim.device", field_name="installed_device"
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.devicerole": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(object_type="dcim.devicerole", field_name="parent"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -517,12 +540,17 @@ _JSON_REF_INFO = {
         "manufacturer": RefInfo(
             object_type="dcim.manufacturer", field_name="manufacturer"
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.frontport": {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
         "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "rear_port": RefInfo(object_type="dcim.rearport", field_name="rear_port"),
+        "rear_ports": RefInfo(
+            object_type="dcim.portmapping", field_name="rear_ports", is_many=True
+        ),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.interface": {
@@ -530,6 +558,7 @@ _JSON_REF_INFO = {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
         "lag": RefInfo(object_type="dcim.interface", field_name="lag"),
         "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(object_type="dcim.interface", field_name="parent"),
         "primary_mac_address": RefInfo(
             object_type="dcim.macaddress", field_name="primary_mac_address"
@@ -580,14 +609,17 @@ _JSON_REF_INFO = {
         "manufacturer": RefInfo(
             object_type="dcim.manufacturer", field_name="manufacturer"
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(object_type="dcim.inventoryitem", field_name="parent"),
         "role": RefInfo(object_type="dcim.inventoryitemrole", field_name="role"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.inventoryitemrole": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.location": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(object_type="dcim.location", field_name="parent"),
         "site": RefInfo(object_type="dcim.site", field_name="site"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
@@ -602,15 +634,18 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.manufacturer": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.module": {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
         "module_bay": RefInfo(object_type="dcim.modulebay", field_name="module_bay"),
         "module_type": RefInfo(object_type="dcim.moduletype", field_name="module_type"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.modulebay": {
@@ -619,26 +654,34 @@ _JSON_REF_INFO = {
             object_type="dcim.module", field_name="installed_module"
         ),
         "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.moduletype": {
         "manufacturer": RefInfo(
             object_type="dcim.manufacturer", field_name="manufacturer"
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "profile": RefInfo(object_type="dcim.moduletypeprofile", field_name="profile"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.moduletypeprofile": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.platform": {
         "manufacturer": RefInfo(
             object_type="dcim.manufacturer", field_name="manufacturer"
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(object_type="dcim.platform", field_name="parent"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
+    "dcim.portmapping": {
+        "rear_port": RefInfo(object_type="dcim.rearport", field_name="rear_port"),
+    },
     "dcim.powerfeed": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "power_panel": RefInfo(object_type="dcim.powerpanel", field_name="power_panel"),
         "rack": RefInfo(object_type="dcim.rack", field_name="rack"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
@@ -647,21 +690,25 @@ _JSON_REF_INFO = {
     "dcim.poweroutlet": {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
         "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "power_port": RefInfo(object_type="dcim.powerport", field_name="power_port"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.powerpanel": {
         "location": RefInfo(object_type="dcim.location", field_name="location"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "site": RefInfo(object_type="dcim.site", field_name="site"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.powerport": {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
         "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.rack": {
         "location": RefInfo(object_type="dcim.location", field_name="location"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "rack_type": RefInfo(object_type="dcim.racktype", field_name="rack_type"),
         "role": RefInfo(object_type="dcim.rackrole", field_name="role"),
         "site": RefInfo(object_type="dcim.site", field_name="site"),
@@ -669,45 +716,57 @@ _JSON_REF_INFO = {
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
     "dcim.rackreservation": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "rack": RefInfo(object_type="dcim.rack", field_name="rack"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
     "dcim.rackrole": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.racktype": {
         "manufacturer": RefInfo(
             object_type="dcim.manufacturer", field_name="manufacturer"
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.rearport": {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
+        "front_ports": RefInfo(
+            object_type="dcim.portmapping", field_name="front_ports", is_many=True
+        ),
         "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.region": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(object_type="dcim.region", field_name="parent"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.site": {
         "asns": RefInfo(object_type="ipam.asn", field_name="asns", is_many=True),
         "group": RefInfo(object_type="dcim.sitegroup", field_name="group"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "region": RefInfo(object_type="dcim.region", field_name="region"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
     "dcim.sitegroup": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(object_type="dcim.sitegroup", field_name="parent"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.virtualchassis": {
         "master": RefInfo(object_type="dcim.device", field_name="master"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.virtualdevicecontext": {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "primary_ip4": RefInfo(object_type="ipam.ipaddress", field_name="primary_ip4"),
         "primary_ip6": RefInfo(object_type="ipam.ipaddress", field_name="primary_ip6"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
@@ -717,6 +776,13 @@ _JSON_REF_INFO = {
         "choice_set": RefInfo(
             object_type="extras.customfieldchoiceset", field_name="choice_set"
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+    },
+    "extras.customfieldchoiceset": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+    },
+    "extras.customlink": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
     },
     "extras.journalentry": {
         "assigned_object_asn": RefInfo(
@@ -1092,24 +1158,42 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
+        "assigned_object_owner": RefInfo(
+            object_type="users.owner", field_name="assigned_object", is_generic=True
+        ),
+        "assigned_object_owner_group": RefInfo(
+            object_type="users.ownergroup",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_port_mapping": RefInfo(
+            object_type="dcim.portmapping",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "ipam.aggregate": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "rir": RefInfo(object_type="ipam.rir", field_name="rir"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
     "ipam.asn": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "rir": RefInfo(object_type="ipam.rir", field_name="rir"),
+        "sites": RefInfo(object_type="dcim.site", field_name="sites", is_many=True),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
     "ipam.asnrange": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "rir": RefInfo(object_type="ipam.rir", field_name="rir"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
     "ipam.fhrpgroup": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "ipam.fhrpgroupassignment": {
@@ -1439,6 +1523,15 @@ _JSON_REF_INFO = {
         "interface_custom_link": RefInfo(
             object_type="extras.customlink", field_name="interface", is_generic=True
         ),
+        "interface_owner": RefInfo(
+            object_type="users.owner", field_name="interface", is_generic=True
+        ),
+        "interface_owner_group": RefInfo(
+            object_type="users.ownergroup", field_name="interface", is_generic=True
+        ),
+        "interface_port_mapping": RefInfo(
+            object_type="dcim.portmapping", field_name="interface", is_generic=True
+        ),
     },
     "ipam.ipaddress": {
         "assigned_object_fhrp_group": RefInfo(
@@ -1453,17 +1546,20 @@ _JSON_REF_INFO = {
             is_generic=True,
         ),
         "nat_inside": RefInfo(object_type="ipam.ipaddress", field_name="nat_inside"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
         "vrf": RefInfo(object_type="ipam.vrf", field_name="vrf"),
     },
     "ipam.iprange": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "role": RefInfo(object_type="ipam.role", field_name="role"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
         "vrf": RefInfo(object_type="ipam.vrf", field_name="vrf"),
     },
     "ipam.prefix": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "role": RefInfo(object_type="ipam.role", field_name="role"),
         "scope_location": RefInfo(
             object_type="dcim.location", field_name="scope", is_generic=True
@@ -1483,12 +1579,15 @@ _JSON_REF_INFO = {
         "vrf": RefInfo(object_type="ipam.vrf", field_name="vrf"),
     },
     "ipam.rir": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "ipam.role": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "ipam.routetarget": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
@@ -1497,6 +1596,7 @@ _JSON_REF_INFO = {
         "ipaddresses": RefInfo(
             object_type="ipam.ipaddress", field_name="ipaddresses", is_many=True
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent_object_device": RefInfo(
             object_type="dcim.device", field_name="parent_object", is_generic=True
         ),
@@ -1515,6 +1615,7 @@ _JSON_REF_INFO = {
     },
     "ipam.vlan": {
         "group": RefInfo(object_type="ipam.vlangroup", field_name="group"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "qinq_svlan": RefInfo(object_type="ipam.vlan", field_name="qinq_svlan"),
         "role": RefInfo(object_type="ipam.role", field_name="role"),
         "site": RefInfo(object_type="dcim.site", field_name="site"),
@@ -1522,6 +1623,7 @@ _JSON_REF_INFO = {
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
     "ipam.vlangroup": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "scope_cluster": RefInfo(
             object_type="virtualization.cluster", field_name="scope", is_generic=True
         ),
@@ -1548,6 +1650,9 @@ _JSON_REF_INFO = {
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
+    "ipam.vlantranslationpolicy": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+    },
     "ipam.vlantranslationrule": {
         "policy": RefInfo(
             object_type="ipam.vlantranslationpolicy", field_name="policy"
@@ -1560,6 +1665,7 @@ _JSON_REF_INFO = {
         "import_targets": RefInfo(
             object_type="ipam.routetarget", field_name="import_targets", is_many=True
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
@@ -1568,6 +1674,7 @@ _JSON_REF_INFO = {
         "groups": RefInfo(
             object_type="tenancy.contactgroup", field_name="groups", is_many=True
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "tenancy.contactassignment": {
@@ -1879,26 +1986,43 @@ _JSON_REF_INFO = {
         "object_custom_link": RefInfo(
             object_type="extras.customlink", field_name="object", is_generic=True
         ),
+        "object_owner": RefInfo(
+            object_type="users.owner", field_name="object", is_generic=True
+        ),
+        "object_owner_group": RefInfo(
+            object_type="users.ownergroup", field_name="object", is_generic=True
+        ),
+        "object_port_mapping": RefInfo(
+            object_type="dcim.portmapping", field_name="object", is_generic=True
+        ),
         "role": RefInfo(object_type="tenancy.contactrole", field_name="role"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "tenancy.contactgroup": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(object_type="tenancy.contactgroup", field_name="parent"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "tenancy.contactrole": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "tenancy.tenant": {
         "group": RefInfo(object_type="tenancy.tenantgroup", field_name="group"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "tenancy.tenantgroup": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(object_type="tenancy.tenantgroup", field_name="parent"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
+    "users.owner": {
+        "group": RefInfo(object_type="users.ownergroup", field_name="group"),
+    },
     "virtualization.cluster": {
         "group": RefInfo(object_type="virtualization.clustergroup", field_name="group"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "scope_location": RefInfo(
             object_type="dcim.location", field_name="scope", is_generic=True
         ),
@@ -1916,12 +2040,15 @@ _JSON_REF_INFO = {
         "type": RefInfo(object_type="virtualization.clustertype", field_name="type"),
     },
     "virtualization.clustergroup": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "virtualization.clustertype": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "virtualization.virtualdisk": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "virtual_machine": RefInfo(
             object_type="virtualization.virtualmachine", field_name="virtual_machine"
@@ -1930,6 +2057,7 @@ _JSON_REF_INFO = {
     "virtualization.virtualmachine": {
         "cluster": RefInfo(object_type="virtualization.cluster", field_name="cluster"),
         "device": RefInfo(object_type="dcim.device", field_name="device"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "platform": RefInfo(object_type="dcim.platform", field_name="platform"),
         "primary_ip4": RefInfo(object_type="ipam.ipaddress", field_name="primary_ip4"),
         "primary_ip6": RefInfo(object_type="ipam.ipaddress", field_name="primary_ip6"),
@@ -1942,6 +2070,7 @@ _JSON_REF_INFO = {
         "bridge": RefInfo(
             object_type="virtualization.vminterface", field_name="bridge"
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(
             object_type="virtualization.vminterface", field_name="parent"
         ),
@@ -1964,15 +2093,18 @@ _JSON_REF_INFO = {
         "vrf": RefInfo(object_type="ipam.vrf", field_name="vrf"),
     },
     "vpn.ikepolicy": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "proposals": RefInfo(
             object_type="vpn.ikeproposal", field_name="proposals", is_many=True
         ),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "vpn.ikeproposal": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "vpn.ipsecpolicy": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "proposals": RefInfo(
             object_type="vpn.ipsecproposal", field_name="proposals", is_many=True
         ),
@@ -1983,9 +2115,11 @@ _JSON_REF_INFO = {
         "ipsec_policy": RefInfo(
             object_type="vpn.ipsecpolicy", field_name="ipsec_policy"
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "vpn.ipsecproposal": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "vpn.l2vpn": {
@@ -1995,6 +2129,7 @@ _JSON_REF_INFO = {
         "import_targets": RefInfo(
             object_type="ipam.routetarget", field_name="import_targets", is_many=True
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
@@ -2372,6 +2507,19 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
+        "assigned_object_owner": RefInfo(
+            object_type="users.owner", field_name="assigned_object", is_generic=True
+        ),
+        "assigned_object_owner_group": RefInfo(
+            object_type="users.ownergroup",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_port_mapping": RefInfo(
+            object_type="dcim.portmapping",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
         "l2vpn": RefInfo(object_type="vpn.l2vpn", field_name="l2vpn"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -2380,10 +2528,12 @@ _JSON_REF_INFO = {
         "ipsec_profile": RefInfo(
             object_type="vpn.ipsecprofile", field_name="ipsec_profile"
         ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
     "vpn.tunnelgroup": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "vpn.tunneltermination": {
@@ -2732,10 +2882,20 @@ _JSON_REF_INFO = {
         "termination_custom_link": RefInfo(
             object_type="extras.customlink", field_name="termination", is_generic=True
         ),
+        "termination_owner": RefInfo(
+            object_type="users.owner", field_name="termination", is_generic=True
+        ),
+        "termination_owner_group": RefInfo(
+            object_type="users.ownergroup", field_name="termination", is_generic=True
+        ),
+        "termination_port_mapping": RefInfo(
+            object_type="dcim.portmapping", field_name="termination", is_generic=True
+        ),
         "tunnel": RefInfo(object_type="vpn.tunnel", field_name="tunnel"),
     },
     "wireless.wirelesslan": {
         "group": RefInfo(object_type="wireless.wirelesslangroup", field_name="group"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "scope_location": RefInfo(
             object_type="dcim.location", field_name="scope", is_generic=True
         ),
@@ -2753,12 +2913,14 @@ _JSON_REF_INFO = {
         "vlan": RefInfo(object_type="ipam.vlan", field_name="vlan"),
     },
     "wireless.wirelesslangroup": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "parent": RefInfo(object_type="wireless.wirelesslangroup", field_name="parent"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "wireless.wirelesslink": {
         "interface_a": RefInfo(object_type="dcim.interface", field_name="interface_a"),
         "interface_b": RefInfo(object_type="dcim.interface", field_name="interface_b"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
@@ -2785,6 +2947,7 @@ _LEGAL_FIELDS = {
             "distance",
             "distance_unit",
             "install_date",
+            "owner",
             "provider",
             "provider_account",
             "status",
@@ -2795,7 +2958,16 @@ _LEGAL_FIELDS = {
         ]
     ),
     "circuits.circuitgroup": frozenset(
-        ["custom_fields", "description", "name", "slug", "tags", "tenant"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "slug",
+            "tags",
+            "tenant",
+        ]
     ),
     "circuits.circuitgroupassignment": frozenset(
         ["group", "member_id", "member_type", "priority", "tags"]
@@ -2817,7 +2989,16 @@ _LEGAL_FIELDS = {
         ]
     ),
     "circuits.circuittype": frozenset(
-        ["color", "custom_fields", "description", "name", "slug", "tags"]
+        [
+            "color",
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "slug",
+            "tags",
+        ]
     ),
     "circuits.provider": frozenset(
         [
@@ -2827,6 +3008,7 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "name",
+            "owner",
             "slug",
             "tags",
         ]
@@ -2838,6 +3020,7 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "name",
+            "owner",
             "provider",
             "tags",
         ]
@@ -2848,6 +3031,7 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "name",
+            "owner",
             "provider",
             "service_id",
             "tags",
@@ -2859,6 +3043,7 @@ _LEGAL_FIELDS = {
             "comments",
             "custom_fields",
             "description",
+            "owner",
             "provider_account",
             "provider_network",
             "status",
@@ -2871,7 +3056,16 @@ _LEGAL_FIELDS = {
         ["custom_fields", "description", "interface", "role", "tags", "virtual_circuit"]
     ),
     "circuits.virtualcircuittype": frozenset(
-        ["color", "custom_fields", "description", "name", "slug", "tags"]
+        [
+            "color",
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "slug",
+            "tags",
+        ]
     ),
     "dcim.cable": frozenset(
         [
@@ -2884,6 +3078,8 @@ _LEGAL_FIELDS = {
             "label",
             "length",
             "length_unit",
+            "owner",
+            "profile",
             "status",
             "tags",
             "tenant",
@@ -2903,6 +3099,7 @@ _LEGAL_FIELDS = {
             "mark_connected",
             "module",
             "name",
+            "owner",
             "speed",
             "tags",
             "type",
@@ -2917,6 +3114,7 @@ _LEGAL_FIELDS = {
             "mark_connected",
             "module",
             "name",
+            "owner",
             "speed",
             "tags",
             "type",
@@ -2937,6 +3135,7 @@ _LEGAL_FIELDS = {
             "longitude",
             "name",
             "oob_ip",
+            "owner",
             "platform",
             "position",
             "primary_ip4",
@@ -2961,6 +3160,7 @@ _LEGAL_FIELDS = {
             "installed_device",
             "label",
             "name",
+            "owner",
             "tags",
         ]
     ),
@@ -2971,6 +3171,7 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "name",
+            "owner",
             "parent",
             "slug",
             "tags",
@@ -2988,6 +3189,7 @@ _LEGAL_FIELDS = {
             "is_full_depth",
             "manufacturer",
             "model",
+            "owner",
             "part_number",
             "slug",
             "subdevice_role",
@@ -3007,8 +3209,11 @@ _LEGAL_FIELDS = {
             "mark_connected",
             "module",
             "name",
+            "owner",
+            "positions",
             "rear_port",
             "rear_port_position",
+            "rear_ports",
             "tags",
             "type",
         ]
@@ -3029,6 +3234,7 @@ _LEGAL_FIELDS = {
             "module",
             "mtu",
             "name",
+            "owner",
             "parent",
             "poe_mode",
             "poe_type",
@@ -3063,6 +3269,7 @@ _LEGAL_FIELDS = {
             "label",
             "manufacturer",
             "name",
+            "owner",
             "parent",
             "part_id",
             "role",
@@ -3072,7 +3279,16 @@ _LEGAL_FIELDS = {
         ]
     ),
     "dcim.inventoryitemrole": frozenset(
-        ["color", "custom_fields", "description", "name", "slug", "tags"]
+        [
+            "color",
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "slug",
+            "tags",
+        ]
     ),
     "dcim.location": frozenset(
         [
@@ -3081,6 +3297,7 @@ _LEGAL_FIELDS = {
             "description",
             "facility",
             "name",
+            "owner",
             "parent",
             "site",
             "slug",
@@ -3097,11 +3314,12 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "mac_address",
+            "owner",
             "tags",
         ]
     ),
     "dcim.manufacturer": frozenset(
-        ["custom_fields", "description", "name", "slug", "tags"]
+        ["comments", "custom_fields", "description", "name", "owner", "slug", "tags"]
     ),
     "dcim.module": frozenset(
         [
@@ -3112,6 +3330,7 @@ _LEGAL_FIELDS = {
             "device",
             "module_bay",
             "module_type",
+            "owner",
             "serial",
             "status",
             "tags",
@@ -3126,6 +3345,7 @@ _LEGAL_FIELDS = {
             "label",
             "module",
             "name",
+            "owner",
             "position",
             "tags",
         ]
@@ -3139,6 +3359,7 @@ _LEGAL_FIELDS = {
             "description",
             "manufacturer",
             "model",
+            "owner",
             "part_number",
             "profile",
             "tags",
@@ -3147,7 +3368,7 @@ _LEGAL_FIELDS = {
         ]
     ),
     "dcim.moduletypeprofile": frozenset(
-        ["comments", "custom_fields", "description", "name", "schema", "tags"]
+        ["comments", "custom_fields", "description", "name", "owner", "schema", "tags"]
     ),
     "dcim.platform": frozenset(
         [
@@ -3156,11 +3377,13 @@ _LEGAL_FIELDS = {
             "description",
             "manufacturer",
             "name",
+            "owner",
             "parent",
             "slug",
             "tags",
         ]
     ),
+    "dcim.portmapping": frozenset(["position", "rear_port", "rear_port_position"]),
     "dcim.powerfeed": frozenset(
         [
             "amperage",
@@ -3170,6 +3393,7 @@ _LEGAL_FIELDS = {
             "mark_connected",
             "max_utilization",
             "name",
+            "owner",
             "phase",
             "power_panel",
             "rack",
@@ -3192,6 +3416,7 @@ _LEGAL_FIELDS = {
             "mark_connected",
             "module",
             "name",
+            "owner",
             "power_port",
             "status",
             "tags",
@@ -3199,7 +3424,16 @@ _LEGAL_FIELDS = {
         ]
     ),
     "dcim.powerpanel": frozenset(
-        ["comments", "custom_fields", "description", "location", "name", "site", "tags"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "location",
+            "name",
+            "owner",
+            "site",
+            "tags",
+        ]
     ),
     "dcim.powerport": frozenset(
         [
@@ -3212,6 +3446,7 @@ _LEGAL_FIELDS = {
             "maximum_draw",
             "module",
             "name",
+            "owner",
             "tags",
             "type",
         ]
@@ -3234,6 +3469,7 @@ _LEGAL_FIELDS = {
             "outer_height",
             "outer_unit",
             "outer_width",
+            "owner",
             "rack_type",
             "role",
             "serial",
@@ -3253,6 +3489,7 @@ _LEGAL_FIELDS = {
             "comments",
             "custom_fields",
             "description",
+            "owner",
             "rack",
             "status",
             "tags",
@@ -3261,7 +3498,16 @@ _LEGAL_FIELDS = {
         ]
     ),
     "dcim.rackrole": frozenset(
-        ["color", "custom_fields", "description", "name", "slug", "tags"]
+        [
+            "color",
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "slug",
+            "tags",
+        ]
     ),
     "dcim.racktype": frozenset(
         [
@@ -3278,6 +3524,7 @@ _LEGAL_FIELDS = {
             "outer_height",
             "outer_unit",
             "outer_width",
+            "owner",
             "slug",
             "starting_unit",
             "tags",
@@ -3293,17 +3540,28 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "device",
+            "front_ports",
             "label",
             "mark_connected",
             "module",
             "name",
+            "owner",
             "positions",
             "tags",
             "type",
         ]
     ),
     "dcim.region": frozenset(
-        ["comments", "custom_fields", "description", "name", "parent", "slug", "tags"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "parent",
+            "slug",
+            "tags",
+        ]
     ),
     "dcim.site": frozenset(
         [
@@ -3316,6 +3574,7 @@ _LEGAL_FIELDS = {
             "latitude",
             "longitude",
             "name",
+            "owner",
             "physical_address",
             "region",
             "shipping_address",
@@ -3327,10 +3586,28 @@ _LEGAL_FIELDS = {
         ]
     ),
     "dcim.sitegroup": frozenset(
-        ["comments", "custom_fields", "description", "name", "parent", "slug", "tags"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "parent",
+            "slug",
+            "tags",
+        ]
     ),
     "dcim.virtualchassis": frozenset(
-        ["comments", "custom_fields", "description", "domain", "master", "name", "tags"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "domain",
+            "master",
+            "name",
+            "owner",
+            "tags",
+        ]
     ),
     "dcim.virtualdevicecontext": frozenset(
         [
@@ -3340,6 +3617,7 @@ _LEGAL_FIELDS = {
             "device",
             "identifier",
             "name",
+            "owner",
             "primary_ip4",
             "primary_ip6",
             "status",
@@ -3359,6 +3637,7 @@ _LEGAL_FIELDS = {
             "label",
             "name",
             "object_types",
+            "owner",
             "related_object_filter",
             "related_object_type",
             "required",
@@ -3374,7 +3653,14 @@ _LEGAL_FIELDS = {
         ]
     ),
     "extras.customfieldchoiceset": frozenset(
-        ["base_choices", "description", "extra_choices", "name", "order_alphabetically"]
+        [
+            "base_choices",
+            "description",
+            "extra_choices",
+            "name",
+            "order_alphabetically",
+            "owner",
+        ]
     ),
     "extras.customlink": frozenset(
         [
@@ -3386,6 +3672,7 @@ _LEGAL_FIELDS = {
             "name",
             "new_window",
             "object_types",
+            "owner",
             "weight",
         ]
     ),
@@ -3408,6 +3695,7 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "date_added",
             "description",
+            "owner",
             "prefix",
             "rir",
             "tags",
@@ -3415,14 +3703,26 @@ _LEGAL_FIELDS = {
         ]
     ),
     "ipam.asn": frozenset(
-        ["asn", "comments", "custom_fields", "description", "rir", "tags", "tenant"]
+        [
+            "asn",
+            "comments",
+            "custom_fields",
+            "description",
+            "owner",
+            "rir",
+            "sites",
+            "tags",
+            "tenant",
+        ]
     ),
     "ipam.asnrange": frozenset(
         [
+            "comments",
             "custom_fields",
             "description",
             "end",
             "name",
+            "owner",
             "rir",
             "slug",
             "start",
@@ -3439,6 +3739,7 @@ _LEGAL_FIELDS = {
             "description",
             "group_id",
             "name",
+            "owner",
             "protocol",
             "tags",
         ]
@@ -3456,6 +3757,7 @@ _LEGAL_FIELDS = {
             "description",
             "dns_name",
             "nat_inside",
+            "owner",
             "role",
             "status",
             "tags",
@@ -3471,6 +3773,7 @@ _LEGAL_FIELDS = {
             "end_address",
             "mark_populated",
             "mark_utilized",
+            "owner",
             "role",
             "start_address",
             "status",
@@ -3486,6 +3789,7 @@ _LEGAL_FIELDS = {
             "description",
             "is_pool",
             "mark_utilized",
+            "owner",
             "prefix",
             "role",
             "scope_id",
@@ -3498,13 +3802,31 @@ _LEGAL_FIELDS = {
         ]
     ),
     "ipam.rir": frozenset(
-        ["custom_fields", "description", "is_private", "name", "slug", "tags"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "is_private",
+            "name",
+            "owner",
+            "slug",
+            "tags",
+        ]
     ),
     "ipam.role": frozenset(
-        ["custom_fields", "description", "name", "slug", "tags", "weight"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "slug",
+            "tags",
+            "weight",
+        ]
     ),
     "ipam.routetarget": frozenset(
-        ["comments", "custom_fields", "description", "name", "tags", "tenant"]
+        ["comments", "custom_fields", "description", "name", "owner", "tags", "tenant"]
     ),
     "ipam.service": frozenset(
         [
@@ -3514,6 +3836,7 @@ _LEGAL_FIELDS = {
             "device",
             "ipaddresses",
             "name",
+            "owner",
             "parent_object_id",
             "parent_object_type",
             "ports",
@@ -3529,6 +3852,7 @@ _LEGAL_FIELDS = {
             "description",
             "group",
             "name",
+            "owner",
             "qinq_role",
             "qinq_svlan",
             "role",
@@ -3541,9 +3865,11 @@ _LEGAL_FIELDS = {
     ),
     "ipam.vlangroup": frozenset(
         [
+            "comments",
             "custom_fields",
             "description",
             "name",
+            "owner",
             "scope_id",
             "scope_type",
             "slug",
@@ -3552,7 +3878,9 @@ _LEGAL_FIELDS = {
             "vid_ranges",
         ]
     ),
-    "ipam.vlantranslationpolicy": frozenset(["description", "name"]),
+    "ipam.vlantranslationpolicy": frozenset(
+        ["comments", "description", "name", "owner"]
+    ),
     "ipam.vlantranslationrule": frozenset(
         ["description", "local_vid", "policy", "remote_vid"]
     ),
@@ -3565,6 +3893,7 @@ _LEGAL_FIELDS = {
             "export_targets",
             "import_targets",
             "name",
+            "owner",
             "rd",
             "tags",
             "tenant",
@@ -3581,6 +3910,7 @@ _LEGAL_FIELDS = {
             "groups",
             "link",
             "name",
+            "owner",
             "phone",
             "tags",
             "title",
@@ -3598,17 +3928,46 @@ _LEGAL_FIELDS = {
         ]
     ),
     "tenancy.contactgroup": frozenset(
-        ["comments", "custom_fields", "description", "name", "parent", "slug", "tags"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "parent",
+            "slug",
+            "tags",
+        ]
     ),
     "tenancy.contactrole": frozenset(
-        ["custom_fields", "description", "name", "slug", "tags"]
+        ["comments", "custom_fields", "description", "name", "owner", "slug", "tags"]
     ),
     "tenancy.tenant": frozenset(
-        ["comments", "custom_fields", "description", "group", "name", "slug", "tags"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "group",
+            "name",
+            "owner",
+            "slug",
+            "tags",
+        ]
     ),
     "tenancy.tenantgroup": frozenset(
-        ["comments", "custom_fields", "description", "name", "parent", "slug", "tags"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "parent",
+            "slug",
+            "tags",
+        ]
     ),
+    "users.owner": frozenset(["description", "group", "name"]),
+    "users.ownergroup": frozenset(["description", "name"]),
     "virtualization.cluster": frozenset(
         [
             "comments",
@@ -3616,6 +3975,7 @@ _LEGAL_FIELDS = {
             "description",
             "group",
             "name",
+            "owner",
             "scope_id",
             "scope_type",
             "status",
@@ -3625,13 +3985,21 @@ _LEGAL_FIELDS = {
         ]
     ),
     "virtualization.clustergroup": frozenset(
-        ["custom_fields", "description", "name", "slug", "tags"]
+        ["comments", "custom_fields", "description", "name", "owner", "slug", "tags"]
     ),
     "virtualization.clustertype": frozenset(
-        ["custom_fields", "description", "name", "slug", "tags"]
+        ["comments", "custom_fields", "description", "name", "owner", "slug", "tags"]
     ),
     "virtualization.virtualdisk": frozenset(
-        ["custom_fields", "description", "name", "size", "tags", "virtual_machine"]
+        [
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "size",
+            "tags",
+            "virtual_machine",
+        ]
     ),
     "virtualization.virtualmachine": frozenset(
         [
@@ -3643,12 +4011,14 @@ _LEGAL_FIELDS = {
             "disk",
             "memory",
             "name",
+            "owner",
             "platform",
             "primary_ip4",
             "primary_ip6",
             "role",
             "serial",
             "site",
+            "start_on_boot",
             "status",
             "tags",
             "tenant",
@@ -3664,6 +4034,7 @@ _LEGAL_FIELDS = {
             "mode",
             "mtu",
             "name",
+            "owner",
             "parent",
             "primary_mac_address",
             "qinq_svlan",
@@ -3682,6 +4053,7 @@ _LEGAL_FIELDS = {
             "description",
             "mode",
             "name",
+            "owner",
             "preshared_key",
             "proposals",
             "tags",
@@ -3698,6 +4070,7 @@ _LEGAL_FIELDS = {
             "encryption_algorithm",
             "group",
             "name",
+            "owner",
             "sa_lifetime",
             "tags",
         ]
@@ -3708,6 +4081,7 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "name",
+            "owner",
             "pfs_group",
             "proposals",
             "tags",
@@ -3722,6 +4096,7 @@ _LEGAL_FIELDS = {
             "ipsec_policy",
             "mode",
             "name",
+            "owner",
             "tags",
         ]
     ),
@@ -3733,6 +4108,7 @@ _LEGAL_FIELDS = {
             "description",
             "encryption_algorithm",
             "name",
+            "owner",
             "sa_lifetime_data",
             "sa_lifetime_seconds",
             "tags",
@@ -3747,6 +4123,7 @@ _LEGAL_FIELDS = {
             "identifier",
             "import_targets",
             "name",
+            "owner",
             "slug",
             "status",
             "tags",
@@ -3766,6 +4143,7 @@ _LEGAL_FIELDS = {
             "group",
             "ipsec_profile",
             "name",
+            "owner",
             "status",
             "tags",
             "tenant",
@@ -3773,7 +4151,7 @@ _LEGAL_FIELDS = {
         ]
     ),
     "vpn.tunnelgroup": frozenset(
-        ["custom_fields", "description", "name", "slug", "tags"]
+        ["comments", "custom_fields", "description", "name", "owner", "slug", "tags"]
     ),
     "vpn.tunneltermination": frozenset(
         [
@@ -3795,6 +4173,7 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "group",
+            "owner",
             "scope_id",
             "scope_type",
             "ssid",
@@ -3805,7 +4184,16 @@ _LEGAL_FIELDS = {
         ]
     ),
     "wireless.wirelesslangroup": frozenset(
-        ["comments", "custom_fields", "description", "name", "parent", "slug", "tags"]
+        [
+            "comments",
+            "custom_fields",
+            "description",
+            "name",
+            "owner",
+            "parent",
+            "slug",
+            "tags",
+        ]
     ),
     "wireless.wirelesslink": frozenset(
         [
@@ -3819,6 +4207,7 @@ _LEGAL_FIELDS = {
             "distance_unit",
             "interface_a",
             "interface_b",
+            "owner",
             "ssid",
             "status",
             "tags",
@@ -3959,7 +4348,7 @@ _FORMAT_TRANSFORMATIONS = {
         "weight": transform_float_to_decimal,
     },
     "dcim.frontport": {
-        "rear_port_position": int_from_int64string,
+        "positions": int_from_int64string,
     },
     "dcim.interface": {
         "mtu": int_from_int64string,
@@ -3974,6 +4363,10 @@ _FORMAT_TRANSFORMATIONS = {
     },
     "dcim.moduletypeprofile": {
         "schema": parse_json,
+    },
+    "dcim.portmapping": {
+        "position": int_from_int64string,
+        "rear_port_position": int_from_int64string,
     },
     "dcim.powerfeed": {
         "amperage": int_from_int64string,
