@@ -1,7 +1,7 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Timestamp: 2026-01-12 10:39:08Z
+# Timestamp: 2026-01-12 17:44:14Z
 
 from dataclasses import dataclass
 import datetime
@@ -4315,6 +4315,7 @@ _FORMAT_TRANSFORMATIONS = {
     },
     "dcim.frontport": {
         "positions": int_from_int64string,
+        "rear_port_position": int_from_int64string,
     },
     "dcim.interface": {
         "mtu": int_from_int64string,
