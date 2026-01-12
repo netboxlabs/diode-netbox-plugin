@@ -15,7 +15,7 @@ class NetBoxDiodePluginConfig(PluginConfig):
     description = "Diode plugin for NetBox."
     version = version_semver()
     base_url = "diode"
-    min_version = "4.5.0"
+    min_version = "4.4.10"
     max_version = "4.5.99"
     default_settings = {
         # Default Diode gRPC target for communication with Diode server
