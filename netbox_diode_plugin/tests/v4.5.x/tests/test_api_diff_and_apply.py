@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2025 NetBox Labs, Inc.
+# Copyright 2026 NetBox Labs, Inc.
 """Diode NetBox Plugin - Tests."""
 
 import copy
@@ -13,8 +13,9 @@ from uuid import uuid4
 import netaddr
 from circuits.models import Circuit, Provider
 from core.models import ObjectType
-from dcim.models import Device, Interface, ModuleBay, Site
+from dcim.models import Device, Interface, ModuleBay, RearPort, Site
 from extras.models import CustomField
+from users.models import Owner, OwnerGroup
 from extras.models.customfields import CustomFieldChoiceSet, CustomFieldChoiceSetBaseChoices, CustomFieldTypeChoices
 from ipam.models import IPAddress, VLANGroup
 from rest_framework import status
@@ -1481,6 +1482,142 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         _ = self.diff_and_apply(payload)
         cluster = Cluster.objects.get(name="Cluster A")
         self.assertEqual(cluster.scope.name, "Location 1")
+
+    def test_generate_diff_and_apply_create_and_update_owner(self):
+        """Test generate diff and apply create and update owner (NetBox 4.5.0)."""
+        owner_uuid = str(uuid4())
+        group_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "users.owner",
+            "entity": {
+                "owner": {
+                    "name": f"Owner {owner_uuid}",
+                    "group": {
+                        "name": f"Owner Group {group_uuid}",
+                    },
+                    "description": "Primary network owner",
+                },
+            },
+        }
+        _, response = self.diff_and_apply(payload)
+        new_owner = Owner.objects.get(name=f"Owner {owner_uuid}")
+        self.assertEqual(new_owner.description, "Primary network owner")
+        self.assertEqual(new_owner.group.name, f"Owner Group {group_uuid}")
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "users.owner",
+            "entity": {
+                "owner": {
+                    "name": f"Owner {owner_uuid}",
+                    "group": {
+                        "name": f"Owner Group {group_uuid}",
+                    },
+                    "description": "Updated network owner",
+                },
+            },
+        }
+        _, response = self.diff_and_apply(payload)
+        updated_owner = Owner.objects.get(name=f"Owner {owner_uuid}")
+        self.assertEqual(updated_owner.description, "Updated network owner")
+
+    def test_generate_diff_and_apply_create_and_update_ownergroup(self):
+        """Test generate diff and apply create and update ownergroup (NetBox 4.5.0)."""
+        group_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "users.ownergroup",
+            "entity": {
+                "owner_group": {
+                    "name": f"Owner Group {group_uuid}",
+                    "description": "Network operations team",
+                },
+            },
+        }
+        _, response = self.diff_and_apply(payload)
+        new_group = OwnerGroup.objects.get(name=f"Owner Group {group_uuid}")
+        self.assertEqual(new_group.description, "Network operations team")
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "users.ownergroup",
+            "entity": {
+                "owner_group": {
+                    "name": f"Owner Group {group_uuid}",
+                    "description": "Updated network operations team",
+                },
+            },
+        }
+        _, response = self.diff_and_apply(payload)
+        updated_group = OwnerGroup.objects.get(name=f"Owner Group {group_uuid}")
+        self.assertEqual(updated_group.description, "Updated network operations team")
+
+    def test_generate_diff_and_apply_create_device_with_owner(self):
+        """Test generate diff and apply create device with owner field (NetBox 4.5.0)."""
+        device_uuid = str(uuid4())
+        owner_uuid = str(uuid4())
+        group_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": f"Device {device_uuid}",
+                    "device_type": {
+                        "model": f"Device Type {uuid4()}",
+                        "manufacturer": {
+                            "name": f"Manufacturer {uuid4()}"
+                        }
+                    },
+                    "role": {
+                        "name": f"Role {uuid4()}"
+                    },
+                    "site": {
+                        "name": f"Site {uuid4()}"
+                    },
+                    "owner": {
+                        "name": f"Owner {owner_uuid}",
+                        "group": {
+                            "name": f"Owner Group {group_uuid}",
+                        },
+                    },
+                },
+            }
+        }
+        _, response = self.diff_and_apply(payload)
+        new_device = Device.objects.get(name=f"Device {device_uuid}")
+        self.assertEqual(new_device.owner.name, f"Owner {owner_uuid}")
+
+    def test_generate_diff_and_apply_create_circuit_with_owner(self):
+        """Test generate diff and apply create circuit with owner field (NetBox 4.5.0)."""
+        circuit_uuid = str(uuid4())
+        owner_uuid = str(uuid4())
+        group_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "circuits.circuit",
+            "entity": {
+                "circuit": {
+                    "cid": f"Circuit {circuit_uuid}",
+                    "provider": {
+                        "name": f"Provider {uuid4()}",
+                    },
+                    "type": {
+                        "name": f"Circuit Type {uuid4()}",
+                    },
+                    "owner": {
+                        "name": f"Owner {owner_uuid}",
+                        "group": {
+                            "name": f"Owner Group {group_uuid}",
+                        },
+                    },
+                },
+            },
+        }
+        _, response = self.diff_and_apply(payload)
+        new_circuit = Circuit.objects.get(cid=f"Circuit {circuit_uuid}")
+        self.assertEqual(new_circuit.owner.name, f"Owner {owner_uuid}")
 
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""

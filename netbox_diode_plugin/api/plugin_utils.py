@@ -1,7 +1,7 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Timestamp: 2026-01-08 12:51:01Z
+# Timestamp: 2026-01-12 10:39:08Z
 
 from dataclasses import dataclass
 import datetime
@@ -351,9 +351,6 @@ _JSON_REF_INFO = {
         "owner_group": RefInfo(
             object_type="users.ownergroup", field_name="object", is_generic=True
         ),
-        "port_mapping": RefInfo(
-            object_type="dcim.portmapping", field_name="object", is_generic=True
-        ),
     },
     "circuits.circuit": {
         "assignments": RefInfo(
@@ -548,9 +545,6 @@ _JSON_REF_INFO = {
         "module": RefInfo(object_type="dcim.module", field_name="module"),
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "rear_port": RefInfo(object_type="dcim.rearport", field_name="rear_port"),
-        "rear_ports": RefInfo(
-            object_type="dcim.portmapping", field_name="rear_ports", is_many=True
-        ),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.interface": {
@@ -677,9 +671,6 @@ _JSON_REF_INFO = {
         "parent": RefInfo(object_type="dcim.platform", field_name="parent"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
-    "dcim.portmapping": {
-        "rear_port": RefInfo(object_type="dcim.rearport", field_name="rear_port"),
-    },
     "dcim.powerfeed": {
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "power_panel": RefInfo(object_type="dcim.powerpanel", field_name="power_panel"),
@@ -734,9 +725,6 @@ _JSON_REF_INFO = {
     },
     "dcim.rearport": {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
-        "front_ports": RefInfo(
-            object_type="dcim.portmapping", field_name="front_ports", is_many=True
-        ),
         "module": RefInfo(object_type="dcim.module", field_name="module"),
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
@@ -1166,11 +1154,6 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
-        "assigned_object_port_mapping": RefInfo(
-            object_type="dcim.portmapping",
-            field_name="assigned_object",
-            is_generic=True,
-        ),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "ipam.aggregate": {
@@ -1528,9 +1511,6 @@ _JSON_REF_INFO = {
         ),
         "interface_owner_group": RefInfo(
             object_type="users.ownergroup", field_name="interface", is_generic=True
-        ),
-        "interface_port_mapping": RefInfo(
-            object_type="dcim.portmapping", field_name="interface", is_generic=True
         ),
     },
     "ipam.ipaddress": {
@@ -1991,9 +1971,6 @@ _JSON_REF_INFO = {
         ),
         "object_owner_group": RefInfo(
             object_type="users.ownergroup", field_name="object", is_generic=True
-        ),
-        "object_port_mapping": RefInfo(
-            object_type="dcim.portmapping", field_name="object", is_generic=True
         ),
         "role": RefInfo(object_type="tenancy.contactrole", field_name="role"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
@@ -2515,11 +2492,6 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
-        "assigned_object_port_mapping": RefInfo(
-            object_type="dcim.portmapping",
-            field_name="assigned_object",
-            is_generic=True,
-        ),
         "l2vpn": RefInfo(object_type="vpn.l2vpn", field_name="l2vpn"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -2888,9 +2860,6 @@ _JSON_REF_INFO = {
         "termination_owner_group": RefInfo(
             object_type="users.ownergroup", field_name="termination", is_generic=True
         ),
-        "termination_port_mapping": RefInfo(
-            object_type="dcim.portmapping", field_name="termination", is_generic=True
-        ),
         "tunnel": RefInfo(object_type="vpn.tunnel", field_name="tunnel"),
     },
     "wireless.wirelesslan": {
@@ -3213,7 +3182,6 @@ _LEGAL_FIELDS = {
             "positions",
             "rear_port",
             "rear_port_position",
-            "rear_ports",
             "tags",
             "type",
         ]
@@ -3383,7 +3351,6 @@ _LEGAL_FIELDS = {
             "tags",
         ]
     ),
-    "dcim.portmapping": frozenset(["position", "rear_port", "rear_port_position"]),
     "dcim.powerfeed": frozenset(
         [
             "amperage",
@@ -3540,7 +3507,6 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "device",
-            "front_ports",
             "label",
             "mark_connected",
             "module",
@@ -4363,10 +4329,6 @@ _FORMAT_TRANSFORMATIONS = {
     },
     "dcim.moduletypeprofile": {
         "schema": parse_json,
-    },
-    "dcim.portmapping": {
-        "position": int_from_int64string,
-        "rear_port_position": int_from_int64string,
     },
     "dcim.powerfeed": {
         "amperage": int_from_int64string,

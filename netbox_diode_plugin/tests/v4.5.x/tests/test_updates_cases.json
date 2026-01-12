@@ -6127,5 +6127,158 @@
         "update_expect": {
             "description": "Point-to-point wireless backhaul link Updated"
         }
+    },
+    {
+        "name": "users_owner_1",
+        "object_type": "users.owner",
+        "lookup": {"name": "Owner 1"},
+        "create_expect": {
+            "name": "Owner 1",
+            "description": "Primary network owner",
+            "group.name": "Owner Group 1"
+        },
+        "create": {
+            "owner": {
+                "name": "Owner 1",
+                "group": {
+                    "name": "Owner Group 1"
+                },
+                "description": "Primary network owner"
+            }
+        },
+        "update": {
+            "owner": {
+                "name": "Owner 1",
+                "group": {
+                    "name": "Owner Group 1"
+                },
+                "description": "Primary network owner updated"
+            }
+        },
+        "update_expect": {
+            "description": "Primary network owner updated"
+        }
+    },
+    {
+        "name": "users_ownergroup_1",
+        "object_type": "users.ownergroup",
+        "lookup": {"name": "Owner Group 1"},
+        "create_expect": {
+            "name": "Owner Group 1",
+            "description": "Network operations team"
+        },
+        "create": {
+            "owner_group": {
+                "name": "Owner Group 1",
+                "description": "Network operations team"
+            }
+        },
+        "update": {
+            "owner_group": {
+                "name": "Owner Group 1",
+                "description": "Network operations team updated"
+            }
+        },
+        "update_expect": {
+            "description": "Network operations team updated"
+        }
+    },
+    {
+        "name": "circuits_circuit_with_owner_1",
+        "object_type": "circuits.circuit",
+        "lookup": {"cid": "CIRCUIT-OWNER-001"},
+        "create_expect": {
+            "cid": "CIRCUIT-OWNER-001",
+            "provider.name": "Provider 1",
+            "type.name": "Circuit Type 1",
+            "owner.name": "Owner 1"
+        },
+        "create": {
+            "circuit": {
+                "cid": "CIRCUIT-OWNER-001",
+                "provider": {"name": "Provider 1"},
+                "type": {"name": "Circuit Type 1"},
+                "owner": {
+                    "name": "Owner 1",
+                    "group": {"name": "Owner Group 1"}
+                },
+                "status": "active",
+                "description": "Circuit with owner",
+                "comments": "Test circuit ownership",
+                "tags": [{"name": "Tag 1"}]
+            }
+        },
+        "update": {
+            "circuit": {
+                "cid": "CIRCUIT-OWNER-001",
+                "provider": {"name": "Provider 1"},
+                "type": {"name": "Circuit Type 1"},
+                "owner": {
+                    "name": "Owner 1",
+                    "group": {"name": "Owner Group 1"}
+                },
+                "status": "active",
+                "description": "Circuit with owner updated",
+                "comments": "Test circuit ownership",
+                "tags": [{"name": "Tag 1"}]
+            }
+        },
+        "update_expect": {
+            "description": "Circuit with owner updated"
+        }
+    },
+    {
+        "name": "dcim_device_with_owner_1",
+        "object_type": "dcim.device",
+        "lookup": {"name": "Device With Owner 1"},
+        "create_expect": {
+            "name": "Device With Owner 1",
+            "role.name": "Device Role 1",
+            "device_type.manufacturer.name": "Cisco",
+            "device_type.model": "C9300",
+            "site.name": "Site 1",
+            "owner.name": "Owner 1"
+        },
+        "create": {
+            "device": {
+                "name": "Device With Owner 1",
+                "role": {"name": "Device Role 1"},
+                "device_type": {
+                    "manufacturer": {"name": "Cisco"},
+                    "model": "C9300"
+                },
+                "site": {"name": "Site 1"},
+                "owner": {
+                    "name": "Owner 1",
+                    "group": {"name": "Owner Group 1"}
+                },
+                "status": "active",
+                "description": "Device with owner",
+                "comments": "Test device ownership",
+                "tags": [{"name": "Tag 1"}]
+            }
+        },
+        "update": {
+            "device": {
+                "name": "Device With Owner 1",
+                "role": {"name": "Device Role 1"},
+                "device_type": {
+                    "manufacturer": {"name": "Cisco"},
+                    "model": "C9300"
+                },
+                "site": {"name": "Site 1"},
+                "owner": {
+                    "name": "Owner 1",
+                    "group": {"name": "Owner Group 1"}
+                },
+                "status": "active",
+                "description": "Device with owner updated",
+                "comments": "Test device ownership",
+                "tags": [{"name": "Tag 1"}]
+            }
+        },
+        "update_expect": {
+            "description": "Device with owner updated"
+        }
     }
 ]

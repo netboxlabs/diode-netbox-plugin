@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2025 NetBox Labs, Inc.
+# Copyright 2026 NetBox Labs, Inc.
 """Diode NetBox Plugin - Tests."""
 
 import logging
