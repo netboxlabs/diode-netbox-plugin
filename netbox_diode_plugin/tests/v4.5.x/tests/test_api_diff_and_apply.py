@@ -13,11 +13,11 @@ from uuid import uuid4
 import netaddr
 from circuits.models import Circuit, Provider
 from core.models import ObjectType
-from dcim.models import Device, Interface, ModuleBay, RearPort, Site
+from dcim.models import Device, FrontPort, Interface, ModuleBay, RearPort, Site
 from extras.models import CustomField
 from users.models import Owner, OwnerGroup
 from extras.models.customfields import CustomFieldChoiceSet, CustomFieldChoiceSetBaseChoices, CustomFieldTypeChoices
-from ipam.models import IPAddress, VLANGroup
+from ipam.models import ASN, IPAddress, VLANGroup, VLANTranslationPolicy
 from rest_framework import status
 from utilities.testing import APITestCase
 from virtualization.models import Cluster, VMInterface
@@ -1618,6 +1618,201 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         _, response = self.diff_and_apply(payload)
         new_circuit = Circuit.objects.get(cid=f"Circuit {circuit_uuid}")
         self.assertEqual(new_circuit.owner.name, f"Owner {owner_uuid}")
+
+    def test_generate_diff_and_apply_update_device_owner(self):
+        """Test generate diff and apply update device owner (NetBox 4.5.0)."""
+        device_uuid = str(uuid4())
+        site_uuid = str(uuid4())
+        owner1_uuid = str(uuid4())
+        owner2_uuid = str(uuid4())
+        group_uuid = str(uuid4())
+
+        # Create device with initial owner
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": f"Device {device_uuid}",
+                    "device_type": {
+                        "model": f"Device Type {uuid4()}",
+                        "manufacturer": {
+                            "name": f"Manufacturer {uuid4()}"
+                        }
+                    },
+                    "role": {
+                        "name": f"Role {uuid4()}"
+                    },
+                    "site": {
+                        "name": f"Site {site_uuid}"
+                    },
+                    "owner": {
+                        "name": f"Owner {owner1_uuid}",
+                        "group": {
+                            "name": f"Owner Group {group_uuid}",
+                        },
+                    },
+                },
+            }
+        }
+        _, response = self.diff_and_apply(payload)
+        device = Device.objects.get(name=f"Device {device_uuid}")
+        self.assertEqual(device.owner.name, f"Owner {owner1_uuid}")
+
+        # Update device to different owner
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": f"Device {device_uuid}",
+                    "device_type": {
+                        "model": f"Device Type {uuid4()}",
+                        "manufacturer": {
+                            "name": f"Manufacturer {uuid4()}"
+                        }
+                    },
+                    "role": {
+                        "name": f"Role {uuid4()}"
+                    },
+                    "site": {
+                        "name": f"Site {site_uuid}"
+                    },
+                    "owner": {
+                        "name": f"Owner {owner2_uuid}",
+                        "group": {
+                            "name": f"Owner Group {group_uuid}",
+                        },
+                    },
+                },
+            }
+        }
+        _, response = self.diff_and_apply(payload)
+        device = Device.objects.get(name=f"Device {device_uuid}")
+        self.assertEqual(device.owner.name, f"Owner {owner2_uuid}")
+
+    def test_generate_diff_and_apply_create_frontport_with_positions(self):
+        """Test generate diff and apply create frontport with positions field (NetBox 4.5.0)."""
+        device_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.frontport",
+            "entity": {
+                "front_port": {
+                    "device": {
+                        "name": f"Device {device_uuid}",
+                        "device_type": {
+                            "manufacturer": {"name": f"Manufacturer {uuid4()}"},
+                            "model": f"Device Type {uuid4()}"
+                        },
+                        "role": {"name": f"Role {uuid4()}"},
+                        "site": {"name": f"Site {uuid4()}"}
+                    },
+                    "name": f"Front Port {uuid4()}",
+                    "type": "8p8c",
+                    "rear_port": {
+                        "device": {
+                            "name": f"Device {device_uuid}",
+                            "device_type": {
+                                "manufacturer": {"name": f"Manufacturer {uuid4()}"},
+                                "model": f"Device Type {uuid4()}"
+                            },
+                            "role": {"name": f"Role {uuid4()}"},
+                            "site": {"name": f"Site {uuid4()}"}
+                        },
+                        "name": f"Rear Port {uuid4()}",
+                        "type": "8p8c",
+                        "positions": "2"
+                    },
+                    "rear_port_position": "1",
+                    "description": "Front port with positions"
+                }
+            }
+        }
+        _, response = self.diff_and_apply(payload)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_generate_diff_and_apply_create_rearport(self):
+        """Test generate diff and apply create rearport (NetBox 4.5.0)."""
+        device_uuid = str(uuid4())
+        rearport_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.rearport",
+            "entity": {
+                "rear_port": {
+                    "device": {
+                        "name": f"Device {device_uuid}",
+                        "device_type": {
+                            "manufacturer": {"name": f"Manufacturer {uuid4()}"},
+                            "model": f"Device Type {uuid4()}"
+                        },
+                        "role": {"name": f"Role {uuid4()}"},
+                        "site": {"name": f"Site {uuid4()}"}
+                    },
+                    "name": f"Rear Port {rearport_uuid}",
+                    "type": "8p8c",
+                    "positions": "4",
+                    "description": "Rear port with multiple positions"
+                }
+            }
+        }
+        _, response = self.diff_and_apply(payload)
+        new_rearport = RearPort.objects.get(name=f"Rear Port {rearport_uuid}")
+        self.assertEqual(new_rearport.positions, 4)
+        self.assertEqual(new_rearport.type, "8p8c")
+
+    def test_generate_diff_and_apply_create_asn_with_sites(self):
+        """Test generate diff and apply create ASN with sites field (NetBox 4.5.0)."""
+        site1_uuid = str(uuid4())
+        site2_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.asn",
+            "entity": {
+                "asn": {
+                    "asn": "65001",
+                    "rir": {"name": f"RIR {uuid4()}"},
+                    "description": "ASN with multiple sites",
+                    "sites": [
+                        {"name": f"Site {site1_uuid}"},
+                        {"name": f"Site {site2_uuid}"}
+                    ]
+                }
+            }
+        }
+        _, response = self.diff_and_apply(payload)
+        new_asn = ASN.objects.get(asn=65001)
+        self.assertEqual(new_asn.sites.count(), 2)
+        site_names = [site.name for site in new_asn.sites.all()]
+        self.assertIn(f"Site {site1_uuid}", site_names)
+        self.assertIn(f"Site {site2_uuid}", site_names)
+
+    def test_generate_diff_and_apply_create_vlan_translation_policy(self):
+        """Test generate diff and apply create VLAN translation policy (NetBox 4.5.0)."""
+        policy_uuid = str(uuid4())
+        owner_uuid = str(uuid4())
+        group_uuid = str(uuid4())
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.vlantranslationpolicy",
+            "entity": {
+                "vlan_translation_policy": {
+                    "name": f"VLAN Translation Policy {policy_uuid}",
+                    "description": "Policy for VLAN translation",
+                    "owner": {
+                        "name": f"Owner {owner_uuid}",
+                        "group": {
+                            "name": f"Owner Group {group_uuid}",
+                        },
+                    },
+                }
+            }
+        }
+        _, response = self.diff_and_apply(payload)
+        new_policy = VLANTranslationPolicy.objects.get(name=f"VLAN Translation Policy {policy_uuid}")
+        self.assertEqual(new_policy.description, "Policy for VLAN translation")
+        self.assertEqual(new_policy.owner.name, f"Owner {owner_uuid}")
 
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
