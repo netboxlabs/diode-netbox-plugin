@@ -15,10 +15,10 @@ from circuits.models import Circuit, Provider
 from core.models import ObjectType
 from dcim.models import Device, FrontPort, Interface, ModuleBay, RearPort, Site
 from extras.models import CustomField
-from users.models import Owner, OwnerGroup
 from extras.models.customfields import CustomFieldChoiceSet, CustomFieldChoiceSetBaseChoices, CustomFieldTypeChoices
 from ipam.models import ASN, IPAddress, VLANGroup, VLANTranslationPolicy
 from rest_framework import status
+from users.models import Owner, OwnerGroup
 from utilities.testing import APITestCase
 from virtualization.models import Cluster, VMInterface
 
