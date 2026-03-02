@@ -1814,6 +1814,91 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_policy.description, "Policy for VLAN translation")
         self.assertEqual(new_policy.owner.name, f"Owner {owner_uuid}")
 
+    def test_multiobject_cf_rediff_noop(self):
+        """Test that re-diffing a device with multiobject custom field produces no changes.
+
+        INT-219: multiobject custom field values are order-insensitive (sets),
+        but the differ was comparing them as ordered lists. This caused phantom
+        changesets on every re-diff because the "before" IDs (from queryset,
+        ordered by name) didn't match the "desired" IDs (sorted numerically).
+        """
+        device_cf = CustomField.objects.create(
+            name='int219_multi_sites',
+            type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            required=False,
+            related_object_type=ObjectType.objects.get_for_model(Site),
+        )
+        device_object_type = ObjectType.objects.get_for_model(Device)
+        device_cf.object_types.set([device_object_type])
+        device_cf.save()
+
+        # Pre-create "Gamma" so it gets a LOWER ID than Alpha and Beta.
+        # When diff+apply later creates Alpha and Beta, they get higher IDs.
+        # This ensures name-alphabetical order (Alpha, Beta, Gamma) differs
+        # from numeric ID order (Gamma, Alpha, Beta) — which triggers the bug.
+        Site.objects.create(name="INT219-Site-Gamma", slug="int219-site-gamma")
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": "INT219-Test-Device",
+                    "role": {"name": "INT219-Role"},
+                    "site": {"name": "INT219-Site-Primary"},
+                    "device_type": {
+                        "model": "INT219-Model",
+                        "manufacturer": {"name": "INT219-Manufacturer"},
+                    },
+                    "serial": "INT219-SERIAL-001",
+                    "custom_fields": {
+                        "int219_multi_sites": {
+                            "multiple_objects": [
+                                {"site": {"name": "INT219-Site-Alpha"}},
+                                {"site": {"name": "INT219-Site-Beta"}},
+                                {"site": {"name": "INT219-Site-Gamma"}},
+                            ],
+                        },
+                    },
+                },
+            },
+        }
+
+        # First diff+apply: creates the device, Alpha, Beta (Gamma already exists)
+        self.diff_and_apply(payload)
+        device = Device.objects.get(name="INT219-Test-Device")
+        self.assertIsNotNone(device)
+        self.assertEqual(len(device.custom_field_data['int219_multi_sites']), 3)
+
+        # Verify IDs are NOT in alphabetical-name order (precondition for the bug)
+        alpha = Site.objects.get(name="INT219-Site-Alpha")
+        beta = Site.objects.get(name="INT219-Site-Beta")
+        gamma = Site.objects.get(name="INT219-Site-Gamma")
+        name_order_ids = [alpha.pk, beta.pk, gamma.pk]
+        numeric_order_ids = sorted(name_order_ids)
+        self.assertNotEqual(
+            name_order_ids, numeric_order_ids,
+            "Test precondition failed: IDs happen to match name order. "
+            "Pre-creating Gamma should have given it a lower ID than Alpha/Beta."
+        )
+
+        # Step 2: Re-diff with the exact same payload.
+        # Before the fix, this produces a false "update" changeset because
+        # cf.serialize() returns IDs in queryset name-order [alpha, beta, gamma]
+        # but the transformer sorts resolved IDs numerically [gamma, alpha, beta].
+        response = self.client.post(
+            self.diff_url, data=payload, format="json", **self.authorization_header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        cs = response.json().get("change_set", {})
+        changes = cs.get("changes", [])
+
+        # The re-diff should produce NO changes — the data hasn't changed.
+        self.assertEqual(
+            changes, [],
+            f"Expected no changes on re-diff, but got: {changes}"
+        )
+
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
         response1 = self.client.post(

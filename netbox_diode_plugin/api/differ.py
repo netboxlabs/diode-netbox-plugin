@@ -80,7 +80,10 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
             if isinstance(value, datetime.datetime | datetime.date):
                 cfmap[cf.name] = value
             else:
-                cfmap[cf.name] = cf.serialize(value)
+                serialized = cf.serialize(value)
+                if isinstance(serialized, list):
+                    serialized = sort_ints_first(serialized)
+                cfmap[cf.name] = serialized
         prechange_data["custom_fields"] = cfmap
     prechange_data = harmonize_formats(prechange_data)
 
