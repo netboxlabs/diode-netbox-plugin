@@ -1815,7 +1815,8 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_policy.owner.name, f"Owner {owner_uuid}")
 
     def test_multiobject_cf_rediff_noop(self):
-        """Test that re-diffing a device with multiobject custom field produces no changes.
+        """
+        Test that re-diffing a device with multiobject custom field produces no changes.
 
         INT-219: multiobject custom field values are order-insensitive (sets),
         but the differ was comparing them as ordered lists. This caused phantom
