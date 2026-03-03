@@ -8,6 +8,7 @@ import logging
 from collections import defaultdict
 
 from django.contrib.contenttypes.models import ContentType
+from extras.choices import CustomFieldTypeChoices
 from rest_framework import serializers
 from utilities.data import shallow_compare_dict
 
@@ -80,7 +81,13 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
             if isinstance(value, datetime.datetime | datetime.date):
                 cfmap[cf.name] = value
             else:
-                cfmap[cf.name] = cf.serialize(value)
+                serialized = cf.serialize(value)
+                if isinstance(serialized, list) and cf.type in (
+                    CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+                    CustomFieldTypeChoices.TYPE_MULTISELECT,
+                ):
+                    serialized = sort_ints_first(serialized)
+                cfmap[cf.name] = serialized
         prechange_data["custom_fields"] = cfmap
     prechange_data = harmonize_formats(prechange_data)
 
