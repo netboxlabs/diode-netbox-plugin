@@ -27,10 +27,12 @@ class QueryCounter:
     """Database execute wrapper that counts queries and measures total DB time."""
 
     def __init__(self):
+        """Initialize the query counter."""
         self.count = 0
         self.total_time = 0.0
 
     def __call__(self, execute, sql, params, many, context):
+        """Wrap a database query execution, tracking count and time."""
         start = time.monotonic()
         try:
             return execute(sql, params, many, context)
@@ -43,17 +45,20 @@ class ProfileContext:
     """Stores profiling data for a single request."""
 
     def __init__(self, query_counter):
+        """Initialize the profile context."""
         self.start_time = time.monotonic()
         self.timings = defaultdict(lambda: {"count": 0, "total_ms": 0.0})
         self.counters = defaultdict(int)
         self.query_counter = query_counter
 
     def record_timing(self, name, duration_ms):
+        """Record a named timing measurement in milliseconds."""
         entry = self.timings[name]
         entry["count"] += 1
         entry["total_ms"] += duration_ms
 
     def increment(self, name, amount=1):
+        """Increment a named counter."""
         self.counters[name] += amount
 
     def db_query_snapshot(self):
@@ -61,6 +66,7 @@ class ProfileContext:
         return self.query_counter.count
 
     def summary(self):
+        """Return a summary string of all collected profiling data."""
         total_ms = (time.monotonic() - self.start_time) * 1000
         parts = [
             f"total_ms={total_ms:.1f}",
@@ -120,9 +126,11 @@ class DiodeProfileMiddleware:
     """
 
     def __init__(self, get_response):
+        """Initialize the middleware."""
         self.get_response = get_response
 
     def __call__(self, request):
+        """Process a request, collecting profiling data for Diode endpoints."""
         if not PROFILE_ENABLED or "/plugins/diode/" not in request.path:
             return self.get_response(request)
 
