@@ -17,6 +17,8 @@ from netbox_diode_plugin.plugin_config import (
     get_required_token_audience,
 )
 
+from .profile import get_profile_ctx, profiled
+
 logger = logging.getLogger("netbox.diode_data")
 
 
@@ -41,13 +43,21 @@ class DiodeOAuth2Authentication(BaseAuthentication):
 
         return (diode_user.user, None)
 
+    @profiled("auth")
     def _introspect_token(self, token: str):
         """Introspect the token and return the client info."""
+        ctx = get_profile_ctx()
+
         hash_token = hashlib.sha256(token.encode()).hexdigest()
         cache_key = f"diode:oauth2:introspect:{hash_token}"
         cached_user = cache.get(cache_key)
         if cached_user:
+            if ctx:
+                ctx.increment("auth_cache_hit")
             return cached_user
+
+        if ctx:
+            ctx.increment("auth_cache_miss")
 
         introspect_url = get_diode_auth_introspect_url()
 

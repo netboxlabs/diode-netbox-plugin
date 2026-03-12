@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - API - Object matching utilities."""
 
 import logging
+import time
 from dataclasses import dataclass
 from functools import cache, lru_cache
 
@@ -14,11 +15,13 @@ from django.db.models import F, Value
 from django.db.models.fields import SlugField
 from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
+from django.db.models.signals import post_delete, post_save
 from extras.models.customfields import CustomField
 
 from .common import UnresolvedReference
 from .compat import in_version_range
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model
+from .profile import get_profile_ctx
 
 logger = logging.getLogger(__name__)
 
@@ -680,23 +683,37 @@ class AutoSlugMatcher:
         return '_auto_slug' in data
 
 
+@lru_cache(maxsize=256)
+def _get_custom_field_matchers(model_class) -> tuple:
+    """Get matchers for unique custom fields (cached)."""
+    if not hasattr(model_class, "get_custom_fields"):
+        return ()
+    unique_custom_fields = CustomField.objects.get_for_model(model_class).filter(unique=True)
+    if not unique_custom_fields:
+        return ()
+    return tuple(
+        CustomFieldMatcher(
+            model_class=model_class,
+            custom_field=cf.name,
+            name=f"unique_custom_field_{cf.name}",
+        )
+        for cf in unique_custom_fields
+    )
+
+
+def _on_custom_field_change(**kwargs):
+    _get_custom_field_matchers.cache_clear()
+
+
+post_save.connect(_on_custom_field_change, sender=CustomField)
+post_delete.connect(_on_custom_field_change, sender=CustomField)
+
+
 def get_model_matchers(model_class) -> list:
     """Extract unique constraints from a Django model."""
     matchers = []
     matchers += _get_model_matchers(model_class)
-
-    # TODO(ltucker): this should also be cacheable, but we need a signal to invalidate
-    if hasattr(model_class, "get_custom_fields"):
-        unique_custom_fields = CustomField.objects.get_for_model(model_class).filter(unique=True)
-        if unique_custom_fields:
-            for cf in unique_custom_fields:
-                matchers.append(
-                    CustomFieldMatcher(
-                        model_class=model_class,
-                        custom_field=cf.name,
-                        name=f"unique_custom_field_{cf.name}",
-                    )
-                )
+    matchers += _get_custom_field_matchers(model_class)
     matchers += _get_autoslug_matchers(model_class)
     return matchers
 
@@ -871,6 +888,12 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
 
     Returns the object if found, otherwise None.
     """
+    ctx = get_profile_ctx()
+    start = time.monotonic() if ctx else None
+    queries_before = ctx.db_query_snapshot() if ctx else 0
+    matchers_checked = 0
+    result = None
+
     model_class = get_object_type_model(object_type)
     for matcher in get_model_matchers(model_class):
         if not matcher.has_required_fields(data):
@@ -878,7 +901,15 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
         q = matcher.build_queryset(data)
         if q is None:
             continue
+        matchers_checked += 1
         existing = q.order_by('pk').first()
         if existing is not None:
-            return existing
-    return None
+            result = existing
+            break
+
+    if ctx:
+        ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
+        ctx.increment("find_obj_matchers_checked", matchers_checked)
+        ctx.increment("find_obj_queries", ctx.db_query_snapshot() - queries_before)
+        ctx.increment("find_obj_found" if result else "find_obj_not_found")
+    return result

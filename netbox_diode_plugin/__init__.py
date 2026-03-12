@@ -17,6 +17,9 @@ class NetBoxDiodePluginConfig(PluginConfig):
     base_url = "diode"
     min_version = "4.4.10"
     max_version = "4.5.99"
+    middleware = [
+        "netbox_diode_plugin.api.profile.DiodeProfileMiddleware",
+    ]
     default_settings = {
         # Default Diode gRPC target for communication with Diode server
         "diode_target": "grpc://localhost:8080/diode",
