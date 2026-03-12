@@ -10,16 +10,16 @@ from rest_framework import views
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from netbox_diode_plugin.api.applier import apply_changeset
-from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
-from netbox_diode_plugin.api.common import (
+from .applier import apply_changeset
+from .authentication import DiodeOAuth2Authentication
+from .common import (
     Change,
     ChangeSet,
     ChangeSetException,
     ChangeSetResult,
 )
-from netbox_diode_plugin.api.differ import generate_changeset
-from netbox_diode_plugin.api.permissions import (
+from .differ import generate_changeset
+from .permissions import (
     SCOPE_NETBOX_READ,
     SCOPE_NETBOX_WRITE,
     IsAuthenticated,

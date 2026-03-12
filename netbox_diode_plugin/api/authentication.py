@@ -11,12 +11,13 @@ from django.core.cache import cache
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 
-from netbox_diode_plugin.api.profile import get_profile_ctx, profiled
 from netbox_diode_plugin.plugin_config import (
     get_diode_auth_introspect_url,
     get_diode_user,
     get_required_token_audience,
 )
+
+from .profile import get_profile_ctx, profiled
 
 logger = logging.getLogger("netbox.diode_data")
 
