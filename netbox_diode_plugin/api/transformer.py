@@ -12,6 +12,7 @@ from collections import defaultdict
 from functools import lru_cache
 from uuid import uuid4
 
+from django.db.models.signals import post_delete, post_save
 from django.utils.text import slugify
 from extras.models.customfields import CustomField
 from rest_framework import serializers
@@ -26,7 +27,6 @@ from .plugin_utils import (
     get_primary_value,
     legal_fields,
 )
-
 logger = logging.getLogger("netbox.diode_data")
 
 @lru_cache(maxsize=128)
@@ -372,9 +372,23 @@ def _cache_location_ref(entity: dict, ref: UnresolvedReference|None):
         uuid=ref.uuid,
     )
 
+@lru_cache(maxsize=256)
+def _get_custom_fields_for_model(model):
+    """Cached wrapper for CustomField.objects.get_for_model()."""
+    return tuple(CustomField.objects.get_for_model(model))
+
+
+def _on_custom_field_change(**kwargs):
+    _get_custom_fields_for_model.cache_clear()
+
+
+post_save.connect(_on_custom_field_change, sender=CustomField)
+post_delete.connect(_on_custom_field_change, sender=CustomField)
+
+
 def set_custom_field_defaults(entity: dict, model):
     """Set default values for custom fields in an entity."""
-    custom_fields = CustomField.objects.get_for_model(model)
+    custom_fields = _get_custom_fields_for_model(model)
     if custom_fields:
         custom_field_data = entity.get('custom_fields')
         if custom_field_data is None:

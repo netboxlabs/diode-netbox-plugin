@@ -16,6 +16,8 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 from extras.models.customfields import CustomField
 
+from django.db.models.signals import post_delete, post_save
+
 from .common import UnresolvedReference
 from .compat import in_version_range
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model
@@ -680,23 +682,37 @@ class AutoSlugMatcher:
         return '_auto_slug' in data
 
 
+@lru_cache(maxsize=256)
+def _get_custom_field_matchers(model_class) -> tuple:
+    """Get matchers for unique custom fields (cached)."""
+    if not hasattr(model_class, "get_custom_fields"):
+        return ()
+    unique_custom_fields = CustomField.objects.get_for_model(model_class).filter(unique=True)
+    if not unique_custom_fields:
+        return ()
+    return tuple(
+        CustomFieldMatcher(
+            model_class=model_class,
+            custom_field=cf.name,
+            name=f"unique_custom_field_{cf.name}",
+        )
+        for cf in unique_custom_fields
+    )
+
+
+def _on_custom_field_change(**kwargs):
+    _get_custom_field_matchers.cache_clear()
+
+
+post_save.connect(_on_custom_field_change, sender=CustomField)
+post_delete.connect(_on_custom_field_change, sender=CustomField)
+
+
 def get_model_matchers(model_class) -> list:
     """Extract unique constraints from a Django model."""
     matchers = []
     matchers += _get_model_matchers(model_class)
-
-    # TODO(ltucker): this should also be cacheable, but we need a signal to invalidate
-    if hasattr(model_class, "get_custom_fields"):
-        unique_custom_fields = CustomField.objects.get_for_model(model_class).filter(unique=True)
-        if unique_custom_fields:
-            for cf in unique_custom_fields:
-                matchers.append(
-                    CustomFieldMatcher(
-                        model_class=model_class,
-                        custom_field=cf.name,
-                        name=f"unique_custom_field_{cf.name}",
-                    )
-                )
+    matchers += _get_custom_field_matchers(model_class)
     matchers += _get_autoslug_matchers(model_class)
     return matchers
 
