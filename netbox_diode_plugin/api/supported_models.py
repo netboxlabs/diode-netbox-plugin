@@ -14,7 +14,7 @@ from django.db.models.fields import NOT_PROVIDED
 from rest_framework import serializers
 from utilities.api import get_serializer_for_model as netbox_get_serializer_for_model
 
-from netbox_diode_plugin.api.plugin_utils import legal_fields, legal_object_types
+from .plugin_utils import legal_fields, legal_object_types
 
 logger = logging.getLogger(__name__)
 

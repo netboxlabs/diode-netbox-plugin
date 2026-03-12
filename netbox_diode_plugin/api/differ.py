@@ -24,11 +24,13 @@ from .common import (
     sort_ints_first,
 )
 from .plugin_utils import get_primary_value, legal_fields
+from .profile import profiled
 from .supported_models import extract_supported_models
 from .transformer import cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
 
 logger = logging.getLogger(__name__)
 
+@profiled("prechange_data")
 def prechange_data_from_instance(instance) -> dict: # noqa: C901
     """Convert model instance data to a dictionary format for comparison."""
     prechange_data = {}
@@ -177,6 +179,7 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
         logger.error(f"Unexpected error generating changeset: {e}")
         raise
 
+@profiled("generate_changeset")
 def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
     """Generate a changeset for an entity."""
     change_set = ChangeSet()
