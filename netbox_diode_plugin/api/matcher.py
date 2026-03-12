@@ -15,9 +15,8 @@ from django.db.models import F, Value
 from django.db.models.fields import SlugField
 from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
-from extras.models.customfields import CustomField
-
 from django.db.models.signals import post_delete, post_save
+from extras.models.customfields import CustomField
 
 from .common import UnresolvedReference
 from .compat import in_version_range

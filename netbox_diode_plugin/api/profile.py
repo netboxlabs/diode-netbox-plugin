@@ -83,7 +83,8 @@ class ProfileContext:
 
 
 def profiled(name):
-    """Decorator to time a function and record it in the profile context.
+    """
+    Decorator to time a function and record it in the profile context.
 
     No-op when no profile context exists (i.e. outside of a profiled request).
     """
@@ -108,7 +109,8 @@ def profiled(name):
 
 
 class DiodeProfileMiddleware:
-    """Django middleware for profiling Diode plugin API requests.
+    """
+    Django middleware for profiling Diode plugin API requests.
 
     Wraps each request to the plugin API with:
     - Total request timing
