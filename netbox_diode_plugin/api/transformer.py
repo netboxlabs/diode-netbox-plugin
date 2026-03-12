@@ -27,6 +27,8 @@ from .plugin_utils import (
     get_primary_value,
     legal_fields,
 )
+from .profile import profiled
+
 logger = logging.getLogger("netbox.diode_data")
 
 @lru_cache(maxsize=128)
@@ -88,6 +90,7 @@ _IS_CIRCULAR_REFERENCE = {
 def _is_circular_reference(object_type, field_name):
     return field_name in _IS_CIRCULAR_REFERENCE.get(object_type, frozenset())
 
+@profiled("transform")
 def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]: # noqa: C901
     """
     Transform keys of proto json dict to flattened dictionaries with model field keys.
@@ -421,6 +424,7 @@ def _generate_slug(object_type, data):
         return slugify(str(source_value))
     return None
 
+@profiled("fingerprint_dedupe")
 def _fingerprint_dedupe(entities: list[dict]) -> list[dict]: # noqa: C901
     """
     Deduplicates/merges entities by fingerprint.
@@ -513,6 +517,7 @@ def _update_dict_refs(data, new_refs):
             _update_dict_refs(v, new_refs)
 
 
+@profiled("resolve_refs")
 def _resolve_existing_references(entities: list[dict]) -> list[dict]:
     seen = {}
     new_refs = {}

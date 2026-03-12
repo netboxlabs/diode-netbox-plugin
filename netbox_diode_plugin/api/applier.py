@@ -13,11 +13,13 @@ from rest_framework.exceptions import ValidationError as ValidationError
 from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
 from .matcher import find_existing_object
 from .plugin_utils import get_object_type_model, legal_fields
+from .profile import profiled
 from .supported_models import get_serializer_for_model
 
 logger = logging.getLogger(__name__)
 
 
+@profiled("apply_changeset")
 def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     """Apply a change set."""
     _validate_change_set(change_set)
