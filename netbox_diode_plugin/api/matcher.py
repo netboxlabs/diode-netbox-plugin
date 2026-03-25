@@ -4,7 +4,6 @@
 
 import hashlib
 import logging
-import os
 import time
 from dataclasses import dataclass
 from functools import cache, lru_cache
@@ -20,6 +19,7 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 from django.db.models.signals import post_delete, post_save
 from extras.models.customfields import CustomField
+from netbox.plugins import get_plugin_config
 
 from .common import UnresolvedReference
 from .compat import in_version_range
@@ -28,8 +28,11 @@ from .profile import get_profile_ctx
 
 logger = logging.getLogger(__name__)
 
-FIND_OBJ_CACHE_TTL = int(os.environ.get("DIODE_FIND_OBJ_CACHE_TTL", "5"))
 _FIND_OBJ_NOT_FOUND = 0  # sentinel — real PKs are always >= 1
+
+
+def _get_find_obj_cache_ttl() -> int:
+    return get_plugin_config("netbox_diode_plugin", "find_obj_cache_ttl")
 
 #
 # these matchers are not driven by netbox unique constraints,
@@ -924,7 +927,8 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
     cache_hit = False
 
     model_class = get_object_type_model(object_type)
-    cache_key = _find_obj_cache_key(data, object_type) if FIND_OBJ_CACHE_TTL > 0 else None
+    cache_ttl = _get_find_obj_cache_ttl()
+    cache_key = _find_obj_cache_key(data, object_type) if cache_ttl > 0 else None
 
     if cache_key:
         cached_id = django_cache.get(cache_key)
@@ -954,7 +958,7 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
             django_cache.set(
                 cache_key,
                 result.id if result else _FIND_OBJ_NOT_FOUND,
-                FIND_OBJ_CACHE_TTL,
+                cache_ttl,
             )
 
     if ctx:
