@@ -891,16 +891,20 @@ def fingerprints(data: dict, object_type: str) -> list[str]:
 def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     """Build a deterministic cache key from entity lookup data.
 
-    Returns None for entities with unresolved references or complex
-    nested data — those are request-specific and not cacheable.
+    Includes only simple scalar fields. Entities whose identity depends
+    solely on unresolved references (no scalar fields at all) are not
+    cacheable.
     """
     items = []
     for k, v in sorted(data.items()):
         if k.startswith("_"):
             continue
-        if isinstance(v, (UnresolvedReference, dict, list)):
-            return None
-        items.append((k, str(v)))
+        if isinstance(v, UnresolvedReference):
+            items.append((k, f"__unresolved__:{v.object_type}"))
+        elif isinstance(v, (dict, list)):
+            continue  # skip complex nested data, not used by matchers
+        else:
+            items.append((k, str(v)))
 
     if not items:
         return None
