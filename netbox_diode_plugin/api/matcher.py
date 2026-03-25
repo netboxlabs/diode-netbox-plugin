@@ -2,13 +2,16 @@
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - API - Object matching utilities."""
 
+import hashlib
 import logging
+import os
 import time
 from dataclasses import dataclass
 from functools import cache, lru_cache
 
 import netaddr
 from django.contrib.contenttypes.fields import ContentType
+from django.core.cache import cache as django_cache
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models import F, Value
@@ -24,6 +27,9 @@ from .plugin_utils import content_type_id, get_object_type, get_object_type_mode
 from .profile import get_profile_ctx
 
 logger = logging.getLogger(__name__)
+
+FIND_OBJ_CACHE_TTL = int(os.environ.get("DIODE_FIND_OBJ_CACHE_TTL", "5"))
+_FIND_OBJ_NOT_FOUND = 0  # sentinel — real PKs are always >= 1
 
 #
 # these matchers are not driven by netbox unique constraints,
@@ -879,6 +885,28 @@ def fingerprints(data: dict, object_type: str) -> list[str]:
     fps.append(fp)
     return fps
 
+def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
+    """Build a deterministic cache key from entity lookup data.
+
+    Returns None for entities with unresolved references or complex
+    nested data — those are request-specific and not cacheable.
+    """
+    items = []
+    for k, v in sorted(data.items()):
+        if k.startswith("_"):
+            continue
+        if isinstance(v, (UnresolvedReference, dict, list)):
+            return None
+        items.append((k, str(v)))
+
+    if not items:
+        return None
+
+    raw = f"{object_type}:{items}"
+    key_hash = hashlib.sha256(raw.encode()).hexdigest()[:20]
+    return f"diode:fobj:{key_hash}"
+
+
 def find_existing_object(data: dict, object_type: str): # noqa: C901
     """
     Find an existing object that matches the given data.
@@ -893,23 +921,47 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
     queries_before = ctx.db_query_snapshot() if ctx else 0
     matchers_checked = 0
     result = None
+    cache_hit = False
 
     model_class = get_object_type_model(object_type)
-    for matcher in get_model_matchers(model_class):
-        if not matcher.has_required_fields(data):
-            continue
-        q = matcher.build_queryset(data)
-        if q is None:
-            continue
-        matchers_checked += 1
-        existing = q.order_by('pk').first()
-        if existing is not None:
-            result = existing
-            break
+    cache_key = _find_obj_cache_key(data, object_type) if FIND_OBJ_CACHE_TTL > 0 else None
+
+    if cache_key:
+        cached_id = django_cache.get(cache_key)
+        if cached_id is not None:
+            cache_hit = True
+            if cached_id != _FIND_OBJ_NOT_FOUND:
+                result = model_class.objects.filter(pk=cached_id).first()
+                if result is None:
+                    # Object deleted since cached — fall through to full lookup
+                    cache_hit = False
+                    django_cache.delete(cache_key)
+
+    if not cache_hit:
+        for matcher in get_model_matchers(model_class):
+            if not matcher.has_required_fields(data):
+                continue
+            q = matcher.build_queryset(data)
+            if q is None:
+                continue
+            matchers_checked += 1
+            existing = q.order_by('pk').first()
+            if existing is not None:
+                result = existing
+                break
+
+        if cache_key:
+            django_cache.set(
+                cache_key,
+                result.id if result else _FIND_OBJ_NOT_FOUND,
+                FIND_OBJ_CACHE_TTL,
+            )
 
     if ctx:
         ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
         ctx.increment("find_obj_matchers_checked", matchers_checked)
         ctx.increment("find_obj_queries", ctx.db_query_snapshot() - queries_before)
         ctx.increment("find_obj_found" if result else "find_obj_not_found")
+        if cache_key is not None:
+            ctx.increment("find_obj_cache_hit" if cache_hit else "find_obj_cache_miss")
     return result
