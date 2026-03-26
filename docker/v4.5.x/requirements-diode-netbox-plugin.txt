@@ -4,4 +4,4 @@ coverage==7.6.0
 grpcio==1.62.1
 protobuf==5.29.6
 pytest==8.0.2
-netboxlabs-netbox-branching==0.8.0
+netboxlabs-netbox-branching==0.8.3

@@ -5,7 +5,7 @@ else
 endif
 
 # Default to v4.5.x if NETBOX_VERSION is not set
-NETBOX_VERSION ?= v4.5.0
+NETBOX_VERSION ?= v4.5.5
 # Extract minor version (e.g., v4.5.0 -> v4.5.x)
 NETBOX_MINOR_VERSION := $(shell echo $(NETBOX_VERSION) | sed -E 's/^v?([0-9]+\.[0-9]+).*/v\1.x/')
 DOCKER_PATH := docker/$(NETBOX_MINOR_VERSION)
