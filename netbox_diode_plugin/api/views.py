@@ -19,7 +19,6 @@ from .common import (
     ChangeSetResult,
 )
 from .differ import generate_changeset
-from .matcher import invalidate_find_obj_cache
 from .permissions import (
     SCOPE_NETBOX_READ,
     SCOPE_NETBOX_WRITE,
@@ -204,7 +203,6 @@ class ApplyChangeSetView(views.APIView):
         try:
             with transaction.atomic():
                 result = apply_changeset(change_set, request)
-            invalidate_find_obj_cache()
         except ChangeSetException as e:
             logger.error(f"Error applying change set: {e}")
             result = ChangeSetResult(

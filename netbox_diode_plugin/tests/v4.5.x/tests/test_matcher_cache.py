@@ -4,21 +4,28 @@
 
 from unittest import mock
 
-from dcim.models import Manufacturer, Site
+from dcim.models import Manufacturer
 from django.core.cache import cache as django_cache
-from django.test import TestCase, override_settings
+from django.test import TestCase
 
 from netbox_diode_plugin.api.common import UnresolvedReference
 from netbox_diode_plugin.api.matcher import (
-    _FIND_OBJ_NOT_FOUND,
     _find_obj_cache_key,
     find_existing_object,
-    invalidate_find_obj_cache,
+    invalidate_find_obj_entry,
 )
 
 
 class FindObjCacheKeyTestCase(TestCase):
     """Tests for _find_obj_cache_key."""
+
+    def setUp(self):
+        """Clear cache before each test."""
+        django_cache.clear()
+
+    def tearDown(self):
+        """Clear cache after each test."""
+        django_cache.clear()
 
     def test_simple_scalar_fields(self):
         """Cache key is generated for data with simple scalar fields."""
@@ -124,29 +131,30 @@ class FindExistingObjectCacheTestCase(TestCase):
         data = {"name": "CacheTestManufacturer", "_object_type": "dcim.manufacturer"}
         cache_key = _find_obj_cache_key(data, "dcim.manufacturer")
 
-        # Cache should be empty
         self.assertIsNone(django_cache.get(cache_key))
 
         result = find_existing_object(data, "dcim.manufacturer")
         self.assertEqual(result.id, self.manufacturer.id)
 
-        # Cache should now contain the PK
+        # Lookup cache should contain the PK
         self.assertEqual(django_cache.get(cache_key), self.manufacturer.id)
+
+        # Reverse index should point back to the lookup key
+        rev_key = f"diode:fobj:rev:dcim.manufacturer:{self.manufacturer.id}"
+        self.assertEqual(django_cache.get(rev_key), cache_key)
 
     @mock.patch(
         "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl",
         return_value=5,
     )
-    def test_cache_miss_populates_cache_on_not_found(self, _mock_ttl):
-        """First lookup misses cache, finds nothing, and caches not-found sentinel."""
+    def test_not_found_is_not_cached(self, _mock_ttl):
+        """Not-found results are not cached."""
         data = {"name": "NonExistent", "_object_type": "dcim.manufacturer"}
         cache_key = _find_obj_cache_key(data, "dcim.manufacturer")
 
         result = find_existing_object(data, "dcim.manufacturer")
         self.assertIsNone(result)
-
-        # Cache should contain the not-found sentinel
-        self.assertEqual(django_cache.get(cache_key), _FIND_OBJ_NOT_FOUND)
+        self.assertIsNone(django_cache.get(cache_key))
 
     @mock.patch(
         "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl",
@@ -160,32 +168,12 @@ class FindExistingObjectCacheTestCase(TestCase):
         result1 = find_existing_object(data, "dcim.manufacturer")
         self.assertEqual(result1.id, self.manufacturer.id)
 
-        # Second call should hit cache — patch matchers to verify they're not called
-        with mock.patch(
-            "netbox_diode_plugin.api.matcher.get_model_matchers"
-        ) as mock_matchers:
-            result2 = find_existing_object(data, "dcim.manufacturer")
-            self.assertEqual(result2.id, self.manufacturer.id)
-            mock_matchers.assert_not_called()
-
-    @mock.patch(
-        "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl",
-        return_value=5,
-    )
-    def test_cache_hit_returns_not_found(self, _mock_ttl):
-        """Second lookup hits cache for not-found and returns None without querying."""
-        data = {"name": "NonExistent", "_object_type": "dcim.manufacturer"}
-
-        # First call populates cache with not-found
-        result1 = find_existing_object(data, "dcim.manufacturer")
-        self.assertIsNone(result1)
-
         # Second call should hit cache
         with mock.patch(
             "netbox_diode_plugin.api.matcher.get_model_matchers"
         ) as mock_matchers:
             result2 = find_existing_object(data, "dcim.manufacturer")
-            self.assertIsNone(result2)
+            self.assertEqual(result2.id, self.manufacturer.id)
             mock_matchers.assert_not_called()
 
     @mock.patch(
@@ -204,10 +192,9 @@ class FindExistingObjectCacheTestCase(TestCase):
         # Delete the object
         self.manufacturer.delete()
 
-        # Should fall through to matchers, find nothing, and update cache
+        # Should fall through to matchers, find nothing
         result = find_existing_object(data, "dcim.manufacturer")
         self.assertIsNone(result)
-        self.assertEqual(django_cache.get(cache_key), _FIND_OBJ_NOT_FOUND)
 
     @mock.patch(
         "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl",
@@ -220,59 +207,88 @@ class FindExistingObjectCacheTestCase(TestCase):
 
         result = find_existing_object(data, "dcim.manufacturer")
         self.assertEqual(result.id, self.manufacturer.id)
-
-        # Cache should remain empty
         self.assertIsNone(django_cache.get(cache_key))
 
     @mock.patch(
         "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl",
         return_value=5,
     )
-    def test_invalidate_cache_changes_keys(self, _mock_ttl):
-        """Invalidating the cache causes subsequent lookups to miss."""
-        data = {"name": "NonExistent", "_object_type": "dcim.manufacturer"}
+    def test_invalidate_deletes_cached_entry(self, _mock_ttl):
+        """Invalidating by PK deletes both lookup and reverse cache entries."""
+        data = {"name": "CacheTestManufacturer", "_object_type": "dcim.manufacturer"}
 
-        # Populate cache with not-found
+        # Populate cache
         find_existing_object(data, "dcim.manufacturer")
-        key_before = _find_obj_cache_key(data, "dcim.manufacturer")
-        self.assertEqual(django_cache.get(key_before), _FIND_OBJ_NOT_FOUND)
+        cache_key = _find_obj_cache_key(data, "dcim.manufacturer")
+        rev_key = f"diode:fobj:rev:dcim.manufacturer:{self.manufacturer.id}"
+        self.assertIsNotNone(django_cache.get(cache_key))
+        self.assertIsNotNone(django_cache.get(rev_key))
 
         # Invalidate
-        invalidate_find_obj_cache()
+        invalidate_find_obj_entry("dcim.manufacturer", self.manufacturer.id)
 
-        # Cache key should now be different (new generation)
-        key_after = _find_obj_cache_key(data, "dcim.manufacturer")
-        self.assertNotEqual(key_before, key_after)
-
-        # Old key still has data, but new key is a miss
-        self.assertIsNone(django_cache.get(key_after))
+        # Both entries should be gone
+        self.assertIsNone(django_cache.get(cache_key))
+        self.assertIsNone(django_cache.get(rev_key))
 
     @mock.patch(
         "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl",
         return_value=5,
     )
-    def test_invalidate_allows_finding_newly_created_object(self, _mock_ttl):
-        """After invalidation, a previously not-found object can be found."""
-        data = {"name": "NewManufacturer", "_object_type": "dcim.manufacturer"}
+    def test_invalidate_causes_cache_miss_on_next_lookup(self, _mock_ttl):
+        """After invalidation, next lookup goes through matchers."""
+        data = {"name": "CacheTestManufacturer", "_object_type": "dcim.manufacturer"}
 
-        # First lookup — not found, cached
-        result1 = find_existing_object(data, "dcim.manufacturer")
-        self.assertIsNone(result1)
+        # Populate cache
+        find_existing_object(data, "dcim.manufacturer")
 
-        # Create the object
-        new_mfr = Manufacturer.objects.create(
-            name="NewManufacturer",
-            slug="new-manufacturer",
+        # Invalidate
+        invalidate_find_obj_entry("dcim.manufacturer", self.manufacturer.id)
+
+        # Next lookup should miss cache and go through matchers
+        with mock.patch(
+            "netbox_diode_plugin.api.matcher.get_model_matchers",
+            wraps=__import__(
+                "netbox_diode_plugin.api.matcher", fromlist=["get_model_matchers"]
+            ).get_model_matchers,
+        ) as mock_matchers:
+            result = find_existing_object(data, "dcim.manufacturer")
+            self.assertEqual(result.id, self.manufacturer.id)
+            mock_matchers.assert_called_once()
+
+    @mock.patch(
+        "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl",
+        return_value=5,
+    )
+    def test_invalidate_noop_for_uncached_pk(self, _mock_ttl):
+        """Invalidating a PK that was never cached is a no-op."""
+        # Should not raise
+        invalidate_find_obj_entry("dcim.manufacturer", 999999)
+
+    @mock.patch(
+        "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl",
+        return_value=5,
+    )
+    def test_invalidate_does_not_affect_other_entries(self, _mock_ttl):
+        """Invalidating one object does not affect other cached objects."""
+        other_mfr = Manufacturer.objects.create(
+            name="OtherManufacturer",
+            slug="other-manufacturer",
         )
+        data_main = {"name": "CacheTestManufacturer", "_object_type": "dcim.manufacturer"}
+        data_other = {"name": "OtherManufacturer", "_object_type": "dcim.manufacturer"}
 
-        # Without invalidation, cache still says not found
-        result2 = find_existing_object(data, "dcim.manufacturer")
-        self.assertIsNone(result2)
+        # Populate cache for both
+        find_existing_object(data_main, "dcim.manufacturer")
+        find_existing_object(data_other, "dcim.manufacturer")
 
-        # Invalidate cache
-        invalidate_find_obj_cache()
+        # Invalidate only the main one
+        invalidate_find_obj_entry("dcim.manufacturer", self.manufacturer.id)
 
-        # Now it should find the object
-        result3 = find_existing_object(data, "dcim.manufacturer")
-        self.assertIsNotNone(result3)
-        self.assertEqual(result3.id, new_mfr.id)
+        # Other should still be cached
+        cache_key_other = _find_obj_cache_key(data_other, "dcim.manufacturer")
+        self.assertEqual(django_cache.get(cache_key_other), other_mfr.id)
+
+        # Main should be gone
+        cache_key_main = _find_obj_cache_key(data_main, "dcim.manufacturer")
+        self.assertIsNone(django_cache.get(cache_key_main))

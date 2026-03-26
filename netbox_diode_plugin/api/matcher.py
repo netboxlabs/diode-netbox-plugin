@@ -28,30 +28,22 @@ from .profile import get_profile_ctx
 
 logger = logging.getLogger(__name__)
 
-_FIND_OBJ_NOT_FOUND = 0  # sentinel — real PKs are always >= 1
-_FIND_OBJ_GEN_KEY = "diode:fobj:gen"
-
-
 def _get_find_obj_cache_ttl() -> int:
     return get_plugin_config("netbox_diode_plugin", "find_obj_cache_ttl")
 
 
-def invalidate_find_obj_cache():
+def invalidate_find_obj_entry(object_type: str, object_id: int):
     """
-    Invalidate all cached find_existing_object results.
+    Delete a cached find_existing_object result by PK.
 
-    Increments a generation counter so existing cache keys become misses.
-    Call this after applying changesets that create or modify objects.
+    Uses a reverse-index (PK → cache key) to find and delete the
+    lookup cache entry. Call this after updating an existing object.
     """
-    try:
-        django_cache.incr(_FIND_OBJ_GEN_KEY)
-    except ValueError:
-        # Key doesn't exist yet — initialize it
-        django_cache.set(_FIND_OBJ_GEN_KEY, 1, None)
-
-
-def _get_find_obj_gen() -> int:
-    return django_cache.get(_FIND_OBJ_GEN_KEY, 0)
+    rev_key = f"diode:fobj:rev:{object_type}:{object_id}"
+    lookup_key = django_cache.get(rev_key)
+    if lookup_key:
+        django_cache.delete(lookup_key)
+        django_cache.delete(rev_key)
 
 #
 # these matchers are not driven by netbox unique constraints,
@@ -929,8 +921,7 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     if not items:
         return None
 
-    gen = _get_find_obj_gen()
-    raw = f"{object_type}:{items}:{gen}"
+    raw = f"{object_type}:{items}"
     key_hash = hashlib.sha256(raw.encode()).hexdigest()[:20]
     return f"diode:fobj:{key_hash}"
 
@@ -959,12 +950,13 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
         cached_id = django_cache.get(cache_key)
         if cached_id is not None:
             cache_hit = True
-            if cached_id != _FIND_OBJ_NOT_FOUND:
-                result = model_class.objects.filter(pk=cached_id).first()
-                if result is None:
-                    # Object deleted since cached — fall through to full lookup
-                    cache_hit = False
-                    django_cache.delete(cache_key)
+            result = model_class.objects.filter(pk=cached_id).first()
+            if result is None:
+                # Object deleted since cached — clean up and fall through
+                cache_hit = False
+                django_cache.delete(cache_key)
+                rev_key = f"diode:fobj:rev:{object_type}:{cached_id}"
+                django_cache.delete(rev_key)
 
     if not cache_hit:
         for matcher in get_model_matchers(model_class):
@@ -979,12 +971,10 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
                 result = existing
                 break
 
-        if cache_key:
-            django_cache.set(
-                cache_key,
-                result.id if result else _FIND_OBJ_NOT_FOUND,
-                cache_ttl,
-            )
+        if cache_key and result is not None:
+            django_cache.set(cache_key, result.id, cache_ttl)
+            rev_key = f"diode:fobj:rev:{object_type}:{result.id}"
+            django_cache.set(rev_key, cache_key, cache_ttl)
 
     if ctx:
         ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
