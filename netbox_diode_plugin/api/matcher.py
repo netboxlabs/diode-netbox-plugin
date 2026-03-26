@@ -29,10 +29,29 @@ from .profile import get_profile_ctx
 logger = logging.getLogger(__name__)
 
 _FIND_OBJ_NOT_FOUND = 0  # sentinel — real PKs are always >= 1
+_FIND_OBJ_GEN_KEY = "diode:fobj:gen"
 
 
 def _get_find_obj_cache_ttl() -> int:
     return get_plugin_config("netbox_diode_plugin", "find_obj_cache_ttl")
+
+
+def invalidate_find_obj_cache():
+    """
+    Invalidate all cached find_existing_object results.
+
+    Increments a generation counter so existing cache keys become misses.
+    Call this after applying changesets that create or modify objects.
+    """
+    try:
+        django_cache.incr(_FIND_OBJ_GEN_KEY)
+    except ValueError:
+        # Key doesn't exist yet — initialize it
+        django_cache.set(_FIND_OBJ_GEN_KEY, 1, None)
+
+
+def _get_find_obj_gen() -> int:
+    return django_cache.get(_FIND_OBJ_GEN_KEY, 0)
 
 #
 # these matchers are not driven by netbox unique constraints,
@@ -889,7 +908,8 @@ def fingerprints(data: dict, object_type: str) -> list[str]:
     return fps
 
 def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
-    """Build a deterministic cache key from entity lookup data.
+    """
+    Build a deterministic cache key from entity lookup data.
 
     Includes only simple scalar fields. Entities whose identity depends
     solely on unresolved references (no scalar fields at all) are not
@@ -909,7 +929,8 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     if not items:
         return None
 
-    raw = f"{object_type}:{items}"
+    gen = _get_find_obj_gen()
+    raw = f"{object_type}:{items}:{gen}"
     key_hash = hashlib.sha256(raw.encode()).hexdigest()[:20]
     return f"diode:fobj:{key_hash}"
 

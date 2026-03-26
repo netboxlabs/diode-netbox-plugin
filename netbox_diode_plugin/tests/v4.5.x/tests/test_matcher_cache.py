@@ -13,6 +13,7 @@ from netbox_diode_plugin.api.matcher import (
     _FIND_OBJ_NOT_FOUND,
     _find_obj_cache_key,
     find_existing_object,
+    invalidate_find_obj_cache,
 )
 
 
@@ -222,3 +223,56 @@ class FindExistingObjectCacheTestCase(TestCase):
 
         # Cache should remain empty
         self.assertIsNone(django_cache.get(cache_key))
+
+    @mock.patch(
+        "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl",
+        return_value=5,
+    )
+    def test_invalidate_cache_changes_keys(self, _mock_ttl):
+        """Invalidating the cache causes subsequent lookups to miss."""
+        data = {"name": "NonExistent", "_object_type": "dcim.manufacturer"}
+
+        # Populate cache with not-found
+        find_existing_object(data, "dcim.manufacturer")
+        key_before = _find_obj_cache_key(data, "dcim.manufacturer")
+        self.assertEqual(django_cache.get(key_before), _FIND_OBJ_NOT_FOUND)
+
+        # Invalidate
+        invalidate_find_obj_cache()
+
+        # Cache key should now be different (new generation)
+        key_after = _find_obj_cache_key(data, "dcim.manufacturer")
+        self.assertNotEqual(key_before, key_after)
+
+        # Old key still has data, but new key is a miss
+        self.assertIsNone(django_cache.get(key_after))
+
+    @mock.patch(
+        "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl",
+        return_value=5,
+    )
+    def test_invalidate_allows_finding_newly_created_object(self, _mock_ttl):
+        """After invalidation, a previously not-found object can be found."""
+        data = {"name": "NewManufacturer", "_object_type": "dcim.manufacturer"}
+
+        # First lookup — not found, cached
+        result1 = find_existing_object(data, "dcim.manufacturer")
+        self.assertIsNone(result1)
+
+        # Create the object
+        new_mfr = Manufacturer.objects.create(
+            name="NewManufacturer",
+            slug="new-manufacturer",
+        )
+
+        # Without invalidation, cache still says not found
+        result2 = find_existing_object(data, "dcim.manufacturer")
+        self.assertIsNone(result2)
+
+        # Invalidate cache
+        invalidate_find_obj_cache()
+
+        # Now it should find the object
+        result3 = find_existing_object(data, "dcim.manufacturer")
+        self.assertIsNotNone(result3)
+        self.assertEqual(result3.id, new_mfr.id)
