@@ -1,0 +1,5 @@
+services:
+  netbox:
+    user: "unit:root"
+    volumes:
+      - ./netbox/nginx-unit.json:/opt/netbox/nginx-unit.json:z,ro
