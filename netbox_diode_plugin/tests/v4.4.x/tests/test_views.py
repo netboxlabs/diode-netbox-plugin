@@ -88,7 +88,7 @@ class SettingsEditViewTestCase(TestCase):
     def test_returns_200_for_authenticated(self):
         """Test that the view returns 200 for an authenticated user."""
         request = self.request_factory.get(self.path)
-        request.user = User.objects.create_user("foo", password="pass", is_staff=True)
+        request.user = User.objects.create_user("foo", password="pass")
         self.add_permissions(request.user, "netbox_diode_plugin.view_setting", "netbox_diode_plugin.change_setting")
         request.htmx = None
         self.view.setup(request)
@@ -108,7 +108,7 @@ class SettingsEditViewTestCase(TestCase):
 
     def test_settings_updated(self):
         """Test that the settings are updated."""
-        user = User.objects.create_user("foo", password="pass", is_staff=True)
+        user = User.objects.create_user("foo", password="pass")
         self.add_permissions(user, "netbox_diode_plugin.view_setting", "netbox_diode_plugin.change_setting")
 
         request = self.request_factory.get(self.path)
@@ -166,7 +166,7 @@ class SettingsEditViewTestCase(TestCase):
         ) as mock_get_plugin_config:
             mock_get_plugin_config.return_value = "grpc://localhost:8080/diode"
 
-            user = User.objects.create_user("foo", password="pass", is_staff=True)
+            user = User.objects.create_user("foo", password="pass")
             self.add_permissions(
                 user,
                 "netbox_diode_plugin.view_setting",
@@ -207,7 +207,7 @@ class SettingsEditViewTestCase(TestCase):
         ) as mock_get_plugin_config:
             mock_get_plugin_config.return_value = "grpc://localhost:8080/diode"
 
-            user = User.objects.create_user("foo", password="pass", is_staff=True)
+            user = User.objects.create_user("foo", password="pass")
             self.add_permissions(
                 user,
                 "netbox_diode_plugin.view_setting",
