@@ -11,7 +11,7 @@ from django.db.utils import IntegrityError
 from rest_framework.exceptions import ValidationError as ValidationError
 
 from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
-from .matcher import find_existing_object
+from .matcher import find_existing_object, invalidate_find_obj_entry
 from .plugin_utils import get_object_type_model, legal_fields
 from .profile import profiled
 from .supported_models import get_serializer_for_model
@@ -80,7 +80,9 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
         if instance:
             serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
-            return serializer.save()
+            result = serializer.save()
+            invalidate_find_obj_entry(object_type, instance.id)
+            return result
     except (ValueError, TypeError) as e:
         logger.debug(f"Could not find existing {object_type}: {e}")
     return None
@@ -124,11 +126,13 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             serializer.save()
+            invalidate_find_obj_entry(change.object_type, instance.id)
         # create and update in a same change set
         elif change.ref_id and (instance := created[change.ref_id]):
             serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             serializer.save()
+            invalidate_find_obj_entry(change.object_type, instance.id)
 
 def _set_path(data, path, value):
     path = path.split(".")

@@ -1243,11 +1243,12 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(provider.asns.count(), 1)
 
     def test_generate_diff_and_apply_module_bay_with_module(self):
-        """Test generate diff and apply module bay with module."""
-        payload = {
+        """Test generate diff and apply module bay with a module installed (non-circular)."""
+        # First create the module bay
+        bay_payload = {
             "timestamp": "2025-04-16T02:58:20.564615Z",
             "object_type": "dcim.modulebay",
-            "entity":     {
+            "entity": {
                 "module_bay": {
                     "device": {
                         "name": "Device 1",
@@ -1258,8 +1259,40 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                         },
                         "site": {"name": "Site 1"}
                     },
-                    "name": "Stack Module Bay 2",
-                    "module": {
+                    "name": "Module Bay 1",
+                    "label": "STACK-1",
+                    "position": "Rear",
+                    "description": "Primary stacking module bay",
+                    "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+                }
+            }
+        }
+        _ = self.diff_and_apply(bay_payload)
+        module_bay = ModuleBay.objects.get(name="Module Bay 1")
+        self.assertEqual(module_bay.device.name, "Device 1")
+
+        # Then install a module into that bay (non-circular — module references
+        # the same bay it's installed in, no sub-bays that reference back)
+        module_payload = {
+            "timestamp": "2025-04-16T02:58:21.564615Z",
+            "object_type": "dcim.module",
+            "entity": {
+                "module": {
+                    "device": {
+                        "name": "Device 1",
+                        "role": {"name": "Device Role 1"},
+                        "device_type": {
+                            "manufacturer": {"name": "Cisco"},
+                            "model": "C2960S"
+                        },
+                        "site": {"name": "Site 1"}
+                    },
+                    "module_type": {
+                        "manufacturer": {"name": "Cisco"},
+                        "model": "C2960S-STACK"
+                    },
+                    "module_bay": {
+                        "name": "Module Bay 1",
                         "device": {
                             "name": "Device 1",
                             "role": {"name": "Device Role 1"},
@@ -1268,38 +1301,18 @@ class GenerateDiffAndApplyTestCase(APITestCase):
                                 "model": "C2960S"
                             },
                             "site": {"name": "Site 1"}
-                        },
-                        "module_type": {
-                            "manufacturer": {"name": "Cisco"},
-                            "model": "C2960S-STACK"
-                        },
-                        "module_bay": {
-                            "name": "Module Bay 1",
-                            "device": {
-                                "name": "Device 1",
-                                "role": {"name": "Device Role 1"},
-                                "device_type": {
-                                    "manufacturer": {"name": "Cisco"},
-                                    "model": "C2960S"
-                                },
-                                "site": {"name": "Site 1"}
-                            }
                         }
-
-                    },
-                    "label": "STACK-2",
-                    "position": "Rear",
-                    "description": "Secondary stacking module bay",
-                    "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+                    }
                 }
             }
         }
-        _ = self.diff_and_apply(payload)
-        module_bay = ModuleBay.objects.get(name="Stack Module Bay 2")
-        self.assertEqual(module_bay.module.device.name, "Device 1")
-        self.assertEqual(module_bay.module.module_type.manufacturer.name, "Cisco")
-        self.assertEqual(module_bay.module.module_type.model, "C2960S-STACK")
-        self.assertEqual(module_bay.module.module_bay.name, "Module Bay 1")
+        _ = self.diff_and_apply(module_payload)
+        from dcim.models import Module
+        module = Module.objects.get(module_bay__name="Module Bay 1")
+        self.assertEqual(module.device.name, "Device 1")
+        self.assertEqual(module.module_type.manufacturer.name, "Cisco")
+        self.assertEqual(module.module_type.model, "C2960S-STACK")
+        self.assertEqual(module.module_bay.name, "Module Bay 1")
 
     def test_generate_diff_and_apply_module_bay_circular_ref_fails(self):
         """Test generate diff and apply module bay."""

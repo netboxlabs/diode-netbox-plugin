@@ -2,6 +2,7 @@
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - API - Object matching utilities."""
 
+import hashlib
 import logging
 import time
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from functools import cache, lru_cache
 
 import netaddr
 from django.contrib.contenttypes.fields import ContentType
+from django.core.cache import cache as django_cache
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models import F, Value
@@ -17,6 +19,7 @@ from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
 from django.db.models.signals import post_delete, post_save
 from extras.models.customfields import CustomField
+from netbox.plugins import get_plugin_config
 
 from .common import UnresolvedReference
 from .compat import in_version_range
@@ -24,6 +27,23 @@ from .plugin_utils import content_type_id, get_object_type, get_object_type_mode
 from .profile import get_profile_ctx
 
 logger = logging.getLogger(__name__)
+
+def _get_find_obj_cache_ttl() -> int:
+    return get_plugin_config("netbox_diode_plugin", "find_obj_cache_ttl")
+
+
+def invalidate_find_obj_entry(object_type: str, object_id: int):
+    """
+    Delete a cached find_existing_object result by PK.
+
+    Uses a reverse-index (PK → cache key) to find and delete the
+    lookup cache entry. Call this after updating an existing object.
+    """
+    rev_key = f"diode:fobj:rev:{object_type}:{object_id}"
+    lookup_key = django_cache.get(rev_key)
+    if lookup_key:
+        django_cache.delete(lookup_key)
+        django_cache.delete(rev_key)
 
 #
 # these matchers are not driven by netbox unique constraints,
@@ -879,6 +899,33 @@ def fingerprints(data: dict, object_type: str) -> list[str]:
     fps.append(fp)
     return fps
 
+def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
+    """
+    Build a deterministic cache key from entity lookup data.
+
+    Includes only simple scalar fields. Entities whose identity depends
+    solely on unresolved references (no scalar fields at all) are not
+    cacheable.
+    """
+    items = []
+    for k, v in sorted(data.items()):
+        if k.startswith("_"):
+            continue
+        if isinstance(v, UnresolvedReference):
+            items.append((k, f"__unresolved__:{v.object_type}"))
+        elif isinstance(v, (dict, list)):
+            continue  # skip complex nested data, not used by matchers
+        else:
+            items.append((k, str(v)))
+
+    if not items:
+        return None
+
+    raw = f"{object_type}:{items}"
+    key_hash = hashlib.sha256(raw.encode()).hexdigest()[:20]
+    return f"diode:fobj:{key_hash}"
+
+
 def find_existing_object(data: dict, object_type: str): # noqa: C901
     """
     Find an existing object that matches the given data.
@@ -893,23 +940,47 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
     queries_before = ctx.db_query_snapshot() if ctx else 0
     matchers_checked = 0
     result = None
+    cache_hit = False
 
     model_class = get_object_type_model(object_type)
-    for matcher in get_model_matchers(model_class):
-        if not matcher.has_required_fields(data):
-            continue
-        q = matcher.build_queryset(data)
-        if q is None:
-            continue
-        matchers_checked += 1
-        existing = q.order_by('pk').first()
-        if existing is not None:
-            result = existing
-            break
+    cache_ttl = _get_find_obj_cache_ttl()
+    cache_key = _find_obj_cache_key(data, object_type) if cache_ttl > 0 else None
+
+    if cache_key:
+        cached_id = django_cache.get(cache_key)
+        if cached_id is not None:
+            cache_hit = True
+            result = model_class.objects.filter(pk=cached_id).first()
+            if result is None:
+                # Object deleted since cached — clean up and fall through
+                cache_hit = False
+                django_cache.delete(cache_key)
+                rev_key = f"diode:fobj:rev:{object_type}:{cached_id}"
+                django_cache.delete(rev_key)
+
+    if not cache_hit:
+        for matcher in get_model_matchers(model_class):
+            if not matcher.has_required_fields(data):
+                continue
+            q = matcher.build_queryset(data)
+            if q is None:
+                continue
+            matchers_checked += 1
+            existing = q.order_by('pk').first()
+            if existing is not None:
+                result = existing
+                break
+
+        if cache_key and result is not None:
+            django_cache.set(cache_key, result.id, cache_ttl)
+            rev_key = f"diode:fobj:rev:{object_type}:{result.id}"
+            django_cache.set(rev_key, cache_key, cache_ttl)
 
     if ctx:
         ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
         ctx.increment("find_obj_matchers_checked", matchers_checked)
         ctx.increment("find_obj_queries", ctx.db_query_snapshot() - queries_before)
         ctx.increment("find_obj_found" if result else "find_obj_not_found")
+        if cache_key is not None:
+            ctx.increment("find_obj_cache_hit" if cache_hit else "find_obj_cache_miss")
     return result

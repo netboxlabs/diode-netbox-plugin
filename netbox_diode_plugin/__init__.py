@@ -39,6 +39,10 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # List of audiences to require for the diode-to-netbox token.
         # If empty, no audience is required.
         "required_token_audience": [],
+
+        # TTL in seconds for caching find_existing_object results in Redis.
+        # Set to 0 to disable caching.
+        "find_obj_cache_ttl": 5,
     }
 
 
