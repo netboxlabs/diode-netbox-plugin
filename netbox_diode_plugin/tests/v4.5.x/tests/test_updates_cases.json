@@ -3270,39 +3270,11 @@
                     "site": {"name": "Site 1"}
                 },
                 "name": "Stack Module Bay 2",
-                "module": {
-                    "device": {
-                        "name": "Device 1",
-                        "role": {"name": "Device Role 1"},
-                        "device_type": {
-                            "manufacturer": {"name": "Cisco"},
-                            "model": "C2960S"
-                        },
-                        "site": {"name": "Site 1"}
-                    },
-                    "module_type": {
-                        "manufacturer": {"name": "Cisco"},
-                        "model": "C2960S-STACK"
-                    },
-                    "module_bay": {
-                        "name": "Module Bay 1",
-                        "device": {
-                            "name": "Device 1",
-                            "role": {"name": "Device Role 1"},
-                            "device_type": {
-                                "manufacturer": {"name": "Cisco"},
-                                "model": "C2960S"
-                            },
-                            "site": {"name": "Site 1"}
-                        }
-                    } 
-    
-                },
                 "label": "STACK-2",
                 "position": "Rear",
                 "description": "Secondary stacking module bay",
                 "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
-            }    
+            }
         },
         "update": {
             "module_bay": {
@@ -3316,39 +3288,11 @@
                     "site": {"name": "Site 1"}
                 },
                 "name": "Stack Module Bay 2",
-                "module": {
-                    "device": {
-                        "name": "Device 1",
-                        "role": {"name": "Device Role 1"},
-                        "device_type": {
-                            "manufacturer": {"name": "Cisco"},
-                            "model": "C2960S"
-                        },
-                        "site": {"name": "Site 1"}
-                    },
-                    "module_type": {
-                        "manufacturer": {"name": "Cisco"},
-                        "model": "C2960S-STACK"
-                    },
-                    "module_bay": {
-                        "name": "Module Bay 1",
-                        "device": {
-                            "name": "Device 1",
-                            "role": {"name": "Device Role 1"},
-                            "device_type": {
-                                "manufacturer": {"name": "Cisco"},
-                                "model": "C2960S"
-                            },
-                            "site": {"name": "Site 1"}
-                        }
-                    } 
-    
-                },
                 "label": "STACK-2",
                 "position": "Rear",
                 "description": "Secondary stacking module bay Updated",
                 "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
-            }    
+            }
         },
         "update_expect": {
             "description": "Secondary stacking module bay Updated"
