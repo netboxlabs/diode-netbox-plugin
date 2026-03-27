@@ -10,6 +10,10 @@ on:
     paths:
       - "netbox_diode_plugin/**"
 
+env:
+  # Default NetBox version used for coverage reporting
+  DEFAULT_NETBOX_VERSION: "v4.5.5"
+
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
@@ -26,7 +30,7 @@ jobs:
     strategy:
       matrix:
         python: [ "3.10" ]
-        netbox: [ "v4.5.0", "v4.4.10" ]
+        netbox: [ "v4.5.5", "v4.4.10" ]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,7 +63,7 @@ jobs:
           fi
       - name: Coverage comment
         uses: orgoro/coverage@3f13a558c5af7376496aa4848bf0224aead366ac # v3.2
-        if: github.event.pull_request.head.repo.full_name == github.repository && matrix.netbox == ''
+        if: github.event.pull_request.head.repo.full_name == github.repository && matrix.netbox == env.DEFAULT_NETBOX_VERSION
         with:
           coverageFile: ./docker/coverage/report.xml
           token: ${{ secrets.GITHUB_TOKEN }}

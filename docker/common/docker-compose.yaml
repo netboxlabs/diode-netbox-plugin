@@ -1,19 +1,19 @@
 name: diode-netbox-plugin-${NETBOX_MINOR_VERSION:-v4.5.x}
 services:
   netbox: &netbox
-    image: netboxcommunity/netbox:${NETBOX_VERSION:-v4.5.0-3.4.2}-diode-netbox-plugin
+    image: netboxcommunity/netbox:${NETBOX_VERSION:-v4.5.5-4.0.1}-diode-netbox-plugin
     build:
       context: ..
       dockerfile: ${NETBOX_MINOR_VERSION:-v4.5.x}/Dockerfile
       pull: true
       args:
-        NETBOX_VERSION: ${NETBOX_VERSION:-v4.5.0-3.4.2}
+        NETBOX_VERSION: ${NETBOX_VERSION:-v4.5.5-4.0.1}
     depends_on:
       - netbox-postgres
       - netbox-redis
       - netbox-redis-cache
     env_file: ../common/netbox/env/netbox.env
-    user: "unit:root"
+    user: "netbox:root"
     healthcheck:
       start_period: 180s
       timeout: 3s
@@ -21,10 +21,8 @@ services:
       test: "curl -f http://localhost:8080/netbox/api/ || exit 1"
     volumes:
       - ./netbox/docker-entrypoint.sh:/opt/netbox/docker-entrypoint.sh:z,ro
-      - ./netbox/nginx-unit.json:/opt/netbox/nginx-unit.json:z,ro
       - ../../netbox_diode_plugin:/opt/netbox/netbox/netbox_diode_plugin:z,rw
       - ../oauth2/secrets:/run/secrets:z,ro
-      - ./netbox/launch-netbox.sh:/opt/netbox/launch-netbox.sh:z,ro
       - ./netbox/plugins_dev.py:/etc/netbox/config/plugins.py:z,ro
       - ../coverage:/opt/netbox/netbox/coverage:z,rw
       - netbox-media-files:/opt/netbox/netbox/media:rw
@@ -34,6 +32,11 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "8000:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2000M
 
   netbox-worker:
     <<: *netbox
