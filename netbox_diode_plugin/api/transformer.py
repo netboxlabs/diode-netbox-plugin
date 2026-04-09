@@ -563,11 +563,10 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
                 new_refs[data['_uuid']] = existing.id
                 resolved.append(data)
                 continue
-            else:
-                raise ChangeSetException(
-                    f"Object not found for {object_type} with netbox_id={netbox_id}",
-                    errors={NON_FIELD_ERRORS: [f"No {object_type} found with id {netbox_id}"]}
-                )
+            raise ChangeSetException(
+                f"Object not found for {object_type} with netbox_id={netbox_id}",
+                errors={NON_FIELD_ERRORS: [f"No {object_type} found with id {netbox_id}"]}
+            )
 
         existing = find_existing_object(data, object_type)
         if existing is not None:
