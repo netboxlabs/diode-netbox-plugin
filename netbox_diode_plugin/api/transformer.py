@@ -24,6 +24,7 @@ from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
     apply_format_transformations,
     get_json_ref_info,
+    get_object_type_model,
     get_primary_value,
     legal_fields,
 )
@@ -127,6 +128,9 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
         "_warnings": {},
     }
 
+    # extract metadata before _ensure_snake_case strips it as an unknown field
+    metadata = dict.pop(proto_json, "metadata", None)
+
     # handle camelCase protoJSON if provided...
     proto_json = _ensure_snake_case(proto_json, object_type)
     apply_format_transformations(proto_json, object_type)
@@ -150,6 +154,17 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
         node['custom_fields'] = custom_fields
         node['_refs'].update(custom_fields_refs)
         nodes += nested
+
+    # process extracted metadata for PK-based matching
+    if metadata and isinstance(metadata, dict):
+        source_match = metadata.get("source_match", {})
+        if isinstance(source_match, dict):
+            netbox_id_raw = source_match.get("netbox_id")
+            if netbox_id_raw is not None:
+                try:
+                    node['_netbox_id'] = int(netbox_id_raw)
+                except (ValueError, TypeError):
+                    node['_warnings']['metadata'] = [f"Invalid netbox_id: {netbox_id_raw}"]
 
     supported_fields = _supported_diode_fields(object_type, supported_models)
     def is_supported(field_name, ref_info):
@@ -531,6 +546,27 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
         if data.get('_is_post_create'):
             resolved.append(data)
             continue
+
+        # PK-based lookup: if metadata provided a netbox_id, use it directly
+        netbox_id = data.pop('_netbox_id', None)
+        if netbox_id is not None:
+            model_class = get_object_type_model(object_type)
+            existing = model_class.objects.filter(pk=netbox_id).first()
+            if existing is not None:
+                fp = (object_type, existing.id)
+                if fp in seen:
+                    logger.warning(f"objects resolved to the same existing id after deduplication: {seen[fp]} and {data}")
+                else:
+                    seen[fp] = data
+                data['id'] = existing.id
+                data['_instance'] = existing
+                new_refs[data['_uuid']] = existing.id
+                resolved.append(data)
+                continue
+            raise ChangeSetException(
+                f"Object not found for {object_type} with netbox_id={netbox_id}",
+                errors={NON_FIELD_ERRORS: [f"No {object_type} found with id {netbox_id}"]}
+            )
 
         existing = find_existing_object(data, object_type)
         if existing is not None:

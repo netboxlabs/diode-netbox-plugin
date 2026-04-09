@@ -9,7 +9,7 @@ from unittest import mock
 from uuid import uuid4
 
 from core.models import ObjectType
-from dcim.models import Manufacturer, RackType, Site
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, RackType, Site
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
 from rest_framework import status
@@ -419,3 +419,246 @@ class GenerateDiffTestCase(APITestCase):
         )
         self.assertEqual(response.status_code, status_code)
         return response
+
+
+class PKBasedMatchingTestCase(APITestCase):
+    """Test PK-based matching via metadata.source_match.netbox_id."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.url = "/netbox/api/plugins/diode/generate-diff/"
+
+        self.authorization_header = {"HTTP_AUTHORIZATION": "Bearer mocked_oauth_token"}
+        self.diode_user = SimpleNamespace(
+            user=get_diode_user(),
+            token_scopes=["netbox:read", "netbox:write"],
+            token_data={"scope": "netbox:read netbox:write"},
+        )
+
+        self.introspect_patcher = mock.patch.object(
+            DiodeOAuth2Authentication,
+            "_introspect_token",
+            return_value=self.diode_user,
+        )
+        self.introspect_patcher.start()
+
+        self.site = Site.objects.create(name="PK Test Site", slug="pk-test-site")
+        manufacturer = Manufacturer.objects.create(name="PK Test Manufacturer", slug="pk-test-manufacturer")
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model="PK Test Type", slug="pk-test-type"
+        )
+        self.role = DeviceRole.objects.create(name="PK Test Role", slug="pk-test-role", color="ff0000")
+        self.device = Device.objects.create(
+            name="PK Test Device",
+            device_type=device_type,
+            role=self.role,
+            site=self.site,
+            serial="ORIG-SERIAL",
+        )
+        self.interface = Interface.objects.create(
+            device=self.device,
+            name="eth0",
+            type="virtual",
+        )
+
+    def tearDown(self):
+        """Clean up after tests."""
+        self.introspect_patcher.stop()
+        super().tearDown()
+
+    def send_request(self, payload, status_code=status.HTTP_200_OK):
+        """Post the payload to the url and return the response."""
+        response = self.client.post(
+            self.url, data=payload, format="json", **self.authorization_header
+        )
+        self.assertEqual(response.status_code, status_code)
+        return response
+
+    def test_pk_match_noop(self):
+        """PK match with identical data produces no changes."""
+        payload = {
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": "PK Test Device",
+                    "serial": "ORIG-SERIAL",
+                    "device_type": {"model": "PK Test Type", "manufacturer": {"name": "PK Test Manufacturer"}},
+                    "role": {"name": "PK Test Role"},
+                    "site": {"name": "PK Test Site"},
+                    "metadata": {
+                        "source_match": {"netbox_id": self.device.pk},
+                    },
+                },
+            },
+        }
+        response = self.send_request(payload)
+        cs = response.json().get("change_set", {})
+        changes = cs.get("changes", [])
+        # all changes should be noop since data matches
+        device_changes = [c for c in changes if c["object_type"] == "dcim.device"]
+        self.assertTrue(len(device_changes) <= 1)
+        if device_changes:
+            self.assertEqual(device_changes[0]["change_type"], "noop")
+
+    def test_pk_match_update(self):
+        """PK match with changed attribute produces update changeset."""
+        payload = {
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": "PK Test Device",
+                    "serial": "NEW-SERIAL",
+                    "device_type": {"model": "PK Test Type", "manufacturer": {"name": "PK Test Manufacturer"}},
+                    "role": {"name": "PK Test Role"},
+                    "site": {"name": "PK Test Site"},
+                    "metadata": {
+                        "source_match": {"netbox_id": self.device.pk},
+                    },
+                },
+            },
+        }
+        response = self.send_request(payload)
+        cs = response.json().get("change_set", {})
+        changes = cs.get("changes", [])
+        device_changes = [c for c in changes if c["object_type"] == "dcim.device"]
+        self.assertEqual(len(device_changes), 1)
+        change = device_changes[0]
+        self.assertEqual(change["change_type"], "update")
+        self.assertEqual(change["object_id"], self.device.pk)
+        self.assertEqual(change["data"]["serial"], "NEW-SERIAL")
+
+    def test_pk_match_ignores_name(self):
+        """PK match finds the device even when the name is different — produces update, not create."""
+        payload = {
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": "Completely Different Name",
+                    "serial": "ORIG-SERIAL",
+                    "device_type": {"model": "PK Test Type", "manufacturer": {"name": "PK Test Manufacturer"}},
+                    "role": {"name": "PK Test Role"},
+                    "site": {"name": "PK Test Site"},
+                    "metadata": {
+                        "source_match": {"netbox_id": self.device.pk},
+                    },
+                },
+            },
+        }
+        response = self.send_request(payload)
+        cs = response.json().get("change_set", {})
+        changes = cs.get("changes", [])
+        device_changes = [c for c in changes if c["object_type"] == "dcim.device"]
+        self.assertEqual(len(device_changes), 1)
+        change = device_changes[0]
+        self.assertEqual(change["change_type"], "update")
+        self.assertEqual(change["object_id"], self.device.pk)
+        # name change should be in the diff
+        self.assertEqual(change["data"]["name"], "Completely Different Name")
+
+    def test_pk_not_found_raises_error(self):
+        """PK that doesn't exist returns an error, not a create."""
+        payload = {
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": "Ghost Device",
+                    "device_type": {"model": "PK Test Type", "manufacturer": {"name": "PK Test Manufacturer"}},
+                    "role": {"name": "PK Test Role"},
+                    "site": {"name": "PK Test Site"},
+                    "metadata": {
+                        "source_match": {"netbox_id": 999999},
+                    },
+                },
+            },
+        }
+        response = self.send_request(payload, status_code=status.HTTP_400_BAD_REQUEST)
+        errors = response.json().get("errors", {})
+        self.assertTrue(len(errors) > 0)
+
+    def test_no_metadata_uses_normal_matching(self):
+        """Without metadata, normal constraint-based matching applies."""
+        payload = {
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": "PK Test Device",
+                    "serial": "CHANGED-SERIAL",
+                    "device_type": {"model": "PK Test Type", "manufacturer": {"name": "PK Test Manufacturer"}},
+                    "role": {"name": "PK Test Role"},
+                    "site": {"name": "PK Test Site"},
+                },
+            },
+        }
+        response = self.send_request(payload)
+        cs = response.json().get("change_set", {})
+        changes = cs.get("changes", [])
+        device_changes = [c for c in changes if c["object_type"] == "dcim.device"]
+        self.assertEqual(len(device_changes), 1)
+        change = device_changes[0]
+        # should still match by name+site and produce an update
+        self.assertEqual(change["change_type"], "update")
+        self.assertEqual(change["object_id"], self.device.pk)
+
+    def test_pk_match_device_via_nested_interface(self):
+        """Interface ingested with parent device carrying netbox_id — device matched by PK, interface by name."""
+        payload = {
+            "object_type": "dcim.interface",
+            "entity": {
+                "interface": {
+                    "name": "eth0",
+                    "type": "virtual",
+                    "mtu": 9000,
+                    "device": {
+                        "name": "Irrelevant Name",
+                        "device_type": {"model": "PK Test Type", "manufacturer": {"name": "PK Test Manufacturer"}},
+                        "role": {"name": "PK Test Role"},
+                        "site": {"name": "PK Test Site"},
+                        "metadata": {
+                            "source_match": {"netbox_id": self.device.pk},
+                        },
+                    },
+                },
+            },
+        }
+        response = self.send_request(payload)
+        cs = response.json().get("change_set", {})
+        changes = cs.get("changes", [])
+        device_changes = [c for c in changes if c["object_type"] == "dcim.device"]
+        interface_changes = [c for c in changes if c["object_type"] == "dcim.interface"]
+        # device should be matched by PK (name differs so it's an update)
+        self.assertEqual(len(device_changes), 1)
+        self.assertEqual(device_changes[0]["change_type"], "update")
+        self.assertEqual(device_changes[0]["object_id"], self.device.pk)
+        # interface should be matched by name within the PK-resolved device
+        self.assertEqual(len(interface_changes), 1)
+        self.assertEqual(interface_changes[0]["change_type"], "update")
+        self.assertEqual(interface_changes[0]["object_id"], self.interface.pk)
+
+    def test_invalid_netbox_id_falls_through(self):
+        """Invalid (non-numeric) netbox_id is ignored with a warning, falls through to normal matching."""
+        payload = {
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": "PK Test Device",
+                    "serial": "CHANGED-FOR-INVALID-PK-TEST",
+                    "device_type": {"model": "PK Test Type", "manufacturer": {"name": "PK Test Manufacturer"}},
+                    "role": {"name": "PK Test Role"},
+                    "site": {"name": "PK Test Site"},
+                    "metadata": {
+                        "source_match": {"netbox_id": "not-a-number"},
+                    },
+                },
+            },
+        }
+        response = self.send_request(payload)
+        cs = response.json().get("change_set", {})
+        changes = cs.get("changes", [])
+        device_changes = [c for c in changes if c["object_type"] == "dcim.device"]
+        self.assertEqual(len(device_changes), 1)
+        # should fall through to normal matching and find the device by name
+        self.assertEqual(device_changes[0]["change_type"], "update")
+        self.assertEqual(device_changes[0]["object_id"], self.device.pk)
+        # warning should be present
+        warnings = cs.get("warnings", {})
+        self.assertIn("metadata", warnings.get("dcim.device", {}))
