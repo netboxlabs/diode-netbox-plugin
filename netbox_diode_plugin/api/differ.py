@@ -195,6 +195,7 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
         object_type = entity.pop("_object_type")
         _ = entity.pop("_uuid")
         instance = entity.pop("_instance", None)
+        entity.pop("_netbox_id", None)
         _merge_warnings(warnings, object_type, entity.pop("_warnings", None))
         if instance:
             # the prior state is another new object...
