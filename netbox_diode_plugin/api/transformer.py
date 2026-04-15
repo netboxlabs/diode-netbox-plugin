@@ -194,6 +194,26 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
             node[field_name + "_type"] = ref_info.object_type
             field_name = field_name + "_id"
 
+        # Explicitly null reference — means "clear this FK".
+        # An empty dict {} comes from protojson when the SDK sets a message field
+        # to an empty message (e.g. Tenant{}) to signal "clear this field".
+        if value is None or (isinstance(value, dict) and len(value) == 0):
+            if ref_info.is_generic:
+                node[ref_info.field_name + "_type"] = None
+            if is_circular:
+                if post_create is None:
+                    post_create = {
+                        "_uuid": str(uuid4()),
+                        "_object_type": object_type,
+                        "_refs": set(),
+                        "_instance": node['_uuid'],
+                        "_is_post_create": True,
+                    }
+                post_create[field_name] = None
+            else:
+                node[field_name] = None
+            continue
+
         refs = []
         ref_value = None
         if isinstance(value, list):
