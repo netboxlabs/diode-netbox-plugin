@@ -13,8 +13,8 @@ from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer,
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldTypeChoices
 from ipam.models import IPAddress
-from tenancy.models import Tenant
 from rest_framework import status
+from tenancy.models import Tenant
 from utilities.testing import APITestCase
 
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
