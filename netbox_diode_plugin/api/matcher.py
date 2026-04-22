@@ -32,6 +32,24 @@ def _get_find_obj_cache_ttl() -> int:
     return get_plugin_config("netbox_diode_plugin", "find_obj_cache_ttl")
 
 
+def _get_active_branch_schema() -> str | None:
+    try:
+        from netbox_branching.contextvars import active_branch
+    except ImportError:
+        return None
+    branch = active_branch.get()
+    if branch is not None:
+        return branch.schema_id
+    return None
+
+
+def _find_obj_rev_key(object_type: str, object_id: int) -> str:
+    branch_schema = _get_active_branch_schema()
+    if branch_schema:
+        return f"diode:fobj:rev:{branch_schema}:{object_type}:{object_id}"
+    return f"diode:fobj:rev:{object_type}:{object_id}"
+
+
 def invalidate_find_obj_entry(object_type: str, object_id: int):
     """
     Delete a cached find_existing_object result by PK.
@@ -39,7 +57,7 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
     Uses a reverse-index (PK → cache key) to find and delete the
     lookup cache entry. Call this after updating an existing object.
     """
-    rev_key = f"diode:fobj:rev:{object_type}:{object_id}"
+    rev_key = _find_obj_rev_key(object_type, object_id)
     lookup_key = django_cache.get(rev_key)
     if lookup_key:
         django_cache.delete(lookup_key)
@@ -921,7 +939,11 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     if not items:
         return None
 
-    raw = f"{object_type}:{items}"
+    branch_schema = _get_active_branch_schema()
+    if branch_schema:
+        raw = f"{branch_schema}:{object_type}:{items}"
+    else:
+        raw = f"{object_type}:{items}"
     key_hash = hashlib.sha256(raw.encode()).hexdigest()[:20]
     return f"diode:fobj:{key_hash}"
 
@@ -955,8 +977,7 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
                 # Object deleted since cached — clean up and fall through
                 cache_hit = False
                 django_cache.delete(cache_key)
-                rev_key = f"diode:fobj:rev:{object_type}:{cached_id}"
-                django_cache.delete(rev_key)
+                django_cache.delete(_find_obj_rev_key(object_type, cached_id))
 
     if not cache_hit:
         for matcher in get_model_matchers(model_class):
@@ -973,8 +994,7 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
 
         if cache_key and result is not None:
             django_cache.set(cache_key, result.id, cache_ttl)
-            rev_key = f"diode:fobj:rev:{object_type}:{result.id}"
-            django_cache.set(rev_key, cache_key, cache_ttl)
+            django_cache.set(_find_obj_rev_key(object_type, result.id), cache_key, cache_ttl)
 
     if ctx:
         ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
