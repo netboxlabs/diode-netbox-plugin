@@ -76,6 +76,53 @@ class SettingsViewTestCase(TestCase):
             self.assertIn("grpc://localhost:8080/diode", str(response.content))
 
 
+    def test_settings_display_with_diode_target_display(self):
+        """Test that diode_target_display overrides the displayed target."""
+        self.request.user = User.objects.create_user("foo", password="pass")
+        self.add_permissions(self.request.user, "netbox_diode_plugin.view_setting")
+
+        def mock_get_plugin_config(plugin, key):
+            if key == "diode_target_display":
+                return "grpcs://external.example.com/diode"
+            if key == "diode_target_override":
+                return None
+            if key == "diode_target":
+                return "grpc://localhost:8080/diode"
+            return None
+
+        with mock.patch(
+            "netbox_diode_plugin.views.get_plugin_config",
+            side_effect=mock_get_plugin_config,
+        ):
+            response = self.view.get(self.request)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertIn("grpcs://external.example.com/diode", str(response.content))
+            self.assertNotIn("grpc://localhost:8080/diode", str(response.content))
+
+    def test_diode_target_display_takes_precedence_over_override(self):
+        """Test that diode_target_display takes precedence over diode_target_override for display."""
+        self.request.user = User.objects.create_user("foo", password="pass")
+        self.add_permissions(self.request.user, "netbox_diode_plugin.view_setting")
+
+        def mock_get_plugin_config(plugin, key):
+            if key == "diode_target_display":
+                return "grpcs://external.example.com/diode"
+            if key == "diode_target_override":
+                return "grpc://internal-override:8080/diode"
+            if key == "diode_target":
+                return "grpc://localhost:8080/diode"
+            return None
+
+        with mock.patch(
+            "netbox_diode_plugin.views.get_plugin_config",
+            side_effect=mock_get_plugin_config,
+        ):
+            response = self.view.get(self.request)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertIn("grpcs://external.example.com/diode", str(response.content))
+            self.assertNotIn("grpc://internal-override:8080/diode", str(response.content))
+
+
 class SettingsEditViewTestCase(TestCase):
     """Test case for the SettingsEditView."""
 

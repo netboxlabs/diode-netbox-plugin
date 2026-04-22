@@ -147,6 +147,9 @@ class SettingsView(BaseDiodeView):
         diode_target_override = get_plugin_config(
             "netbox_diode_plugin", "diode_target_override"
         )
+        diode_target_display = get_plugin_config(
+            "netbox_diode_plugin", "diode_target_display"
+        )
 
         try:
             settings = Setting.objects.get()
@@ -158,7 +161,11 @@ class SettingsView(BaseDiodeView):
                 diode_target=diode_target_override or default_diode_target
             )
 
-        diode_target = diode_target_override or settings.diode_target
+        diode_target = (
+            diode_target_display
+            or diode_target_override
+            or settings.diode_target
+        )
 
         # Check if branching plugin is available
         from django.conf import settings as django_settings
@@ -166,7 +173,10 @@ class SettingsView(BaseDiodeView):
 
         context = {
             "diode_target": diode_target,
-            "is_diode_target_overridden": diode_target_override is not None,
+            "is_diode_target_overridden": (
+                diode_target_override is not None
+                or diode_target_display is not None
+            ),
             "branch": settings.branch if has_branching_plugin else None,
             "has_branching_plugin": has_branching_plugin,
         }
