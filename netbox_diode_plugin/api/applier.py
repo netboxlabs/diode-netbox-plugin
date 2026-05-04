@@ -29,7 +29,7 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         change_type = change.change_type
         object_type = change.object_type
 
-        if change_type == ChangeType.NOOP.value:
+        if change_type == ChangeType.NOOP:
             continue
 
         try:
@@ -105,7 +105,7 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
     serializer_class = get_serializer_for_model(model_class)
     change_type = change.change_type
 
-    if change_type == ChangeType.CREATE.value:
+    if change_type == ChangeType.CREATE:
         # For component types that may be auto-created from e.g. DeviceType or ModuleType templates,
         # try to find existing object first before attempting to create.
         # This prevents duplicates when components are instantiated during Device/Module save()
@@ -120,7 +120,7 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         if change.ref_id:
             created[change.ref_id] = instance
 
-    elif change_type == ChangeType.UPDATE.value:
+    elif change_type == ChangeType.UPDATE:
         if object_id := change.object_id:
             instance = model_class.objects.get(id=object_id)
             serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
@@ -185,7 +185,7 @@ def _validate_change_set(change_set: ChangeSet):
     for change in change_set.changes:
         if change.object_id is None and change.ref_id is None:
             raise _err("Object ID or Ref ID must be provided", change.object_type, NON_FIELD_ERRORS)
-        if change.change_type not in [ct.value for ct in ChangeType]:
+        if not isinstance(change.change_type, ChangeType):
             raise _err(f"Unsupported change type '{change.change_type}'", change.object_type, "change_type")
 
 def _err(message, object_name, field):

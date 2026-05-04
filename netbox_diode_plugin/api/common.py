@@ -90,6 +90,25 @@ class Change:
             "new_refs": self.new_refs,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "Change":
+        """Build a Change from a request data dict."""
+        change_type = data.get("change_type")
+        if isinstance(change_type, str):
+            try:
+                change_type = ChangeType(change_type)
+            except ValueError:
+                pass
+        return cls(
+            change_type=change_type,
+            object_type=data.get("object_type"),
+            object_id=data.get("object_id"),
+            ref_id=data.get("ref_id"),
+            data=data.get("data"),
+            before=data.get("before"),
+            new_refs=data.get("new_refs", []),
+        )
+
 
 @dataclass
 class ChangeSet:
@@ -110,6 +129,16 @@ class ChangeSet:
         if self.warnings:
             d["warnings"] = self.warnings
         return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ChangeSet":
+        """Build a ChangeSet from a request data dict."""
+        return cls(
+            id=data.get("id"),
+            changes=[Change.from_dict(c) for c in data.get("changes", [])],
+            branch=data.get("branch"),
+            warnings=data.get("warnings"),
+        )
 
     def validate(self) -> dict[str, list[str]]:
         """Validate basics of the change set data."""

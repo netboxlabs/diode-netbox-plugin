@@ -6,14 +6,13 @@ import re
 
 from django.apps import apps
 from django.db import transaction
-from rest_framework import views
+from rest_framework import status, views
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from .applier import apply_changeset
 from .authentication import DiodeOAuth2Authentication
 from .common import (
-    Change,
     ChangeSet,
     ChangeSetException,
     ChangeSetResult,
@@ -54,6 +53,16 @@ def get_valid_entity_keys(model_name):
     lowerCamel = upperCamel[0].lower() + upperCamel[1:]  # lowerCamelCase
 
     return (snake, lowerCamel)
+
+
+def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
+    """Apply one changeset, returning a ChangeSetResult on success or on ChangeSetException."""
+    try:
+        with transaction.atomic():
+            return apply_changeset(change_set, request)
+    except ChangeSetException as e:
+        logger.error(f"Error applying change set: {e}")
+        return ChangeSetResult(id=change_set.id, errors=e.errors)
 
 
 class GenerateDiffView(views.APIView):
@@ -180,37 +189,72 @@ class ApplyChangeSetView(views.APIView):
             raise
 
     def _post(self, request, *args, **kwargs):
-        data = request.data.copy()
-
-        changes = []
-        if "changes" in data:
-            changes = [
-                Change(
-                    change_type=change.get("change_type"),
-                    object_type=change.get("object_type"),
-                    object_id=change.get("object_id"),
-                    ref_id=change.get("ref_id"),
-                    data=change.get("data"),
-                    before=change.get("before"),
-                    new_refs=change.get("new_refs", []),
-                )
-                for change in data["changes"]
-            ]
-        change_set = ChangeSet(
-            id=data.get("id"),
-            changes=changes,
-        )
-        try:
-            with transaction.atomic():
-                result = apply_changeset(change_set, request)
-        except ChangeSetException as e:
-            logger.error(f"Error applying change set: {e}")
-            result = ChangeSetResult(
-                id=change_set.id,
-                errors=e.errors,
-            )
-
+        change_set = ChangeSet.from_dict(request.data)
+        result = _apply_one_changeset(change_set, request)
         return Response(result.to_dict(), status=result.get_status_code())
+
+
+class ApplyChangeSetBatchView(views.APIView):
+    """
+    ApplyChangeSetBatch view.
+
+    Accepts ``{"change_sets": [<changeset>, ...]}`` and applies each changeset
+    in its own ``transaction.atomic()`` block (matching the singular
+    ``apply-change-set/`` endpoint). A failure in one changeset does not affect
+    the others.
+
+    Response shape: ``{"results": [<ChangeSetResult>, ...]}`` with one result
+    per input changeset, preserving order. HTTP 200 if all succeeded,
+    HTTP 207 (multi-status) if at least one changeset failed, HTTP 400 if the
+    batch envelope itself was invalid.
+    """
+
+    authentication_classes = [DiodeOAuth2Authentication]
+    permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_WRITE)]
+
+    def post(self, request, *args, **kwargs):
+        """Apply a batch of change sets."""
+        try:
+            return self._post(request, *args, **kwargs)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
+
+    def _post(self, request, *args, **kwargs):
+        change_sets = request.data.get("change_sets")
+        if change_sets is None:
+            raise ValidationError({"change_sets": ["change_sets is required"]})
+        if not isinstance(change_sets, list):
+            raise ValidationError({"change_sets": ["change_sets must be a list"]})
+        if len(change_sets) == 0:
+            raise ValidationError({"change_sets": ["change_sets must not be empty"]})
+
+        results = []
+        for entry in change_sets:
+            if not isinstance(entry, dict):
+                results.append(
+                    ChangeSetResult(
+                        errors={"request": {"change_set": ["change_set must be an object"]}}
+                    ).to_dict()
+                )
+                continue
+            try:
+                change_set = ChangeSet.from_dict(entry)
+                result = _apply_one_changeset(change_set, request).to_dict()
+            except Exception as e:
+                logger.error(f"Error parsing batch entry: {e}")
+                result = ChangeSetResult(
+                    errors={"request": {"change_set": [f"invalid change_set: {e}"]}}
+                ).to_dict()
+            results.append(result)
+
+        http_status = (
+            status.HTTP_207_MULTI_STATUS
+            if any(r.get("errors") for r in results)
+            else status.HTTP_200_OK
+        )
+        return Response({"results": results}, status=http_status)
 
 
 class GetDefaultBranchView(views.APIView):
