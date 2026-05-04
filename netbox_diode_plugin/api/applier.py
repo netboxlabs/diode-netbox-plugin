@@ -5,9 +5,11 @@
 
 import logging
 
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models, transaction
 from django.db.utils import IntegrityError
+from extras.models import Tag
 from rest_framework.exceptions import ValidationError as ValidationError
 
 from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     """Apply a change set."""
     _validate_change_set(change_set)
+    _preload_changeset_cache(change_set, request)
 
     created = {}
     for change in change_set.changes:
@@ -55,6 +58,63 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     return ChangeSetResult(
         id=change_set.id,
     )
+
+def _preload_changeset_cache(change_set: ChangeSet, request) -> dict:
+    """
+    Warm Django's ContentType cache and prefetch tag IDs once per changeset.
+
+    Without this, every per-change `ContentType.objects.get_for_model(...)` and
+    every `Tag.objects.get(slug=...)` issues its own SQL. Stashing the result on
+    `request._diode_preload` lets later code paths (PR 4 bulk-tag write) reuse
+    it without re-querying.
+    """
+    models_to_warm: dict[str, models.Model] = {}
+    tag_slugs: set[str] = set()
+
+    for change in change_set.changes:
+        if change.change_type == ChangeType.NOOP:
+            continue
+        ot = change.object_type
+        if ot and ot not in models_to_warm:
+            try:
+                models_to_warm[ot] = get_object_type_model(ot)
+            except Exception:
+                # Unknown model — let the main apply path raise the proper error.
+                continue
+        for slug in _iter_tag_slugs(change):
+            tag_slugs.add(slug)
+
+    if models_to_warm:
+        # Populates Django's per-process ContentType cache in a single query.
+        ContentType.objects.get_for_models(*models_to_warm.values())
+
+    tag_ids_by_slug: dict[str, int] = {}
+    if tag_slugs:
+        for tag_id, slug in Tag.objects.filter(slug__in=tag_slugs).values_list("id", "slug"):
+            tag_ids_by_slug[slug] = tag_id
+
+    preload = {
+        "tag_ids_by_slug": tag_ids_by_slug,
+        "models_by_object_type": models_to_warm,
+    }
+    if request is not None:
+        request._diode_preload = preload
+    return preload
+
+
+def _iter_tag_slugs(change: Change):
+    """Yield string tag slugs from a change.data['tags'] list."""
+    if not change.data:
+        return
+    tags = change.data.get("tags")
+    if not isinstance(tags, list):
+        return
+    for t in tags:
+        if isinstance(t, str):
+            yield t
+        elif isinstance(t, dict) and isinstance(t.get("slug"), str):
+            yield t["slug"]
+
 
 def _is_auto_created_component(object_type: str) -> bool:
     """Check if the object type is auto-created from templates."""
