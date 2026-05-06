@@ -953,6 +953,56 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(vrfs.count(), 1)
         self.assertEqual(vrfs.first().description, "second")
 
+    def test_generate_diff_and_apply_vrf_no_rd_within_tenant_dedup(self):
+        """Re-ingesting an RD-less VRF within the same tenant resolves to the existing row."""
+        self.diff_and_apply({
+            "timestamp": 1,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-E", "tenant": {"name": "Tenant E"}}},
+        })
+        # Second diff must be a no-op — proves logical_vrf_name_no_rd_within_tenant matched.
+        response = self.client.post(self.diff_url, data={
+            "timestamp": 2,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-E", "tenant": {"name": "Tenant E"}}},
+        }, format="json", **self.authorization_header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json().get("change_set", {}).get("changes", []), [])
+        self.assertEqual(VRF.objects.filter(name="VRF-E").count(), 1)
+
+    def test_generate_diff_and_apply_vrf_no_rd_no_cross_tenant_collapse(self):
+        """Two RD-less VRFs with the same name in different tenants must remain distinct."""
+        self.diff_and_apply({
+            "timestamp": 1,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-F", "tenant": {"name": "Tenant F1"}}},
+        })
+        self.diff_and_apply({
+            "timestamp": 2,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-F", "tenant": {"name": "Tenant F2"}}},
+        })
+        vrfs = VRF.objects.filter(name="VRF-F").select_related("tenant").order_by("pk")
+        self.assertEqual(vrfs.count(), 2)
+        self.assertEqual({v.tenant.name for v in vrfs}, {"Tenant F1", "Tenant F2"})
+
+    def test_generate_diff_and_apply_vrf_no_rd_no_tenant_does_not_match_tenant_vrf(self):
+        """A no-tenant RD-less ingest must not collapse into a same-name VRF that has a tenant."""
+        self.diff_and_apply({
+            "timestamp": 1,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-G", "tenant": {"name": "Tenant G"}}},
+        })
+        self.diff_and_apply({
+            "timestamp": 2,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-G"}},
+        })
+        vrfs = VRF.objects.filter(name="VRF-G").order_by("pk")
+        self.assertEqual(vrfs.count(), 2)
+        self.assertEqual(vrfs[0].tenant.name, "Tenant G")
+        self.assertIsNone(vrfs[1].tenant)
+
     def test_generate_diff_and_apply_ip_address_with_assigned_object_interface(self):
         """Test ip."""
         payload = {

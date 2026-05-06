@@ -179,9 +179,15 @@ _LOGICAL_MATCHERS = {
     "ipam.vrf": lambda: [
         ObjectMatchCriteria(
             fields=("name",),
-            name="logical_vrf_name_no_rd",
+            name="logical_vrf_name_no_rd_no_tenant",
             model_class=get_object_type_model("ipam.vrf"),
-            condition=Q(rd__isnull=True),
+            condition=Q(rd__isnull=True, tenant__isnull=True),
+        ),
+        ObjectMatchCriteria(
+            fields=("name", "tenant"),
+            name="logical_vrf_name_no_rd_within_tenant",
+            model_class=get_object_type_model("ipam.vrf"),
+            condition=Q(rd__isnull=True, tenant__isnull=False),
         ),
     ],
     "wireless.wirelesslan": lambda: [
