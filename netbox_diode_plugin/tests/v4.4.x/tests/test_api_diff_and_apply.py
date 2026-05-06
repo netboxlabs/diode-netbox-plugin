@@ -960,7 +960,7 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             "object_type": "ipam.vrf",
             "entity": {"vrf": {"name": "VRF-E", "tenant": {"name": "Tenant E"}}},
         })
-        # Second diff must be a no-op — proves logical_vrf_name_no_rd_within_tenant matched.
+        # Second diff must be a no-op — proves logical_vrf_name_within_tenant matched.
         response = self.client.post(self.diff_url, data={
             "timestamp": 2,
             "object_type": "ipam.vrf",
