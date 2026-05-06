@@ -16,7 +16,7 @@ from core.models import ObjectType
 from dcim.models import Device, FrontPort, Interface, ModuleBay, RearPort, Site
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldChoiceSet, CustomFieldChoiceSetBaseChoices, CustomFieldTypeChoices
-from ipam.models import ASN, IPAddress, VLANGroup, VLANTranslationPolicy
+from ipam.models import ASN, VRF, IPAddress, VLANGroup, VLANTranslationPolicy
 from rest_framework import status
 from users.models import Owner, OwnerGroup
 from utilities.testing import APITestCase
@@ -881,6 +881,78 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_vlan_group.vid_ranges[0].upper, 10)
         self.assertEqual(new_vlan_group.vid_ranges[1].lower, 12)
         self.assertEqual(new_vlan_group.vid_ranges[1].upper, 21)
+
+    def test_generate_diff_and_apply_vrf_no_rd_dedup(self):
+        """Re-ingesting an RD-less VRF resolves to the existing row (empty diff on second pass)."""
+        payload = {
+            "timestamp": 1,
+            "object_type": "ipam.vrf",
+            "entity": {
+                "vrf": {
+                    "name": "VRF-A",
+                },
+            },
+        }
+        self.diff_and_apply(payload)
+        # Second diff must be a no-op — proves the matcher resolved to the existing VRF.
+        response = self.client.post(
+            self.diff_url, data=payload, format="json", **self.authorization_header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json().get("change_set", {}).get("changes", []), [])
+        vrfs = VRF.objects.filter(name="VRF-A")
+        self.assertEqual(vrfs.count(), 1)
+        self.assertIsNone(vrfs.first().rd)
+
+    def test_generate_diff_and_apply_vrf_no_rd_does_not_match_rd_vrf(self):
+        """An RD-less ingest must not collapse into an existing RD'd VRF with the same name."""
+        self.diff_and_apply({
+            "timestamp": 1,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-B", "rd": "65000:1"}},
+        })
+        self.diff_and_apply({
+            "timestamp": 2,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-B"}},
+        })
+        vrfs = VRF.objects.filter(name="VRF-B").order_by("pk")
+        self.assertEqual(vrfs.count(), 2)
+        self.assertEqual(vrfs[0].rd, "65000:1")
+        self.assertIsNone(vrfs[1].rd)
+
+    def test_generate_diff_and_apply_vrf_rd_after_no_rd_does_not_collapse(self):
+        """An RD'd ingest after a no-RD ingest with the same name should create a new VRF."""
+        self.diff_and_apply({
+            "timestamp": 1,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-C"}},
+        })
+        self.diff_and_apply({
+            "timestamp": 2,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-C", "rd": "65000:2"}},
+        })
+        vrfs = VRF.objects.filter(name="VRF-C").order_by("pk")
+        self.assertEqual(vrfs.count(), 2)
+        self.assertIsNone(vrfs[0].rd)
+        self.assertEqual(vrfs[1].rd, "65000:2")
+
+    def test_generate_diff_and_apply_vrf_no_rd_update(self):
+        """Repeat no-RD ingest with a different field value should update the same VRF, not duplicate."""
+        self.diff_and_apply({
+            "timestamp": 1,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-D", "description": "first"}},
+        })
+        self.diff_and_apply({
+            "timestamp": 2,
+            "object_type": "ipam.vrf",
+            "entity": {"vrf": {"name": "VRF-D", "description": "second"}},
+        })
+        vrfs = VRF.objects.filter(name="VRF-D")
+        self.assertEqual(vrfs.count(), 1)
+        self.assertEqual(vrfs.first().description, "second")
 
     def test_generate_diff_and_apply_ip_address_with_assigned_object_interface(self):
         """Test ip."""
