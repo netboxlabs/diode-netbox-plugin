@@ -485,7 +485,8 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_rd | 1 | builtin | rd | N/A | Matches on unique field(s): rd | All versions |
+| logical_vrf_name_no_rd | 1 | logical | name | rd is NULL | Matches on fields: name where rd is NULL | All versions |
+| unique_rd | 2 | builtin | rd | N/A | Matches on unique field(s): rd | All versions |
 
 ## tenancy.contact
 
