@@ -6,7 +6,7 @@
 import logging
 
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import models
+from django.db import models, transaction
 from django.db.utils import IntegrityError
 from rest_framework.exceptions import ValidationError as ValidationError
 
@@ -93,8 +93,9 @@ def _create_or_find_instance(data: dict, object_type: str, serializer_class, req
     serializer = serializer_class(data=data, context={"request": request})
     try:
         serializer.is_valid(raise_exception=True)
-        return serializer.save()
-    except ValidationError as e:
+        with transaction.atomic():
+            return serializer.save()
+    except (ValidationError, IntegrityError) as e:
         instance = find_existing_object(data, object_type)
         if not instance:
             raise e
