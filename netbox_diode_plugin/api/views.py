@@ -19,6 +19,7 @@ from .common import (
     ChangeSetResult,
 )
 from .differ import generate_changeset
+from .matcher import enter_request_obj_cache, exit_request_obj_cache
 from .permissions import (
     SCOPE_NETBOX_READ,
     SCOPE_NETBOX_WRITE,
@@ -190,12 +191,16 @@ class BulkPlanView(views.APIView):
 
         branch_schema_id = self._get_branch_schema_id(request)
 
-        results = []
-        for entry in entities:
-            entity_id = entry.get("id")
-            result = self._process_entity(entry, branch_schema_id)
-            result["id"] = entity_id
-            results.append(result)
+        token = enter_request_obj_cache()
+        try:
+            results = []
+            for entry in entities:
+                entity_id = entry.get("id")
+                result = self._process_entity(entry, branch_schema_id)
+                result["id"] = entity_id
+                results.append(result)
+        finally:
+            exit_request_obj_cache(token)
 
         return Response({"results": results})
 
