@@ -6,7 +6,7 @@ import re
 
 from django.apps import apps
 from django.db import transaction
-from rest_framework import views
+from rest_framework import status, views
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
@@ -161,6 +161,106 @@ class GenerateDiffView(views.APIView):
         self._add_branch_to_result(result, branch_schema_id)
 
         return Response(result.to_dict(), status=result.get_status_code())
+
+
+class BulkPlanView(views.APIView):
+    """BulkPlan view — batch generate diffs for multiple entities in a single request."""
+
+    authentication_classes = [DiodeOAuth2Authentication]
+    permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_READ)]
+
+    def post(self, request, *args, **kwargs):
+        """Generate diffs for a batch of entities."""
+        try:
+            return self._post(request, *args, **kwargs)
+        except Exception:
+            logger.exception("unexpected error in bulk-plan")
+            return Response(
+                {"errors": {"request": {"__all__": ["internal error"]}}},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def _post(self, request, *args, **kwargs):
+        entities = request.data.get("entities")
+        if not isinstance(entities, list) or len(entities) == 0:
+            return Response(
+                {"errors": {"request": {"entities": ["a non-empty list of entities is required"]}}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        branch_schema_id = self._get_branch_schema_id(request)
+
+        results = []
+        for entry in entities:
+            entity_id = entry.get("id")
+            result = self._process_entity(entry, branch_schema_id)
+            result["id"] = entity_id
+            results.append(result)
+
+        return Response({"results": results})
+
+    def _get_branch_schema_id(self, request):
+        """Get branch schema ID from request header or settings."""
+        branch_schema_id = request.headers.get("X-NetBox-Branch")
+
+        if not branch_schema_id and Branch is not None:
+            try:
+                from netbox_diode_plugin.models import Setting
+                settings = Setting.objects.first()
+                if settings and settings.branch:
+                    branch_schema_id = settings.branch.schema_id
+            except Exception as e:
+                logger.warning(f"Could not retrieve default branch from settings: {e}")
+
+        return branch_schema_id
+
+    def _add_branch_to_result(self, result, branch_schema_id):
+        """Add branch information to the result if branch is available."""
+        if branch_schema_id and Branch is not None:
+            try:
+                branch = Branch.objects.get(schema_id=branch_schema_id)
+                result.change_set.branch = {"id": branch.schema_id, "name": branch.name}
+            except Branch.DoesNotExist:
+                pass
+
+    def _process_entity(self, entry, branch_schema_id):
+        """Process a single entity and return its result dict."""
+        entity = entry.get("entity")
+        object_type = entry.get("object_type")
+
+        if not entity:
+            return {"change_set": None, "errors": {"request": {"entity": ["entity is required"]}}}
+        if not object_type:
+            return {"change_set": None, "errors": {"request": {"object_type": ["object_type is required"]}}}
+
+        try:
+            app_label, model_name = object_type.split(".")
+        except ValueError:
+            return {"change_set": None, "errors": {"request": {"object_type": [f"invalid format: {object_type}"]}}}
+
+        try:
+            model_class = apps.get_model(app_label, model_name)
+        except LookupError:
+            return {"change_set": None, "errors": {"request": {"object_type": [f"{object_type} is not supported in this version."]}}}
+
+        original_entity_data = None
+        for entity_key in get_valid_entity_keys(model_class.__name__):
+            original_entity_data = entity.get(entity_key)
+            if original_entity_data:
+                break
+
+        if original_entity_data is None:
+            return {"change_set": None, "errors": {"entity": {entity_key: [f"No data found in expected entity key, got: {list(entity.keys())}"]}}}
+
+        try:
+            result = generate_changeset(original_entity_data, object_type)
+            self._add_branch_to_result(result, branch_schema_id)
+            return result.to_dict()
+        except ChangeSetException as e:
+            return ChangeSetResult(errors=e.errors).to_dict()
+        except Exception:
+            logger.exception("unexpected error in bulk-plan for entity %s", entry.get("id"))
+            return {"change_set": None, "errors": {"request": {"__all__": ["internal error processing entity"]}}}
 
 
 class ApplyChangeSetView(views.APIView):
