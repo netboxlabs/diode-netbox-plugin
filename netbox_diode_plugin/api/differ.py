@@ -2,6 +2,7 @@
 # Copyright 2025 NetBox Labs Inc
 """Diode NetBox Plugin - API - Differ."""
 
+import contextvars
 import copy
 import datetime
 import logging
@@ -23,12 +24,24 @@ from .common import (
     harmonize_formats,
     sort_ints_first,
 )
+from .matcher import _get_active_branch_schema
 from .plugin_utils import get_primary_value, legal_fields
 from .profile import profiled
 from .supported_models import extract_supported_models
 from .transformer import cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
 
 logger = logging.getLogger(__name__)
+
+_prechange_cache = contextvars.ContextVar("diode_prechange_cache", default=None)
+
+
+def enter_prechange_cache():
+    return _prechange_cache.set({})
+
+
+def exit_prechange_cache(token):
+    _prechange_cache.reset(token)
+
 
 @profiled("prechange_data")
 def prechange_data_from_instance(instance) -> dict: # noqa: C901
@@ -40,6 +53,13 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
 
     model_class = instance.__class__
     object_type = f"{model_class._meta.app_label}.{model_class._meta.model_name}"
+
+    cache = _prechange_cache.get(None)
+    if cache is not None:
+        cache_key = (_get_active_branch_schema(), object_type, instance.pk)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return copy.deepcopy(cached)
 
     supported_models = extract_supported_models()
     model = supported_models.get(object_type)
@@ -92,6 +112,10 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
                 cfmap[cf.name] = serialized
         prechange_data["custom_fields"] = cfmap
     prechange_data = harmonize_formats(prechange_data)
+
+    if cache is not None:
+        cache[cache_key] = prechange_data
+        return copy.deepcopy(prechange_data)
 
     return prechange_data
 
