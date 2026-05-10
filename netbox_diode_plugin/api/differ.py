@@ -36,10 +36,12 @@ _prechange_cache = contextvars.ContextVar("diode_prechange_cache", default=None)
 
 
 def enter_prechange_cache():
+    """Activate a request-scoped prechange data cache."""
     return _prechange_cache.set({})
 
 
 def exit_prechange_cache(token):
+    """Deactivate the request-scoped prechange data cache."""
     _prechange_cache.reset(token)
 
 

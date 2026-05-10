@@ -34,10 +34,12 @@ _NOT_FOUND_SENTINEL = object()
 
 
 def enter_request_obj_cache():
+    """Activate a request-scoped object lookup cache."""
     return _request_obj_cache.set({})
 
 
 def exit_request_obj_cache(token):
+    """Deactivate the request-scoped object lookup cache."""
     _request_obj_cache.reset(token)
 
 

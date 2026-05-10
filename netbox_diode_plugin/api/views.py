@@ -257,7 +257,12 @@ class BulkPlanView(views.APIView):
                 break
 
         if original_entity_data is None:
-            return {"change_set": None, "errors": {"entity": {entity_key: [f"No data found in expected entity key, got: {list(entity.keys())}"]}}}
+            return {
+                "change_set": None,
+                "errors": {"entity": {entity_key: [
+                    f"No data found in expected entity key, got: {list(entity.keys())}"
+                ]}},
+            }
 
         try:
             result = generate_changeset(original_entity_data, object_type)
@@ -267,7 +272,10 @@ class BulkPlanView(views.APIView):
             return ChangeSetResult(errors=e.errors).to_dict()
         except Exception:
             logger.exception("unexpected error in bulk-plan for entity %s", entry.get("id"))
-            return {"change_set": None, "errors": {"request": {"__all__": ["internal error processing entity"]}}}
+            return {
+                "change_set": None,
+                "errors": {"request": {"__all__": ["internal error processing entity"]}},
+            }
 
 
 class ApplyChangeSetView(views.APIView):
