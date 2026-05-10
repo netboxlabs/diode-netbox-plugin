@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright 2026 NetBox Labs, Inc.
-"""Diode NetBox Plugin - ApplyChangeSetBatch Tests."""
+"""Diode NetBox Plugin - BulkApply Tests."""
 
 import uuid
 
@@ -10,13 +10,13 @@ from rest_framework import status
 from .test_api_apply_change_set import BaseApplyChangeSet
 
 
-class ApplyChangeSetBatchTestCase(BaseApplyChangeSet):
-    """ApplyChangeSetBatch test cases."""
+class BulkApplyTestCase(BaseApplyChangeSet):
+    """BulkApply test cases."""
 
     def setUp(self):
         """Set up test."""
         super().setUp()
-        self.batch_url = "/netbox/api/plugins/diode/apply-change-set-batch/"
+        self.batch_url = "/netbox/api/plugins/diode/bulk-apply/"
         # BaseApplyChangeSet creates fixtures with hardcoded ids (Site id=10, id=20)
         # via bulk_create, which does not advance the Postgres PK sequence.
         # Auto-allocating CREATE INSERTs in this test class would otherwise

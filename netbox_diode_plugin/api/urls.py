@@ -6,8 +6,8 @@ from django.urls import include, path
 from netbox.api.routers import NetBoxRouter
 
 from .views import (
-    ApplyChangeSetBatchView,
     ApplyChangeSetView,
+    BulkApplyView,
     BulkPlanView,
     GenerateDiffView,
     GetDefaultBranchView,
@@ -17,7 +17,7 @@ router = NetBoxRouter()
 
 urlpatterns = [
     path("apply-change-set/", ApplyChangeSetView.as_view()),
-    path("apply-change-set-batch/", ApplyChangeSetBatchView.as_view()),
+    path("bulk-apply/", BulkApplyView.as_view()),
     path("bulk-plan/", BulkPlanView.as_view()),
     path("generate-diff/", GenerateDiffView.as_view()),
     path("default-branch/", GetDefaultBranchView.as_view()),

@@ -321,9 +321,9 @@ class ApplyChangeSetView(views.APIView):
         return Response(result.to_dict(), status=result.get_status_code())
 
 
-class ApplyChangeSetBatchView(views.APIView):
+class BulkApplyView(views.APIView):
     """
-    ApplyChangeSetBatch view.
+    BulkApply view.
 
     Accepts ``{"change_sets": [<changeset>, ...]}`` and applies each changeset
     in its own ``transaction.atomic()`` block (matching the singular
