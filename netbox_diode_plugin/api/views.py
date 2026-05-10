@@ -29,6 +29,13 @@ from .permissions import (
 
 logger = logging.getLogger("netbox.diode_data")
 
+
+def _sanitize_for_log(value, max_len=200):
+    """Strip newlines/CR and bound length to make user-controlled values safe for logs."""
+    s = str(value) if value is not None else ""
+    return s.replace("\n", "").replace("\r", "")[:max_len]
+
+
 # Try to import Branch model at module level
 Branch = None
 try:
@@ -103,8 +110,10 @@ class GenerateDiffView(views.APIView):
                 branch = Branch.objects.get(schema_id=branch_schema_id)
                 result.change_set.branch = {"id": branch.schema_id, "name": branch.name}
             except Branch.DoesNotExist:
-                sanitized_branch_id = branch_schema_id.replace('\n', '').replace('\r', '')
-                logger.warning(f"Branch with ID {sanitized_branch_id} does not exist")
+                logger.warning(
+                    "Branch with ID %s does not exist",
+                    _sanitize_for_log(branch_schema_id),
+                )
 
     def _post(self, request, *args, **kwargs):
         entity = request.data.get("entity")
@@ -271,7 +280,10 @@ class BulkPlanView(views.APIView):
         except ChangeSetException as e:
             return ChangeSetResult(errors=e.errors).to_dict()
         except Exception:
-            logger.exception("unexpected error in bulk-plan for entity %s", entry.get("id"))
+            logger.exception(
+                "unexpected error in bulk-plan for entity %s",
+                _sanitize_for_log(entry.get("id")),
+            )
             return {
                 "change_set": None,
                 "errors": {"request": {"__all__": ["internal error processing entity"]}},
