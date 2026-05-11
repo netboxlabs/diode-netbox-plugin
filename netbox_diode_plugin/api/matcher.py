@@ -2,6 +2,7 @@
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - API - Object matching utilities."""
 
+import contextvars
 import hashlib
 import logging
 import time
@@ -27,6 +28,20 @@ from .plugin_utils import content_type_id, get_object_type, get_object_type_mode
 from .profile import get_profile_ctx
 
 logger = logging.getLogger(__name__)
+
+_request_obj_cache = contextvars.ContextVar("diode_request_obj_cache", default=None)
+_NOT_FOUND_SENTINEL = object()
+
+
+def enter_request_obj_cache():
+    """Activate a request-scoped object lookup cache."""
+    return _request_obj_cache.set({})
+
+
+def exit_request_obj_cache(token):
+    """Deactivate the request-scoped object lookup cache."""
+    _request_obj_cache.reset(token)
+
 
 def _get_find_obj_cache_ttl() -> int:
     return get_plugin_config("netbox_diode_plugin", "find_obj_cache_ttl")
@@ -982,6 +997,16 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
     cache_ttl = _get_find_obj_cache_ttl()
     cache_key = _find_obj_cache_key(data, object_type) if cache_ttl > 0 else None
 
+    req_cache = _request_obj_cache.get(None)
+    if req_cache is not None and cache_key is not None and cache_key in req_cache:
+        cached = req_cache[cache_key]
+        result = None if cached is _NOT_FOUND_SENTINEL else cached
+        if ctx:
+            ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
+            ctx.increment("find_obj_found" if result else "find_obj_not_found")
+            ctx.increment("find_obj_req_cache_hit")
+        return result
+
     if cache_key:
         cached_id = django_cache.get(cache_key)
         if cached_id is not None:
@@ -1009,6 +1034,9 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
         if cache_key and result is not None:
             django_cache.set(cache_key, result.id, cache_ttl)
             django_cache.set(_find_obj_rev_key(object_type, result.id), cache_key, cache_ttl)
+
+    if req_cache is not None and cache_key is not None:
+        req_cache[cache_key] = result if result is not None else _NOT_FOUND_SENTINEL
 
     if ctx:
         ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
