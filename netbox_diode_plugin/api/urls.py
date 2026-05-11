@@ -8,6 +8,7 @@ from netbox.api.routers import NetBoxRouter
 from .views import (
     ApplyChangeSetView,
     BulkApplyView,
+    BulkPlanApplyView,
     BulkPlanView,
     GenerateDiffView,
     GetDefaultBranchView,
@@ -19,6 +20,7 @@ urlpatterns = [
     path("apply-change-set/", ApplyChangeSetView.as_view()),
     path("bulk-apply/", BulkApplyView.as_view()),
     path("bulk-plan/", BulkPlanView.as_view()),
+    path("bulk-plan-apply/", BulkPlanApplyView.as_view()),
     path("generate-diff/", GenerateDiffView.as_view()),
     path("default-branch/", GetDefaultBranchView.as_view()),
     path("", include(router.urls)),

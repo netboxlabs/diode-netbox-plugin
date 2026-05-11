@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - API Views."""
 import logging
 import re
+from dataclasses import dataclass
 
 from django.apps import apps
 from django.db import transaction
@@ -73,6 +74,91 @@ def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         return ChangeSetResult(id=change_set.id, errors=e.errors)
 
 
+def _get_branch_schema_id(request):
+    """Return the branch schema ID from the X-NetBox-Branch header or plugin Setting fallback."""
+    branch_schema_id = request.headers.get("X-NetBox-Branch")
+
+    if not branch_schema_id and Branch is not None:
+        try:
+            from netbox_diode_plugin.models import Setting
+            settings = Setting.objects.first()
+            if settings and settings.branch:
+                branch_schema_id = settings.branch.schema_id
+                logger.debug(
+                    "Using default branch from settings: %s (%s)",
+                    settings.branch.name,
+                    branch_schema_id,
+                )
+        except Exception as e:
+            logger.warning("Could not retrieve default branch from settings: %s", e)
+
+    return branch_schema_id
+
+
+def _add_branch_to_result(result, branch_schema_id):
+    """Attach branch info to a ChangeSetResult's change_set when a branch is set."""
+    if not branch_schema_id or Branch is None or result.change_set is None:
+        return
+    try:
+        branch = Branch.objects.get(schema_id=branch_schema_id)
+        result.change_set.branch = {"id": branch.schema_id, "name": branch.name}
+    except Branch.DoesNotExist:
+        logger.warning(
+            "Branch with ID %s does not exist",
+            _sanitize_for_log(branch_schema_id),
+        )
+
+
+@dataclass
+class _ExtractedEntity:
+    """Result of validating and locating an entity's data within a bulk request entry."""
+
+    entity_data: dict | None = None
+    object_type: str | None = None
+    error: dict | None = None
+
+
+def _extract_entity_data(entry):
+    """
+    Validate a bulk-request entry and locate the inner entity dict by snake/camel key.
+
+    Returns an `_ExtractedEntity` with either `entity_data` + `object_type` populated
+    (success) or `error` populated with a plan-error dict (per-entity validation failure).
+    """
+    entity = entry.get("entity")
+    object_type = entry.get("object_type")
+
+    if not entity:
+        return _ExtractedEntity(error={"request": {"entity": ["entity is required"]}})
+    if not object_type:
+        return _ExtractedEntity(error={"request": {"object_type": ["object_type is required"]}})
+
+    try:
+        app_label, model_name = object_type.split(".")
+    except ValueError:
+        return _ExtractedEntity(error={"request": {"object_type": [f"invalid format: {object_type}"]}})
+
+    try:
+        model_class = apps.get_model(app_label, model_name)
+    except LookupError:
+        return _ExtractedEntity(
+            error={"request": {"object_type": [f"{object_type} is not supported in this version."]}}
+        )
+
+    last_key = None
+    for entity_key in get_valid_entity_keys(model_class.__name__):
+        last_key = entity_key
+        data = entity.get(entity_key)
+        if data:
+            return _ExtractedEntity(entity_data=data, object_type=object_type)
+
+    return _ExtractedEntity(
+        error={"entity": {last_key: [
+            f"No data found in expected entity key, got: {list(entity.keys())}"
+        ]}}
+    )
+
+
 class GenerateDiffView(views.APIView):
     """GenerateDiff view."""
 
@@ -92,37 +178,6 @@ class GenerateDiffView(views.APIView):
             import traceback
             traceback.print_exc()
             raise
-
-    def _get_branch_schema_id(self, request):
-        """Get branch schema ID from request header or settings."""
-        branch_schema_id = request.headers.get("X-NetBox-Branch")
-
-        # If no branch specified in header, check for default branch in settings
-        if not branch_schema_id and Branch is not None:
-            try:
-                from netbox_diode_plugin.models import Setting
-                settings = Setting.objects.first()
-                if settings and settings.branch:
-                    branch_schema_id = settings.branch.schema_id
-                    logger.debug(
-                        f"Using default branch from settings: {settings.branch.name} ({branch_schema_id})"
-                    )
-            except Exception as e:
-                logger.warning(f"Could not retrieve default branch from settings: {e}")
-
-        return branch_schema_id
-
-    def _add_branch_to_result(self, result, branch_schema_id):
-        """Add branch information to the result if branch is available."""
-        if branch_schema_id and Branch is not None:
-            try:
-                branch = Branch.objects.get(schema_id=branch_schema_id)
-                result.change_set.branch = {"id": branch.schema_id, "name": branch.name}
-            except Branch.DoesNotExist:
-                logger.warning(
-                    "Branch with ID %s does not exist",
-                    _sanitize_for_log(branch_schema_id),
-                )
 
     def _post(self, request, *args, **kwargs):
         entity = request.data.get("entity")
@@ -176,8 +231,8 @@ class GenerateDiffView(views.APIView):
             )
 
         result = generate_changeset(original_entity_data, object_type)
-        branch_schema_id = self._get_branch_schema_id(request)
-        self._add_branch_to_result(result, branch_schema_id)
+        branch_schema_id = _get_branch_schema_id(request)
+        _add_branch_to_result(result, branch_schema_id)
 
         return Response(result.to_dict(), status=result.get_status_code())
 
@@ -207,7 +262,7 @@ class BulkPlanView(views.APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        branch_schema_id = self._get_branch_schema_id(request)
+        branch_schema_id = _get_branch_schema_id(request)
 
         obj_token = enter_request_obj_cache()
         prechange_token = enter_prechange_cache()
@@ -223,30 +278,6 @@ class BulkPlanView(views.APIView):
             exit_request_obj_cache(obj_token)
 
         return Response({"results": results})
-
-    def _get_branch_schema_id(self, request):
-        """Get branch schema ID from request header or settings."""
-        branch_schema_id = request.headers.get("X-NetBox-Branch")
-
-        if not branch_schema_id and Branch is not None:
-            try:
-                from netbox_diode_plugin.models import Setting
-                settings = Setting.objects.first()
-                if settings and settings.branch:
-                    branch_schema_id = settings.branch.schema_id
-            except Exception as e:
-                logger.warning(f"Could not retrieve default branch from settings: {e}")
-
-        return branch_schema_id
-
-    def _add_branch_to_result(self, result, branch_schema_id):
-        """Add branch information to the result if branch is available."""
-        if branch_schema_id and Branch is not None:
-            try:
-                branch = Branch.objects.get(schema_id=branch_schema_id)
-                result.change_set.branch = {"id": branch.schema_id, "name": branch.name}
-            except Branch.DoesNotExist:
-                pass
 
     def _process_entity(self, entry, branch_schema_id):
         """Process a single entity and return its result dict."""
@@ -284,7 +315,7 @@ class BulkPlanView(views.APIView):
 
         try:
             result = generate_changeset(original_entity_data, object_type)
-            self._add_branch_to_result(result, branch_schema_id)
+            _add_branch_to_result(result, branch_schema_id)
             return result.to_dict()
         except ChangeSetException as e:
             return ChangeSetResult(errors=e.errors).to_dict()
@@ -382,6 +413,132 @@ class BulkApplyView(views.APIView):
             else status.HTTP_200_OK
         )
         return Response({"results": results}, status=http_status)
+
+
+class BulkPlanApplyView(views.APIView):
+    """
+    BulkPlanApply view — combined plan+apply per entity for the auto-apply fast path.
+
+    For each entity in the batch this view runs ``generate_changeset`` then, when
+    a non-empty change_set is produced, applies it via ``_apply_one_changeset``.
+    The returned change_set is always included in the response (when the plan
+    phase succeeded) so the reconciler can persist it for audit/retry regardless
+    of apply outcome. Plan failure short-circuits apply for that entity.
+
+    Each entity's apply gets its own ``transaction.atomic()`` (inherited from
+    ``_apply_one_changeset``); a failure in one entity does not affect the
+    others. Manual-review flows continue to use ``/bulk-plan`` + ``/bulk-apply``.
+
+    Request shape::
+
+        {"entities": [{"id": ..., "object_type": "dcim.site", "entity": {...}}, ...]}
+
+    Response shape::
+
+        {"results": [{"id": ..., "change_set": {...} | null,
+                      "errors": {"plan": {...} | null, "apply": {...} | null} | null}, ...]}
+
+    HTTP 200 if every entity succeeded both phases, 207 multi-status if any
+    entity hit a plan or apply error, 400 if the request envelope is invalid.
+    """
+
+    authentication_classes = [DiodeOAuth2Authentication]
+    permission_classes = [IsAuthenticated, require_scopes(SCOPE_NETBOX_WRITE)]
+
+    def post(self, request, *args, **kwargs):
+        """Plan and apply a batch of entities."""
+        try:
+            return self._post(request, *args, **kwargs)
+        except Exception:
+            logger.exception("unexpected error in bulk-plan-apply")
+            return Response(
+                {"errors": {"request": {"__all__": ["internal error"]}}},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def _post(self, request, *args, **kwargs):
+        entities = request.data.get("entities")
+        if not isinstance(entities, list) or len(entities) == 0:
+            return Response(
+                {"errors": {"request": {"entities": ["a non-empty list of entities is required"]}}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        branch_schema_id = _get_branch_schema_id(request)
+
+        # The per-request object cache is plan-phase only. Extending it into apply
+        # turns _create_or_find_instance's IntegrityError → re-lookup race recovery
+        # into a terminal error because the cached negative lookup hides the row
+        # another worker just inserted. Enter and exit around plan only.
+        results = []
+        for entry in entities:
+            entity_id = entry.get("id")
+            result = self._process_entity(entry, branch_schema_id, request)
+            result["id"] = entity_id
+            results.append(result)
+
+        http_status = (
+            status.HTTP_207_MULTI_STATUS
+            if any(self._has_error(r) for r in results)
+            else status.HTTP_200_OK
+        )
+        return Response({"results": results}, status=http_status)
+
+    @staticmethod
+    def _has_error(result):
+        errors = result.get("errors") or {}
+        return bool(errors.get("plan") or errors.get("apply"))
+
+    def _process_entity(self, entry, branch_schema_id, request):
+        """Plan-then-apply one entity. Returns a dict with change_set + plan/apply errors."""
+        extracted = _extract_entity_data(entry)
+        if extracted.error is not None:
+            return {"change_set": None, "errors": {"plan": extracted.error}}
+
+        plan_result, plan_error = self._run_plan(
+            extracted.entity_data,
+            extracted.object_type,
+            entry.get("id"),
+            branch_schema_id,
+        )
+        if plan_error is not None:
+            return {"change_set": None, "errors": {"plan": plan_error}}
+
+        change_set_dict = plan_result.change_set.to_dict() if plan_result.change_set else None
+
+        # If plan produced no changes, there's nothing to apply.
+        if plan_result.change_set is None or not plan_result.change_set.changes:
+            return {"change_set": change_set_dict, "errors": None}
+
+        # Apply phase — no obj_cache. Each entity gets its own transaction
+        # via _apply_one_changeset.
+        apply_result = _apply_one_changeset(plan_result.change_set, request)
+        if apply_result.errors:
+            return {"change_set": change_set_dict, "errors": {"apply": apply_result.errors}}
+
+        return {"change_set": change_set_dict, "errors": None}
+
+    @staticmethod
+    def _run_plan(entity_data, object_type, entry_id, branch_schema_id):
+        """Run the plan phase under a request-scoped object cache. Returns (result, error_dict)."""
+        obj_token = enter_request_obj_cache()
+        prechange_token = enter_prechange_cache()
+        try:
+            try:
+                result = generate_changeset(entity_data, object_type)
+                _add_branch_to_result(result, branch_schema_id)
+                return result, None
+            except ChangeSetException as e:
+                return None, e.errors
+            except Exception:
+                logger.exception(
+                    "plan phase failed for entity %s",
+                    _sanitize_for_log(entry_id),
+                )
+                return None, {"request": {"__all__": ["internal error"]}}
+        finally:
+            exit_prechange_cache(prechange_token)
+            exit_request_obj_cache(obj_token)
 
 
 class GetDefaultBranchView(views.APIView):
