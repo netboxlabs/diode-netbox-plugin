@@ -12,6 +12,7 @@ from django.db.utils import IntegrityError
 from extras.models import Tag
 from rest_framework.exceptions import ValidationError as ValidationError
 
+from .bulk_tags import apply_tags_bulk, supports_tags
 from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
 from .matcher import find_existing_object, invalidate_find_obj_entry
 from .plugin_utils import get_object_type_model, legal_fields
@@ -26,6 +27,11 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     """Apply a change set."""
     _validate_change_set(change_set)
     _preload_changeset_cache(change_set, request)
+
+    # Collect (instance, tag_input) pairs as we apply changes; flushed via
+    # apply_tags_bulk after the main loop so we issue one DELETE+bulk INSERT
+    # for the whole changeset instead of per-instance m2m_changed re-fires.
+    request._diode_tag_pairs = []
 
     created = {}
     for change in change_set.changes:
@@ -54,6 +60,10 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         except IntegrityError as e:
             logger.error(f"Integrity error {object_type}: {e} {data}")
             raise _err(f"created a conflict with an existing {object_type}", object_type, "__all__")
+
+    # Flush deferred tag writes in one bulk pass.
+    apply_tags_bulk(request._diode_tag_pairs, request)
+    request._diode_tag_pairs = []
 
     return ChangeSetResult(
         id=change_set.id,
@@ -163,14 +173,23 @@ def _create_or_find_instance(data: dict, object_type: str, serializer_class, req
 
 
 def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict, request):
+    # Pull tags out of `data` BEFORE serializer.save() so the serializer's
+    # `tag.set([...])` side effect — which fires m2m_changed and triggers a
+    # duplicate ObjectChange + a re-run of serialize_for_event — does not run.
+    # We buffer (instance, tag_input) and flush via apply_tags_bulk after the
+    # main apply_changeset loop.
+    deferred_tags = None
+    if supports_tags(model_class) and isinstance(data.get("tags"), list):
+        deferred_tags = data.pop("tags")
+
     serializer_class = get_serializer_for_model(model_class)
     change_type = change.change_type
+    instance = None
 
     if change_type == ChangeType.CREATE:
         # For component types that may be auto-created from e.g. DeviceType or ModuleType templates,
         # try to find existing object first before attempting to create.
         # This prevents duplicates when components are instantiated during Device/Module save()
-        instance = None
         if _is_auto_created_component(change.object_type):
             instance = _try_find_and_update_existing_instance(data, change.object_type, serializer_class, request)
 
@@ -194,6 +213,10 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             serializer.is_valid(raise_exception=True)
             serializer.save()
             invalidate_find_obj_entry(change.object_type, instance.id)
+
+    if deferred_tags is not None and instance is not None:
+        request._diode_tag_pairs.append((instance, deferred_tags))
+
 
 def _set_path(data, path, value):
     path = path.split(".")
