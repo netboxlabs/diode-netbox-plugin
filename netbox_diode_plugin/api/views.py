@@ -17,6 +17,7 @@ from .common import (
     ChangeSetException,
     ChangeSetResult,
 )
+from .deferred_changelog import deferred_changelog
 from .differ import enter_prechange_cache, exit_prechange_cache, generate_changeset
 from .matcher import enter_request_obj_cache, exit_request_obj_cache
 from .permissions import (
@@ -317,7 +318,16 @@ class ApplyChangeSetView(views.APIView):
 
     def _post(self, request, *args, **kwargs):
         change_set = ChangeSet.from_dict(request.data)
-        result = _apply_one_changeset(change_set, request)
+        # Outer transaction.atomic() makes the changeset's data writes,
+        # tag-link writes, and audit-log bulk_create commit together to
+        # readers. _apply_one_changeset's inner atomic becomes a savepoint.
+        with deferred_changelog() as defc, transaction.atomic():
+            result = _apply_one_changeset(change_set, request)
+            if result.errors:
+                defc.rollback_pending()
+            else:
+                defc.commit_pending()
+            defc.flush()
         return Response(result.to_dict(), status=result.get_status_code())
 
 
@@ -358,23 +368,36 @@ class BulkApplyView(views.APIView):
             raise ValidationError({"change_sets": ["change_sets must not be empty"]})
 
         results = []
-        for entry in change_sets:
-            if not isinstance(entry, dict):
-                results.append(
-                    ChangeSetResult(
-                        errors={"request": {"change_set": ["change_set must be an object"]}}
+        # Outer transaction.atomic() makes the whole batch atomic to readers:
+        # data writes + tag-link writes + audit-log bulk_create commit together.
+        # _apply_one_changeset's inner transaction.atomic() becomes a savepoint
+        # (Django nests nested atomics), so a single failed changeset rolls
+        # back its own writes without aborting the whole batch.
+        with deferred_changelog() as defc, transaction.atomic():
+            for entry in change_sets:
+                if not isinstance(entry, dict):
+                    results.append(
+                        ChangeSetResult(
+                            errors={"request": {"change_set": ["change_set must be an object"]}}
+                        ).to_dict()
+                    )
+                    continue
+                try:
+                    change_set = ChangeSet.from_dict(entry)
+                    cs_result = _apply_one_changeset(change_set, request)
+                    if cs_result.errors:
+                        defc.rollback_pending()
+                    else:
+                        defc.commit_pending()
+                    result = cs_result.to_dict()
+                except Exception as e:
+                    logger.error(f"Error parsing batch entry: {e}")
+                    defc.rollback_pending()
+                    result = ChangeSetResult(
+                        errors={"request": {"change_set": [f"invalid change_set: {e}"]}}
                     ).to_dict()
-                )
-                continue
-            try:
-                change_set = ChangeSet.from_dict(entry)
-                result = _apply_one_changeset(change_set, request).to_dict()
-            except Exception as e:
-                logger.error(f"Error parsing batch entry: {e}")
-                result = ChangeSetResult(
-                    errors={"request": {"change_set": [f"invalid change_set: {e}"]}}
-                ).to_dict()
-            results.append(result)
+                results.append(result)
+            defc.flush()
 
         http_status = (
             status.HTTP_207_MULTI_STATUS
