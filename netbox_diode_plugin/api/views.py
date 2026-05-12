@@ -14,6 +14,7 @@ from rest_framework.response import Response
 
 from .applier import apply_changeset
 from .authentication import DiodeOAuth2Authentication
+from .counter_bypass import bypass_counter_updates
 from .common import (
     ChangeSet,
     ChangeSetException,
@@ -66,9 +67,18 @@ def get_valid_entity_keys(model_name):
 
 
 def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
-    """Apply one changeset, returning a ChangeSetResult on success or on ChangeSetException."""
+    """Apply one changeset, returning a ChangeSetResult on success or on ChangeSetException.
+
+    The apply runs inside ``bypass_counter_updates``: NetBox's per-write
+    counter UPDATEs (Device.interface_count, DeviceType.device_count, ...)
+    are suppressed for the duration of the apply. These UPDATEs are
+    hot-row lock contention under concurrent auto-apply load and were
+    accounting for ~99% of NetBox-postgres time in pg_stat_statements.
+    Counters drift; expected to be reconciled by a periodic
+    ``update_counts`` background job.
+    """
     try:
-        with transaction.atomic():
+        with transaction.atomic(), bypass_counter_updates():
             return apply_changeset(change_set, request)
     except ChangeSetException as e:
         logger.error(f"Error applying change set: {e}")
