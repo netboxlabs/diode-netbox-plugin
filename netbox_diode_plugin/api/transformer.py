@@ -259,7 +259,20 @@ def _ensure_snake_case(proto_json: dict, object_type: str) -> dict:
 
 
 def _topo_sort(entities: list[dict]) -> list[dict]:
-    """Topologically sort entities by reference."""
+    """Topologically sort entities by reference.
+
+    Within each topological level, entities are visited in a deterministic
+    content-based order (object_type, primary identifier) so concurrent
+    workers process shared lookup rows — Site, Region, DeviceRole, ... — in
+    identical sequence. Without this, two workers can each insert a pair of
+    shared lookups in opposite orders and Postgres detects an A↔B lock cycle
+    on the unique index (e.g. dcim_devicerole_name), aborting one as a
+    deadlock.
+
+    graphlib.TopologicalSorter preserves insertion order at ties, so the
+    pre-sort propagates into the topological output.
+    """
+    entities = sorted(entities, key=_stable_topo_key)
     by_uuid = {e['_uuid']: e for e in entities}
     graph = defaultdict(set)
     for entity in entities:
@@ -276,6 +289,23 @@ def _topo_sort(entities: list[dict]) -> list[dict]:
                 NON_FIELD_ERRORS: "Unable to resolve circular reference in entities",
             }
         })
+
+
+# Fields tried in order to derive a stable, content-based sort key.
+# Covers the natural primary identifier for most NetBox object types.
+_STABLE_KEY_FIELDS = ("name", "slug", "model", "serial", "address", "mac_address")
+
+
+def _stable_topo_key(entity: dict) -> tuple:
+    """Deterministic content-based sort key for an entity at the same topo level."""
+    ot = entity.get("_object_type", "")
+    for k in _STABLE_KEY_FIELDS:
+        v = entity.get(k)
+        if isinstance(v, str):
+            return (ot, k, v)
+    # Last resort — UUIDs differ per request but at least within one request
+    # this gives a stable ordering for entities lacking the common id fields.
+    return (ot, "_uuid", entity.get("_uuid", ""))
 
 
 def _set_defaults(entities: list[dict], supported_models: dict):
