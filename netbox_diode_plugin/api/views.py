@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from django.apps import apps
 from django.db import transaction
+from django.db.utils import OperationalError
 from rest_framework import status, views
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -521,8 +522,21 @@ class BulkPlanApplyView(views.APIView):
             return {"change_set": change_set_dict, "errors": None}
 
         # Apply phase — no obj_cache. Each entity gets its own transaction
-        # via _apply_one_changeset.
-        apply_result = _apply_one_changeset(plan_result.change_set, request)
+        # via _apply_one_changeset. Catch OperationalError (Postgres deadlock,
+        # serialization failure, etc.) here so a single contended entity
+        # fails alone with a per-entity error rather than bubbling out and
+        # turning the whole batch response into a 500 (which the reconciler
+        # client then retries 4x, amplifying NetBox CPU on every deadlock).
+        try:
+            apply_result = _apply_one_changeset(plan_result.change_set, request)
+        except OperationalError as e:
+            logger.warning(
+                "apply phase hit DB error for entity %s: %s",
+                _sanitize_for_log(entry.get("id")),
+                e,
+            )
+            return {"change_set": change_set_dict, "errors": {"apply": {"__all__": [str(e)]}}}
+
         if apply_result.errors:
             return {"change_set": change_set_dict, "errors": {"apply": apply_result.errors}}
 
