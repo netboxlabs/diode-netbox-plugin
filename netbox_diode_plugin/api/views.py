@@ -466,16 +466,26 @@ class BulkPlanApplyView(views.APIView):
 
         branch_schema_id = _get_branch_schema_id(request)
 
-        # The per-request object cache is plan-phase only. Extending it into apply
-        # turns _create_or_find_instance's IntegrityError → re-lookup race recovery
-        # into a terminal error because the cached negative lookup hides the row
-        # another worker just inserted. Enter and exit around plan only.
-        results = []
-        for entry in entities:
-            entity_id = entry.get("id")
-            result = self._process_entity(entry, branch_schema_id, request)
-            result["id"] = entity_id
-            results.append(result)
+        # Share the object-lookup and prechange caches across all entities in
+        # the batch. Both caches are positive-only and request-scoped (single
+        # thread), so a hit reflects a row that genuinely exists; a row created
+        # by an earlier entity's apply is picked up by a subsequent entity's
+        # plan (cache miss → DB → found → cached). The cache extends across
+        # plan and apply within this batch — _create_or_find_instance's
+        # IntegrityError fallback still recovers correctly because the cache
+        # cannot return a stale "not found".
+        obj_token = enter_request_obj_cache()
+        prechange_token = enter_prechange_cache()
+        try:
+            results = []
+            for entry in entities:
+                entity_id = entry.get("id")
+                result = self._process_entity(entry, branch_schema_id, request)
+                result["id"] = entity_id
+                results.append(result)
+        finally:
+            exit_prechange_cache(prechange_token)
+            exit_request_obj_cache(obj_token)
 
         http_status = (
             status.HTTP_207_MULTI_STATUS
@@ -520,25 +530,19 @@ class BulkPlanApplyView(views.APIView):
 
     @staticmethod
     def _run_plan(entity_data, object_type, entry_id, branch_schema_id):
-        """Run the plan phase under a request-scoped object cache. Returns (result, error_dict)."""
-        obj_token = enter_request_obj_cache()
-        prechange_token = enter_prechange_cache()
+        """Run the plan phase. Object + prechange caches are managed by _post."""
         try:
-            try:
-                result = generate_changeset(entity_data, object_type)
-                _add_branch_to_result(result, branch_schema_id)
-                return result, None
-            except ChangeSetException as e:
-                return None, e.errors
-            except Exception:
-                logger.exception(
-                    "plan phase failed for entity %s",
-                    _sanitize_for_log(entry_id),
-                )
-                return None, {"request": {"__all__": ["internal error"]}}
-        finally:
-            exit_prechange_cache(prechange_token)
-            exit_request_obj_cache(obj_token)
+            result = generate_changeset(entity_data, object_type)
+            _add_branch_to_result(result, branch_schema_id)
+            return result, None
+        except ChangeSetException as e:
+            return None, e.errors
+        except Exception:
+            logger.exception(
+                "plan phase failed for entity %s",
+                _sanitize_for_log(entry_id),
+            )
+            return None, {"request": {"__all__": ["internal error"]}}
 
 
 class GetDefaultBranchView(views.APIView):
