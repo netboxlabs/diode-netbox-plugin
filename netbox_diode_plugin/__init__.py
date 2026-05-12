@@ -41,8 +41,11 @@ class NetBoxDiodePluginConfig(PluginConfig):
         "required_token_audience": [],
 
         # TTL in seconds for caching find_existing_object results in Redis.
-        # Set to 0 to disable caching.
-        "find_obj_cache_ttl": 5,
+        # Cached entries are auto-invalidated when this plugin's apply path
+        # updates the same PK; the TTL bounds staleness for external
+        # mutations (UI edits, direct API writes, other tools). Set to 0 to
+        # disable caching.
+        "find_obj_cache_ttl": 30,
 
         # Override the displayed Diode target URL without affecting internal
         # communication (e.g. to show the external ingress address).
