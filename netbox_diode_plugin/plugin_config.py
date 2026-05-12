@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from netbox.plugins import get_plugin_config
 
 __all__ = (
+    "get_batch_apply_deadlock_retry_max_count",
     "get_diode_auth_introspect_url",
     "get_diode_user",
 )
@@ -99,3 +100,9 @@ def get_diode_user():
 def get_required_token_audience():
     """Returns the require token audience."""
     return get_plugin_config("netbox_diode_plugin", "required_token_audience")
+
+def get_batch_apply_deadlock_retry_max_count():
+    """Max retries on Postgres deadlock for the batch apply endpoint."""
+    return get_plugin_config(
+        "netbox_diode_plugin", "batch_apply_deadlock_retry_max_count"
+    )

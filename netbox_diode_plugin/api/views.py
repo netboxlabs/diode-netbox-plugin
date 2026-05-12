@@ -2,14 +2,18 @@
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - API Views."""
 import logging
+import random
 import re
+import time
 
 from django.apps import apps
 from django.db import transaction
+from django.db.utils import OperationalError
 from rest_framework import status, views
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
+from ..plugin_config import get_batch_apply_deadlock_retry_max_count
 from .applier import apply_changeset
 from .authentication import DiodeOAuth2Authentication
 from .common import (
@@ -26,6 +30,20 @@ from .permissions import (
     IsAuthenticated,
     require_scopes,
 )
+
+# Postgres SQLSTATEs we retry on. 40P01 is deadlock_detected; 40001 is
+# serialization_failure (can show up on the SERIALIZABLE isolation
+# level path, harmless to retry the same way).
+_DEADLOCK_PGCODES = ("40P01", "40001")
+
+
+def _extract_pgcode(exc: OperationalError) -> str | None:
+    """Return the Postgres SQLSTATE on a wrapped Django OperationalError, or None."""
+    inner = exc.__cause__
+    pgcode = getattr(inner, "pgcode", None)
+    if pgcode is None:
+        pgcode = getattr(exc, "pgcode", None)
+    return pgcode
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -367,6 +385,46 @@ class BulkApplyView(views.APIView):
         if len(change_sets) == 0:
             raise ValidationError({"change_sets": ["change_sets must not be empty"]})
 
+        max_retries = int(get_batch_apply_deadlock_retry_max_count() or 0)
+        attempt = 0
+        while True:
+            try:
+                results = self._apply_batch(change_sets, request)
+                break
+            except OperationalError as exc:
+                pgcode = _extract_pgcode(exc)
+                if pgcode not in _DEADLOCK_PGCODES:
+                    raise
+                if attempt >= max_retries:
+                    logger.error(
+                        "batch apply: deadlock retries exhausted "
+                        "(attempts=%d, pgcode=%s)",
+                        attempt + 1, pgcode,
+                    )
+                    raise
+                # Jittered exponential backoff: 50ms * 2^attempt * U(0.5, 1.5)
+                sleep_s = 0.05 * (2 ** attempt) * (0.5 + random.random())
+                logger.warning(
+                    "batch apply: %s, retrying "
+                    "(attempt=%d/%d, sleep=%.3fs)",
+                    "deadlock" if pgcode == "40P01" else "serialization failure",
+                    attempt + 1, max_retries + 1, sleep_s,
+                )
+                time.sleep(sleep_s)
+                attempt += 1
+
+        http_status = (
+            status.HTTP_207_MULTI_STATUS
+            if any(r.get("errors") for r in results)
+            else status.HTTP_200_OK
+        )
+        resp = Response({"results": results}, status=http_status)
+        if attempt > 0:
+            resp["X-Diode-Batch-Retries"] = str(attempt)
+        return resp
+
+    def _apply_batch(self, change_sets, request):
+        """Apply all changesets in one outer transaction; caller wraps for retries."""
         results = []
         # Outer transaction.atomic() makes the whole batch atomic to readers:
         # data writes + tag-link writes + audit-log bulk_create commit together.
@@ -398,13 +456,7 @@ class BulkApplyView(views.APIView):
                     ).to_dict()
                 results.append(result)
             defc.flush()
-
-        http_status = (
-            status.HTTP_207_MULTI_STATUS
-            if any(r.get("errors") for r in results)
-            else status.HTTP_200_OK
-        )
-        return Response({"results": results}, status=http_status)
+        return results
 
 
 class GetDefaultBranchView(views.APIView):

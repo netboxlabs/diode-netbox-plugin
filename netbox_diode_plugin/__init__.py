@@ -47,6 +47,12 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # Override the displayed Diode target URL without affecting internal
         # communication (e.g. to show the external ingress address).
         "diode_target_display": None,
+
+        # Max number of retries when the batch apply endpoint hits a
+        # Postgres deadlock (40P01) or serialization failure (40001).
+        # 0 disables retries; default 3 means up to three retries after
+        # the initial attempt (4 attempts total).
+        "batch_apply_deadlock_retry_max_count": 3,
     }
 
 
