@@ -14,6 +14,7 @@ from rest_framework.response import Response
 
 from .applier import apply_changeset
 from .authentication import DiodeOAuth2Authentication
+from .change_log_bypass import bypass_change_logging
 from .counter_bypass import bypass_counter_updates
 from .common import (
     ChangeSet,
@@ -69,16 +70,22 @@ def get_valid_entity_keys(model_name):
 def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     """Apply one changeset, returning a ChangeSetResult on success or on ChangeSetException.
 
-    The apply runs inside ``bypass_counter_updates``: NetBox's per-write
-    counter UPDATEs (Device.interface_count, DeviceType.device_count, ...)
-    are suppressed for the duration of the apply. These UPDATEs are
-    hot-row lock contention under concurrent auto-apply load and were
-    accounting for ~99% of NetBox-postgres time in pg_stat_statements.
-    Counters drift; expected to be reconciled by a periodic
-    ``update_counts`` background job.
+    The apply runs inside two side-effect bypasses:
+
+    - ``bypass_counter_updates``: suppresses the per-write parent-counter
+      UPDATE (Device.interface_count, DeviceType.device_count, ...) that
+      was consuming ~99% of NetBox-postgres time as hot-row lock
+      contention. Counters drift; a periodic ``update_counts`` background
+      job reconciles them.
+    - ``bypass_change_logging``: disconnects the post_save / m2m_changed
+      receiver that writes one core_objectchange row per save. CREATE /
+      UPDATE made via diode apply are not recorded in the NetBox audit
+      log; the ChangeSet rows on the diode side already capture intent.
+      pre_delete is left connected so protection-rule validation keeps
+      firing.
     """
     try:
-        with transaction.atomic(), bypass_counter_updates():
+        with transaction.atomic(), bypass_counter_updates(), bypass_change_logging():
             return apply_changeset(change_set, request)
     except ChangeSetException as e:
         logger.error(f"Error applying change set: {e}")
