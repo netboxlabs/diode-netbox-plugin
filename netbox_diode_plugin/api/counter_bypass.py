@@ -31,12 +31,13 @@ from utilities import counters
 
 def _noop(*_args, **_kwargs):
     """Replacement for utilities.counters.update_counter that does nothing."""
-    return None
+    return
 
 
 @contextmanager
 def bypass_counter_updates():
-    """Disable NetBox's per-write counter UPDATE for the duration of the block.
+    """
+    Disable NetBox's per-write counter UPDATE for the duration of the block.
 
     The patch is a module-attribute swap, so it affects only the current
     granian worker process for the duration of the request. Granian's WSGI

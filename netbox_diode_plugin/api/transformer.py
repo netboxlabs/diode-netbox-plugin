@@ -259,7 +259,8 @@ def _ensure_snake_case(proto_json: dict, object_type: str) -> dict:
 
 
 def _topo_sort(entities: list[dict]) -> list[dict]:
-    """Topologically sort entities by reference.
+    """
+    Topologically sort entities by reference.
 
     Within each topological level, entities are visited in a deterministic
     content-based order (object_type, primary identifier) so concurrent

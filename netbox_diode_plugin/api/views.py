@@ -15,12 +15,12 @@ from rest_framework.response import Response
 from .applier import apply_changeset
 from .authentication import DiodeOAuth2Authentication
 from .change_log_bypass import bypass_change_logging
-from .counter_bypass import bypass_counter_updates
 from .common import (
     ChangeSet,
     ChangeSetException,
     ChangeSetResult,
 )
+from .counter_bypass import bypass_counter_updates
 from .differ import enter_prechange_cache, exit_prechange_cache, generate_changeset
 from .matcher import enter_request_obj_cache, exit_request_obj_cache
 from .permissions import (
@@ -68,7 +68,8 @@ def get_valid_entity_keys(model_name):
 
 
 def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
-    """Apply one changeset, returning a ChangeSetResult on success or on ChangeSetException.
+    """
+    Apply one changeset, returning a ChangeSetResult on success or on ChangeSetException.
 
     The apply runs inside two side-effect bypasses:
 

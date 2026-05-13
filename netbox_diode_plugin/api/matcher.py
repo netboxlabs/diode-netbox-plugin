@@ -33,7 +33,8 @@ _request_obj_cache = contextvars.ContextVar("diode_request_obj_cache", default=N
 
 
 def enter_request_obj_cache():
-    """Activate a request-scoped object lookup cache.
+    """
+    Activate a request-scoped object lookup cache.
 
     Only positive (found-instance) results are stored. A miss is left
     uncached so that subsequent lookups against the same key correctly
