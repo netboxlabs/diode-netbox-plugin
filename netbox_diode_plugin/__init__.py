@@ -50,6 +50,23 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # Override the displayed Diode target URL without affecting internal
         # communication (e.g. to show the external ingress address).
         "diode_target_display": None,
+
+        # Per-write side-effect bypasses applied during /bulk-plan-apply
+        # (and the per-changeset apply path it shares with the legacy
+        # /apply-change-set endpoint). Both default to False; enabling
+        # either trades NetBox-side correctness for ingest throughput
+        # and requires a worker restart to take effect.
+        #
+        # apply_bypass_counter_updates: skip the per-write parent counter
+        # UPDATE (Device.interface_count, DeviceType.device_count, ...).
+        # Counters drift; reconcile via utilities.counters.update_counts.
+        #
+        # apply_bypass_change_logging: skip the per-write ObjectChange
+        # row + post_save/m2m_changed signal handler chain. CREATE/UPDATE
+        # made via diode apply do not appear in the NetBox audit log;
+        # provenance lives in the diode-side ChangeSet rows.
+        "apply_bypass_counter_updates": False,
+        "apply_bypass_change_logging": False,
     }
 
 
