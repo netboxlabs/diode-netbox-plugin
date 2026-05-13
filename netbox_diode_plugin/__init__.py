@@ -67,6 +67,15 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # provenance lives in the diode-side ChangeSet rows.
         "apply_bypass_counter_updates": False,
         "apply_bypass_change_logging": False,
+
+        # Per-entity retry on Postgres deadlock (SQLSTATE 40P01) during
+        # the apply phase of /bulk-plan-apply. Cross-batch concurrent
+        # writes for shared-lookup unique indexes (dcim_site_slug_key,
+        # dcim_devicerole_name, ...) occasionally deadlock under load;
+        # the deadlocked transaction is killed by Postgres and the
+        # entity would otherwise fail. Setting >0 retries the apply
+        # with small jittered backoff. Set to 0 to disable retries.
+        "apply_deadlock_max_retries": 2,
     }
 
 

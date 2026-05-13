@@ -2,12 +2,15 @@
 # Copyright 2025 NetBox Labs, Inc.
 """Diode NetBox Plugin - API Views."""
 import logging
+import random
 import re
+import time
 from dataclasses import dataclass
 
 from django.apps import apps
 from django.db import transaction
 from django.db.utils import OperationalError
+from netbox.plugins import get_plugin_config
 from rest_framework import status, views
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -29,6 +32,23 @@ from .permissions import (
     IsAuthenticated,
     require_scopes,
 )
+
+_PG_DEADLOCK_SQLSTATE = "40P01"
+
+
+def _extract_sqlstate(exc):
+    """Pull SQLSTATE from a Django-wrapped OperationalError, psycopg2 or psycopg3."""
+    for candidate in (exc, getattr(exc, "__cause__", None)):
+        if candidate is None:
+            continue
+        code = getattr(candidate, "sqlstate", None) or getattr(candidate, "pgcode", None)
+        if code:
+            return code
+    return None
+
+
+def _is_deadlock(exc):
+    return _extract_sqlstate(exc) == _PG_DEADLOCK_SQLSTATE
 
 logger = logging.getLogger("netbox.diode_data")
 
@@ -91,6 +111,38 @@ def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     except ChangeSetException as e:
         logger.error(f"Error applying change set: {e}")
         return ChangeSetResult(id=change_set.id, errors=e.errors)
+
+
+def _apply_one_changeset_with_retry(change_set: ChangeSet, request, entity_id) -> ChangeSetResult:
+    """
+    Apply with retries on Postgres deadlock (SQLSTATE 40P01).
+
+    The transaction.atomic() in _apply_one_changeset rolls back fully on
+    OperationalError, so a retry starts from a clean slate. The
+    request-scoped object cache is positive-only and remains valid across
+    retries — any row it contains genuinely existed at lookup time.
+    """
+    max_retries = get_plugin_config("netbox_diode_plugin", "apply_deadlock_max_retries") or 0
+    attempt = 0
+    while True:
+        try:
+            return _apply_one_changeset(change_set, request)
+        except OperationalError as e:
+            if attempt >= max_retries or not _is_deadlock(e):
+                raise
+            # Jittered backoff: 25–50ms on the first retry, 75–100ms on
+            # the second, etc. Small enough to stay well under the
+            # reconciler's per-call HTTP timeout, large enough to give
+            # the contending transaction time to commit.
+            delay = 0.025 * (attempt + 1) + random.uniform(0, 0.025)
+            logger.warning(
+                "deadlock on entity %s (attempt %d), retrying in %.3fs",
+                _sanitize_for_log(entity_id),
+                attempt + 1,
+                delay,
+            )
+            time.sleep(delay)
+            attempt += 1
 
 
 def _get_branch_schema_id(request):
@@ -545,8 +597,13 @@ class BulkPlanApplyView(views.APIView):
         # fails alone with a per-entity error rather than bubbling out and
         # turning the whole batch response into a 500 (which the reconciler
         # client then retries 4x, amplifying NetBox CPU on every deadlock).
+        # Retry on Postgres deadlock (SQLSTATE 40P01) with small jittered
+        # backoff: cross-batch concurrent inserts to shared-lookup unique
+        # indexes (dcim_site_slug_key, dcim_devicerole_name, ...) occasionally
+        # deadlock under load, and a second attempt almost always succeeds
+        # because the contending transaction has finished by then.
         try:
-            apply_result = _apply_one_changeset(plan_result.change_set, request)
+            apply_result = _apply_one_changeset_with_retry(plan_result.change_set, request, entry.get("id"))
         except OperationalError as e:
             logger.warning(
                 "apply phase hit DB error for entity %s: %s",
