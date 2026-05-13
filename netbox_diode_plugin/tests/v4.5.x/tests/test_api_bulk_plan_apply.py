@@ -371,10 +371,10 @@ class BulkPlanApplyTestCase(APITestCase):
 
     # --- Auth/permissions ---
 
-    def test_unauthenticated_request_returns_401(self):
-        """Missing token returns 401."""
+    def test_unauthenticated_request_returns_403(self):
+        """Missing token returns 403 (DiodeOAuth2Authentication has no authenticate_header)."""
         response = self.client.post(self.url, data={"entities": []}, format="json")
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_insufficient_scope_returns_403(self):
         """Token with only read scope cannot call bulk-plan-apply (requires write)."""
