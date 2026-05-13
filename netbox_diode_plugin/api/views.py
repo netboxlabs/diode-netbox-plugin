@@ -32,6 +32,7 @@ from .permissions import (
     IsAuthenticated,
     require_scopes,
 )
+from .search_index_bypass import bypass_search_indexing
 
 _PG_DEADLOCK_SQLSTATE = "40P01"
 
@@ -91,7 +92,9 @@ def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     """
     Apply one changeset, returning a ChangeSetResult on success or on ChangeSetException.
 
-    The apply runs inside two side-effect bypasses:
+    The apply runs inside three opt-in side-effect bypasses (each gated
+    by its own plugin setting; all default to off so the plugin behaves
+    like upstream NetBox unless explicitly enabled):
 
     - ``bypass_counter_updates``: suppresses the per-write parent-counter
       UPDATE (Device.interface_count, DeviceType.device_count, ...) that
@@ -104,9 +107,19 @@ def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
       log; the ChangeSet rows on the diode side already capture intent.
       pre_delete is left connected so protection-rule validation keeps
       firing.
+    - ``bypass_search_indexing``: disconnects the post_save receiver
+      that maintains the global ``extras_cachedvalue`` search index.
+      NetBox has no built-in periodic reindex; deployments enabling
+      this bypass must schedule ``manage.py reindex`` (or a system_job)
+      to keep the UI search box current.
     """
     try:
-        with transaction.atomic(), bypass_counter_updates(), bypass_change_logging():
+        with (
+            transaction.atomic(),
+            bypass_counter_updates(),
+            bypass_change_logging(),
+            bypass_search_indexing(),
+        ):
             return apply_changeset(change_set, request)
     except ChangeSetException as e:
         logger.error(f"Error applying change set: {e}")

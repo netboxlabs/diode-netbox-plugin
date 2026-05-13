@@ -65,8 +65,15 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # row + post_save/m2m_changed signal handler chain. CREATE/UPDATE
         # made via diode apply do not appear in the NetBox audit log;
         # provenance lives in the diode-side ChangeSet rows.
+        #
+        # apply_bypass_search_indexing: skip the per-write CachedValue
+        # INSERTs that back NetBox's global search index. NetBox has no
+        # built-in periodic reindex, so deployments enabling this must
+        # schedule `manage.py reindex` (or a system_job) to keep the
+        # search box current.
         "apply_bypass_counter_updates": False,
         "apply_bypass_change_logging": False,
+        "apply_bypass_search_indexing": False,
 
         # Per-entity retry on Postgres deadlock (SQLSTATE 40P01) during
         # the apply phase of /bulk-plan-apply. Cross-batch concurrent
