@@ -51,6 +51,22 @@ def _extract_sqlstate(exc):
 def _is_deadlock(exc):
     return _extract_sqlstate(exc) == _PG_DEADLOCK_SQLSTATE
 
+
+def _db_error_code(exc):
+    """
+    Map a Django-wrapped DB OperationalError to a stable client-safe code.
+
+    Postgres deadlock detail (process IDs, transaction IDs, the index/relation
+    names, in-flight query context) is operational information we do not want
+    in the HTTP response body — it leaks internal state and trips CodeQL's
+    "information exposure through an exception" rule. The full exception is
+    still logged server-side by the caller; clients get a short stable tag
+    they can switch on without parsing free-form Postgres error text.
+    """
+    if _is_deadlock(exc):
+        return "db_deadlock_after_retries"
+    return "db_error"
+
 logger = logging.getLogger("netbox.diode_data")
 
 
@@ -623,7 +639,15 @@ class BulkPlanApplyView(views.APIView):
                 _sanitize_for_log(entry.get("id")),
                 e,
             )
-            return {"change_set": change_set_dict, "errors": {"apply": {"__all__": [str(e)]}}}
+            # Return a stable client-safe code, not str(e): the underlying
+            # Postgres deadlock detail (PIDs, txids, index/relation names,
+            # query context) is internal state that does not belong in the
+            # HTTP response. Server-side log line above retains the full
+            # message for operators.
+            return {
+                "change_set": change_set_dict,
+                "errors": {"apply": {"__all__": [_db_error_code(e)]}},
+            }
 
         if apply_result.errors:
             return {"change_set": change_set_dict, "errors": {"apply": apply_result.errors}}
