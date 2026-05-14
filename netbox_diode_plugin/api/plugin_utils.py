@@ -2,7 +2,7 @@
 
 # Generated code. DO NOT EDIT.
 # Source: NetBox v4.6.0
-# Timestamp: 2026-05-14 16:54:23Z
+# Timestamp: 2026-05-14 20:30:15Z
 
 from dataclasses import dataclass
 import datetime
