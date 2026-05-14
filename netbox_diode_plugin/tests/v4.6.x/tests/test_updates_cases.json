@@ -6224,5 +6224,257 @@
         "update_expect": {
             "description": "Device with owner updated"
         }
+    },
+    {
+        "name": "dcim_cablebundle_1",
+        "object_type": "dcim.cablebundle",
+        "lookup": {"name": "Bundle 1"},
+        "create_expect": {
+            "name": "Bundle 1",
+            "description": "Primary fiber bundle",
+            "comments": "Routed through riser A"
+        },
+        "create": {
+            "cable_bundle": {
+                "name": "Bundle 1",
+                "description": "Primary fiber bundle",
+                "comments": "Routed through riser A",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update": {
+            "cable_bundle": {
+                "name": "Bundle 1",
+                "description": "Primary fiber bundle Updated",
+                "comments": "Routed through riser A and B",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update_expect": {
+            "description": "Primary fiber bundle Updated",
+            "comments": "Routed through riser A and B"
+        }
+    },
+    {
+        "name": "dcim_rackgroup_1",
+        "object_type": "dcim.rackgroup",
+        "lookup": {"slug": "rack-group-1"},
+        "create_expect": {
+            "name": "Rack Group 1",
+            "slug": "rack-group-1",
+            "description": "Primary rack group"
+        },
+        "create": {
+            "rack_group": {
+                "name": "Rack Group 1",
+                "slug": "rack-group-1",
+                "description": "Primary rack group",
+                "comments": "Top of data center",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update": {
+            "rack_group": {
+                "name": "Rack Group 1",
+                "slug": "rack-group-1",
+                "description": "Primary rack group Updated",
+                "comments": "Top of data center",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update_expect": {
+            "description": "Primary rack group Updated"
+        }
+    },
+    {
+        "name": "virtualization_virtualmachinetype_1",
+        "object_type": "virtualization.virtualmachinetype",
+        "lookup": {"slug": "vm-type-1"},
+        "create_expect": {
+            "name": "VM Type 1",
+            "slug": "vm-type-1",
+            "description": "Standard 4GB VM profile",
+            "default_memory": 4096
+        },
+        "create": {
+            "virtual_machine_type": {
+                "name": "VM Type 1",
+                "slug": "vm-type-1",
+                "description": "Standard 4GB VM profile",
+                "default_memory": "4096",
+                "default_vcpus": 2.0,
+                "default_platform": {
+                    "name": "Ubuntu 22.04",
+                    "slug": "ubuntu-22-04"
+                },
+                "comments": "General purpose template",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update": {
+            "virtual_machine_type": {
+                "name": "VM Type 1",
+                "slug": "vm-type-1",
+                "description": "Standard 4GB VM profile",
+                "default_memory": "8192",
+                "default_vcpus": 2.0,
+                "default_platform": {
+                    "name": "Ubuntu 22.04",
+                    "slug": "ubuntu-22-04"
+                },
+                "comments": "General purpose template",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update_expect": {
+            "default_memory": 8192
+        }
+    },
+    {
+        "name": "dcim_rack_with_group_1",
+        "object_type": "dcim.rack",
+        "lookup": {"asset_tag": "RACK-010"},
+        "create_expect": {
+            "name": "Rack With Group",
+            "site.name": "Site 1",
+            "group.name": "Rack Group A",
+            "description": "Rack assigned to Group A"
+        },
+        "create": {
+            "rack": {
+                "name": "Rack With Group",
+                "facility_id": "FAC-010",
+                "site": {"name": "Site 1"},
+                "tenant": {"name": "Tenant 1"},
+                "status": "active",
+                "role": {
+                    "name": "Server Rack",
+                    "slug": "server-rack",
+                    "color": "0000ff"
+                },
+                "group": {
+                    "name": "Rack Group A",
+                    "slug": "rack-group-a"
+                },
+                "serial": "RACK010XYZ",
+                "asset_tag": "RACK-010",
+                "rack_type": {
+                    "manufacturer": {"name": "Manufacturer 1"},
+                    "model": "R2000",
+                    "slug": "r2000",
+                    "form_factor": "4-post-cabinet"
+                },
+                "form_factor": "4-post-cabinet",
+                "width": "19",
+                "u_height": "42",
+                "starting_unit": "1",
+                "desc_units": false,
+                "airflow": "front-to-rear",
+                "description": "Rack assigned to Group A",
+                "comments": "First rack in group A",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update": {
+            "rack": {
+                "name": "Rack With Group",
+                "facility_id": "FAC-010",
+                "site": {"name": "Site 1"},
+                "tenant": {"name": "Tenant 1"},
+                "status": "active",
+                "role": {
+                    "name": "Server Rack",
+                    "slug": "server-rack",
+                    "color": "0000ff"
+                },
+                "group": {
+                    "name": "Rack Group B",
+                    "slug": "rack-group-b"
+                },
+                "serial": "RACK010XYZ",
+                "asset_tag": "RACK-010",
+                "rack_type": {
+                    "manufacturer": {"name": "Manufacturer 1"},
+                    "model": "R2000",
+                    "slug": "r2000",
+                    "form_factor": "4-post-cabinet"
+                },
+                "form_factor": "4-post-cabinet",
+                "width": "19",
+                "u_height": "42",
+                "starting_unit": "1",
+                "desc_units": false,
+                "airflow": "front-to-rear",
+                "description": "Rack assigned to Group A",
+                "comments": "First rack in group A",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update_expect": {
+            "group.name": "Rack Group B"
+        }
+    },
+    {
+        "name": "virtualization_virtualmachine_with_type_1",
+        "object_type": "virtualization.virtualmachine",
+        "lookup": {"name": "vm-with-type-01"},
+        "create_expect": {
+            "name": "vm-with-type-01",
+            "virtual_machine_type.name": "VM Type A",
+            "description": "VM with a virtual_machine_type"
+        },
+        "create": {
+            "virtual_machine": {
+                "name": "vm-with-type-01",
+                "status": "active",
+                "site": {"name": "Site 1"},
+                "cluster": {
+                    "name": "Cluster 1",
+                    "type": {"name": "Cluster Type 1"},
+                    "scope_site": {"name": "Site 1"}
+                },
+                "role": {"name": "Application Server"},
+                "tenant": {"name": "Tenant 1"},
+                "virtual_machine_type": {
+                    "name": "VM Type A",
+                    "slug": "vm-type-a",
+                    "description": "Type A profile"
+                },
+                "vcpus": 4.0,
+                "memory": "8192",
+                "disk": "100",
+                "description": "VM with a virtual_machine_type",
+                "comments": "Linked to VM Type A",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update": {
+            "virtual_machine": {
+                "name": "vm-with-type-01",
+                "status": "active",
+                "site": {"name": "Site 1"},
+                "cluster": {
+                    "name": "Cluster 1",
+                    "type": {"name": "Cluster Type 1"},
+                    "scope_site": {"name": "Site 1"}
+                },
+                "role": {"name": "Application Server"},
+                "tenant": {"name": "Tenant 1"},
+                "virtual_machine_type": {
+                    "name": "VM Type B",
+                    "slug": "vm-type-b",
+                    "description": "Type B profile"
+                },
+                "vcpus": 4.0,
+                "memory": "8192",
+                "disk": "100",
+                "description": "VM with a virtual_machine_type",
+                "comments": "Linked to VM Type A",
+                "tags": [{"name": "Tag 1"}, {"name": "Tag 2"}]
+            }
+        },
+        "update_expect": {
+            "virtual_machine_type.name": "VM Type B"
+        }
     }
 ]
