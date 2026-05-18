@@ -9,6 +9,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 import netaddr
@@ -18,6 +19,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.backends.postgresql.psycopg_any import NumericRange
+from django.db.models.signals import post_delete, post_save
 from extras.models import CustomField
 from netaddr.eui import EUI
 from rest_framework import status
@@ -25,6 +27,20 @@ from rest_framework import status
 logger = logging.getLogger("netbox.diode_data")
 
 NON_FIELD_ERRORS = "__all__"
+
+
+@lru_cache(maxsize=256)
+def _get_custom_fields_for_model(model) -> tuple:
+    """Cached wrapper for CustomField.objects.get_for_model()."""
+    return tuple(CustomField.objects.get_for_model(model))
+
+
+def _on_custom_field_change(**kwargs):
+    _get_custom_fields_for_model.cache_clear()
+
+
+post_save.connect(_on_custom_field_change, sender=CustomField)
+post_delete.connect(_on_custom_field_change, sender=CustomField)
 
 @dataclass
 class UnresolvedReference:
@@ -169,7 +185,7 @@ class ChangeSet:
 
     def _validate_custom_fields(self, data: dict, model: models.Model) -> None:
         custom_fields = {
-            cf.name: cf for cf in CustomField.objects.get_for_model(model)
+            cf.name: cf for cf in _get_custom_fields_for_model(model)
         }
 
         unknown_errors = []
