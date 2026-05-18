@@ -62,7 +62,8 @@ _original_get_for_model = CustomField.objects.__class__.get_for_model
 
 
 def _cached_get_for_model(self, model):
-    """Process-level cached replacement for CustomFieldManager.get_for_model.
+    """
+    Process-level cached replacement for CustomFieldManager.get_for_model.
 
     Returns the same QuerySet object on cache hit, with its internal result
     cache pre-populated so iteration does not hit the DB.
