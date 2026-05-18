@@ -15,6 +15,7 @@ from rest_framework import status, views
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
+from . import customfield_cache  # noqa: F401 - imported for side-effect install at module load
 from .applier import apply_changeset
 from .authentication import DiodeOAuth2Authentication
 from .change_log_bypass import bypass_change_logging

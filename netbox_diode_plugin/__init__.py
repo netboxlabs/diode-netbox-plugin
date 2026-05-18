@@ -71,9 +71,17 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # built-in periodic reindex, so deployments enabling this must
         # schedule `manage.py reindex` (or a system_job) to keep the
         # search box current.
+        #
+        # apply_bypass_customfield_query_cache: install a process-level
+        # cache for CustomField.objects.get_for_model. NetBox's built-in
+        # cache is request-scoped and misses for models with no custom
+        # fields (empty-QuerySet truthiness bug), so under load every
+        # instance.clean()/save() re-queries extras_customfield. Cache
+        # is invalidated on CustomField post_save/post_delete signals.
         "apply_bypass_counter_updates": False,
         "apply_bypass_change_logging": False,
         "apply_bypass_search_indexing": False,
+        "apply_bypass_customfield_query_cache": False,
 
         # Per-entity retry on Postgres deadlock (SQLSTATE 40P01) during
         # the apply phase of /bulk-plan-apply. Cross-batch concurrent
