@@ -104,10 +104,12 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         # request. For /bulk-plan-apply touching dozens of unique models per batch,
         # that's still 30-50 extras_customfield queries per call. Use the
         # transformer-level lru_cache instead (process-wide, signal-invalidated)
-        # to make it once-per-process-per-model.
+        # to make it once-per-process-per-model. Inlined logic matches NetBox's
+        # get_custom_fields() exactly: raw JSON value -> field.deserialize() so
+        # callers see datetimes/object instances/etc. rather than primitives.
         cfmap = {}
         for cf in _get_custom_fields_for_model(instance._meta.model):
-            value = instance.custom_field_data.get(cf.name)
+            value = cf.deserialize(instance.custom_field_data.get(cf.name))
             if isinstance(value, datetime.datetime | datetime.date):
                 cfmap[cf.name] = value
             else:
