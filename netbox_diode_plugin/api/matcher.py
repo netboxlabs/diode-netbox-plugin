@@ -30,11 +30,18 @@ from .profile import get_profile_ctx
 logger = logging.getLogger(__name__)
 
 _request_obj_cache = contextvars.ContextVar("diode_request_obj_cache", default=None)
-_NOT_FOUND_SENTINEL = object()
 
 
 def enter_request_obj_cache():
-    """Activate a request-scoped object lookup cache."""
+    """
+    Activate a request-scoped object lookup cache.
+
+    Only positive (found-instance) results are stored. A miss is left
+    uncached so that subsequent lookups against the same key correctly
+    pick up a row another worker (or this request's apply phase) has
+    inserted in the meantime. This is what makes the cache safe to share
+    across plan and apply phases within the same request.
+    """
     return _request_obj_cache.set({})
 
 
@@ -1000,12 +1007,11 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
     req_cache = _request_obj_cache.get(None)
     if req_cache is not None and cache_key is not None and cache_key in req_cache:
         cached = req_cache[cache_key]
-        result = None if cached is _NOT_FOUND_SENTINEL else cached
         if ctx:
             ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
-            ctx.increment("find_obj_found" if result else "find_obj_not_found")
+            ctx.increment("find_obj_found")
             ctx.increment("find_obj_req_cache_hit")
-        return result
+        return cached
 
     if cache_key:
         cached_id = django_cache.get(cache_key)
@@ -1035,8 +1041,8 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
             django_cache.set(cache_key, result.id, cache_ttl)
             django_cache.set(_find_obj_rev_key(object_type, result.id), cache_key, cache_ttl)
 
-    if req_cache is not None and cache_key is not None:
-        req_cache[cache_key] = result if result is not None else _NOT_FOUND_SENTINEL
+    if req_cache is not None and cache_key is not None and result is not None:
+        req_cache[cache_key] = result
 
     if ctx:
         ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)

@@ -28,7 +28,7 @@ from .matcher import _get_active_branch_schema
 from .plugin_utils import get_primary_value, legal_fields
 from .profile import profiled
 from .supported_models import extract_supported_models
-from .transformer import cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
+from .transformer import _get_custom_fields_for_model, cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
 
 logger = logging.getLogger(__name__)
 
@@ -99,9 +99,17 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
             prechange_data[field_name] = value
 
     if hasattr(instance, "get_custom_fields"):
-        custom_field_values = instance.get_custom_fields()
+        # NetBox's instance.get_custom_fields() calls CustomField.objects.get_for_model
+        # which uses a request-scoped query_cache - one DB hit per unique model per
+        # request. For /bulk-plan-apply touching dozens of unique models per batch,
+        # that's still 30-50 extras_customfield queries per call. Use the
+        # transformer-level lru_cache instead (process-wide, signal-invalidated)
+        # to make it once-per-process-per-model. Inlined logic matches NetBox's
+        # get_custom_fields() exactly: raw JSON value -> field.deserialize() so
+        # callers see datetimes/object instances/etc. rather than primitives.
         cfmap = {}
-        for cf, value in custom_field_values.items():
+        for cf in _get_custom_fields_for_model(instance._meta.model):
+            value = cf.deserialize(instance.custom_field_data.get(cf.name))
             if isinstance(value, datetime.datetime | datetime.date):
                 cfmap[cf.name] = value
             else:
