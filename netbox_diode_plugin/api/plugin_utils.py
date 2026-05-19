@@ -1,7 +1,8 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Timestamp: 2026-01-12 17:44:14Z
+# Source: NetBox v4.6.0
+# Timestamp: 2026-05-14 20:30:15Z
 
 from dataclasses import dataclass
 import datetime
@@ -68,9 +69,6 @@ _JSON_REF_INFO = {
         ),
         "cable_path": RefInfo(
             object_type="dcim.cablepath", field_name="object", is_generic=True
-        ),
-        "cable_termination": RefInfo(
-            object_type="dcim.cabletermination", field_name="object", is_generic=True
         ),
         "circuit": RefInfo(
             object_type="circuits.circuit", field_name="object", is_generic=True
@@ -351,6 +349,20 @@ _JSON_REF_INFO = {
         "owner_group": RefInfo(
             object_type="users.ownergroup", field_name="object", is_generic=True
         ),
+        "cable_bundle": RefInfo(
+            object_type="dcim.cablebundle", field_name="object", is_generic=True
+        ),
+        "rack_group": RefInfo(
+            object_type="dcim.rackgroup", field_name="object", is_generic=True
+        ),
+        "script_module": RefInfo(
+            object_type="core.managedfile", field_name="object", is_generic=True
+        ),
+        "virtual_machine_type": RefInfo(
+            object_type="virtualization.virtualmachinetype",
+            field_name="object",
+            is_generic=True,
+        ),
     },
     "circuits.circuit": {
         "assignments": RefInfo(
@@ -449,43 +461,14 @@ _JSON_REF_INFO = {
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.cable": {
+        "bundle": RefInfo(object_type="dcim.cablebundle", field_name="bundle"),
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
-    "dcim.cabletermination": {
-        "cable": RefInfo(object_type="dcim.cable", field_name="cable"),
-        "termination_circuit_termination": RefInfo(
-            object_type="circuits.circuittermination",
-            field_name="termination",
-            is_generic=True,
-        ),
-        "termination_console_port": RefInfo(
-            object_type="dcim.consoleport", field_name="termination", is_generic=True
-        ),
-        "termination_console_server_port": RefInfo(
-            object_type="dcim.consoleserverport",
-            field_name="termination",
-            is_generic=True,
-        ),
-        "termination_front_port": RefInfo(
-            object_type="dcim.frontport", field_name="termination", is_generic=True
-        ),
-        "termination_interface": RefInfo(
-            object_type="dcim.interface", field_name="termination", is_generic=True
-        ),
-        "termination_power_feed": RefInfo(
-            object_type="dcim.powerfeed", field_name="termination", is_generic=True
-        ),
-        "termination_power_outlet": RefInfo(
-            object_type="dcim.poweroutlet", field_name="termination", is_generic=True
-        ),
-        "termination_power_port": RefInfo(
-            object_type="dcim.powerport", field_name="termination", is_generic=True
-        ),
-        "termination_rear_port": RefInfo(
-            object_type="dcim.rearport", field_name="termination", is_generic=True
-        ),
+    "dcim.cablebundle": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+        "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.consoleport": {
         "device": RefInfo(object_type="dcim.device", field_name="device"),
@@ -698,6 +681,7 @@ _JSON_REF_INFO = {
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.rack": {
+        "group": RefInfo(object_type="dcim.rackgroup", field_name="group"),
         "location": RefInfo(object_type="dcim.location", field_name="location"),
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "rack_type": RefInfo(object_type="dcim.racktype", field_name="rack_type"),
@@ -705,6 +689,10 @@ _JSON_REF_INFO = {
         "site": RefInfo(object_type="dcim.site", field_name="site"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
+    },
+    "dcim.rackgroup": {
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+        "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.rackreservation": {
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
@@ -787,11 +775,6 @@ _JSON_REF_INFO = {
         ),
         "assigned_object_cable_path": RefInfo(
             object_type="dcim.cablepath", field_name="assigned_object", is_generic=True
-        ),
-        "assigned_object_cable_termination": RefInfo(
-            object_type="dcim.cabletermination",
-            field_name="assigned_object",
-            is_generic=True,
         ),
         "assigned_object_circuit": RefInfo(
             object_type="circuits.circuit",
@@ -1154,6 +1137,24 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
+        "assigned_object_cable_bundle": RefInfo(
+            object_type="dcim.cablebundle",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_rack_group": RefInfo(
+            object_type="dcim.rackgroup", field_name="assigned_object", is_generic=True
+        ),
+        "assigned_object_script_module": RefInfo(
+            object_type="core.managedfile",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_virtual_machine_type": RefInfo(
+            object_type="virtualization.virtualmachinetype",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "ipam.aggregate": {
@@ -1165,6 +1166,7 @@ _JSON_REF_INFO = {
     "ipam.asn": {
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "rir": RefInfo(object_type="ipam.rir", field_name="rir"),
+        "role": RefInfo(object_type="ipam.role", field_name="role"),
         "sites": RefInfo(object_type="dcim.site", field_name="sites", is_many=True),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
@@ -1195,9 +1197,6 @@ _JSON_REF_INFO = {
         ),
         "interface_cable_path": RefInfo(
             object_type="dcim.cablepath", field_name="interface", is_generic=True
-        ),
-        "interface_cable_termination": RefInfo(
-            object_type="dcim.cabletermination", field_name="interface", is_generic=True
         ),
         "interface_circuit": RefInfo(
             object_type="circuits.circuit", field_name="interface", is_generic=True
@@ -1512,6 +1511,20 @@ _JSON_REF_INFO = {
         "interface_owner_group": RefInfo(
             object_type="users.ownergroup", field_name="interface", is_generic=True
         ),
+        "interface_cable_bundle": RefInfo(
+            object_type="dcim.cablebundle", field_name="interface", is_generic=True
+        ),
+        "interface_rack_group": RefInfo(
+            object_type="dcim.rackgroup", field_name="interface", is_generic=True
+        ),
+        "interface_script_module": RefInfo(
+            object_type="core.managedfile", field_name="interface", is_generic=True
+        ),
+        "interface_virtual_machine_type": RefInfo(
+            object_type="virtualization.virtualmachinetype",
+            field_name="interface",
+            is_generic=True,
+        ),
     },
     "ipam.ipaddress": {
         "assigned_object_fhrp_group": RefInfo(
@@ -1627,6 +1640,9 @@ _JSON_REF_INFO = {
         "scope_site_group": RefInfo(
             object_type="dcim.sitegroup", field_name="scope", is_generic=True
         ),
+        "scope_rack_group": RefInfo(
+            object_type="dcim.rackgroup", field_name="scope", is_generic=True
+        ),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
@@ -1673,9 +1689,6 @@ _JSON_REF_INFO = {
         ),
         "object_cable_path": RefInfo(
             object_type="dcim.cablepath", field_name="object", is_generic=True
-        ),
-        "object_cable_termination": RefInfo(
-            object_type="dcim.cabletermination", field_name="object", is_generic=True
         ),
         "object_circuit": RefInfo(
             object_type="circuits.circuit", field_name="object", is_generic=True
@@ -1972,6 +1985,20 @@ _JSON_REF_INFO = {
         "object_owner_group": RefInfo(
             object_type="users.ownergroup", field_name="object", is_generic=True
         ),
+        "object_cable_bundle": RefInfo(
+            object_type="dcim.cablebundle", field_name="object", is_generic=True
+        ),
+        "object_rack_group": RefInfo(
+            object_type="dcim.rackgroup", field_name="object", is_generic=True
+        ),
+        "object_script_module": RefInfo(
+            object_type="core.managedfile", field_name="object", is_generic=True
+        ),
+        "object_virtual_machine_type": RefInfo(
+            object_type="virtualization.virtualmachinetype",
+            field_name="object",
+            is_generic=True,
+        ),
         "role": RefInfo(object_type="tenancy.contactrole", field_name="role"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -2042,6 +2069,17 @@ _JSON_REF_INFO = {
         "site": RefInfo(object_type="dcim.site", field_name="site"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
+        "virtual_machine_type": RefInfo(
+            object_type="virtualization.virtualmachinetype",
+            field_name="virtual_machine_type",
+        ),
+    },
+    "virtualization.virtualmachinetype": {
+        "default_platform": RefInfo(
+            object_type="dcim.platform", field_name="default_platform"
+        ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+        "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "virtualization.vminterface": {
         "bridge": RefInfo(
@@ -2136,11 +2174,6 @@ _JSON_REF_INFO = {
         ),
         "assigned_object_cable_path": RefInfo(
             object_type="dcim.cablepath", field_name="assigned_object", is_generic=True
-        ),
-        "assigned_object_cable_termination": RefInfo(
-            object_type="dcim.cabletermination",
-            field_name="assigned_object",
-            is_generic=True,
         ),
         "assigned_object_circuit": RefInfo(
             object_type="circuits.circuit",
@@ -2492,6 +2525,24 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
+        "assigned_object_cable_bundle": RefInfo(
+            object_type="dcim.cablebundle",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_rack_group": RefInfo(
+            object_type="dcim.rackgroup", field_name="assigned_object", is_generic=True
+        ),
+        "assigned_object_script_module": RefInfo(
+            object_type="core.managedfile",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_virtual_machine_type": RefInfo(
+            object_type="virtualization.virtualmachinetype",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
         "l2vpn": RefInfo(object_type="vpn.l2vpn", field_name="l2vpn"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -2525,11 +2576,6 @@ _JSON_REF_INFO = {
         ),
         "termination_cable_path": RefInfo(
             object_type="dcim.cablepath", field_name="termination", is_generic=True
-        ),
-        "termination_cable_termination": RefInfo(
-            object_type="dcim.cabletermination",
-            field_name="termination",
-            is_generic=True,
         ),
         "termination_circuit": RefInfo(
             object_type="circuits.circuit", field_name="termination", is_generic=True
@@ -2860,6 +2906,20 @@ _JSON_REF_INFO = {
         "termination_owner_group": RefInfo(
             object_type="users.ownergroup", field_name="termination", is_generic=True
         ),
+        "termination_cable_bundle": RefInfo(
+            object_type="dcim.cablebundle", field_name="termination", is_generic=True
+        ),
+        "termination_rack_group": RefInfo(
+            object_type="dcim.rackgroup", field_name="termination", is_generic=True
+        ),
+        "termination_script_module": RefInfo(
+            object_type="core.managedfile", field_name="termination", is_generic=True
+        ),
+        "termination_virtual_machine_type": RefInfo(
+            object_type="virtualization.virtualmachinetype",
+            field_name="termination",
+            is_generic=True,
+        ),
         "tunnel": RefInfo(object_type="vpn.tunnel", field_name="tunnel"),
     },
     "wireless.wirelesslan": {
@@ -3036,10 +3096,12 @@ _LEGAL_FIELDS = {
             "tags",
         ]
     ),
+    "core.managedfile": frozenset(["file"]),
     "dcim.cable": frozenset(
         [
             "a_terminations",
             "b_terminations",
+            "bundle",
             "color",
             "comments",
             "custom_fields",
@@ -3055,10 +3117,10 @@ _LEGAL_FIELDS = {
             "type",
         ]
     ),
-    "dcim.cablepath": frozenset(["is_active", "is_complete", "is_split"]),
-    "dcim.cabletermination": frozenset(
-        ["cable", "cable_end", "termination_id", "termination_type"]
+    "dcim.cablebundle": frozenset(
+        ["comments", "custom_fields", "description", "name", "owner", "tags"]
     ),
+    "dcim.cablepath": frozenset(["is_active", "is_complete", "is_split"]),
     "dcim.consoleport": frozenset(
         [
             "custom_fields",
@@ -3126,6 +3188,7 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "device",
+            "enabled",
             "installed_device",
             "label",
             "name",
@@ -3291,6 +3354,7 @@ _LEGAL_FIELDS = {
     ),
     "dcim.module": frozenset(
         [
+            "adopt_components",
             "asset_tag",
             "comments",
             "custom_fields",
@@ -3299,6 +3363,7 @@ _LEGAL_FIELDS = {
             "module_bay",
             "module_type",
             "owner",
+            "replicate_components",
             "serial",
             "status",
             "tags",
@@ -3309,6 +3374,7 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "device",
+            "enabled",
             "installed_module",
             "label",
             "module",
@@ -3428,6 +3494,7 @@ _LEGAL_FIELDS = {
             "description",
             "facility_id",
             "form_factor",
+            "group",
             "location",
             "max_weight",
             "mounting_depth",
@@ -3450,6 +3517,9 @@ _LEGAL_FIELDS = {
             "weight_unit",
             "width",
         ]
+    ),
+    "dcim.rackgroup": frozenset(
+        ["comments", "custom_fields", "description", "name", "owner", "slug", "tags"]
     ),
     "dcim.rackreservation": frozenset(
         [
@@ -3615,12 +3685,14 @@ _LEGAL_FIELDS = {
             "validation_maximum",
             "validation_minimum",
             "validation_regex",
+            "validation_schema",
             "weight",
         ]
     ),
     "extras.customfieldchoiceset": frozenset(
         [
             "base_choices",
+            "choice_colors",
             "description",
             "extra_choices",
             "name",
@@ -3676,6 +3748,7 @@ _LEGAL_FIELDS = {
             "description",
             "owner",
             "rir",
+            "role",
             "sites",
             "tags",
             "tenant",
@@ -3989,6 +4062,21 @@ _LEGAL_FIELDS = {
             "tags",
             "tenant",
             "vcpus",
+            "virtual_machine_type",
+        ]
+    ),
+    "virtualization.virtualmachinetype": frozenset(
+        [
+            "comments",
+            "custom_fields",
+            "default_memory",
+            "default_platform",
+            "default_vcpus",
+            "description",
+            "name",
+            "owner",
+            "slug",
+            "tags",
         ]
     ),
     "virtualization.vminterface": frozenset(
@@ -4382,9 +4470,11 @@ _FORMAT_TRANSFORMATIONS = {
         "search_weight": int_from_int64string,
         "validation_maximum": transform_float_to_decimal,
         "validation_minimum": transform_float_to_decimal,
+        "validation_schema": parse_json,
         "weight": int_from_int64string,
     },
     "extras.customfieldchoiceset": {
+        "choice_colors": parse_json,
         "extra_choices": lambda v: delimited_tuples(v, 2, ":", False, False, None),
     },
     "extras.customlink": {
@@ -4445,6 +4535,10 @@ _FORMAT_TRANSFORMATIONS = {
         "disk": int_from_int64string,
         "memory": int_from_int64string,
         "vcpus": transform_float_to_decimal,
+    },
+    "virtualization.virtualmachinetype": {
+        "default_memory": int_from_int64string,
+        "default_vcpus": transform_float_to_decimal,
     },
     "virtualization.vminterface": {
         "mtu": int_from_int64string,

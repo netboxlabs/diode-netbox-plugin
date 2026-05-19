@@ -22,12 +22,13 @@ classifiers = [
     'Programming Language :: Python :: 3.11',
     'Programming Language :: Python :: 3.12',
     'Programming Language :: Python :: 3.13',
+    'Programming Language :: Python :: 3.14',
 ]
 
 dependencies = [
-    "Brotli>=1.1.0",
+    "Brotli>=1.2.0",
     "certifi>=2024.7.4",
-    "grpcio>=1.68.1",
+    "grpcio>=1.76.0",
     "protobuf>=5.28.1",
 ]
 
