@@ -2,6 +2,7 @@
 # Copyright 2025 NetBox Labs Inc
 """Diode NetBox Plugin - API - Differ."""
 
+import contextvars
 import copy
 import datetime
 import logging
@@ -23,12 +24,26 @@ from .common import (
     harmonize_formats,
     sort_ints_first,
 )
+from .matcher import _get_active_branch_schema
 from .plugin_utils import get_primary_value, legal_fields
 from .profile import profiled
 from .supported_models import extract_supported_models
-from .transformer import cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
+from .transformer import _get_custom_fields_for_model, cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
 
 logger = logging.getLogger(__name__)
+
+_prechange_cache = contextvars.ContextVar("diode_prechange_cache", default=None)
+
+
+def enter_prechange_cache():
+    """Activate a request-scoped prechange data cache."""
+    return _prechange_cache.set({})
+
+
+def exit_prechange_cache(token):
+    """Deactivate the request-scoped prechange data cache."""
+    _prechange_cache.reset(token)
+
 
 @profiled("prechange_data")
 def prechange_data_from_instance(instance) -> dict: # noqa: C901
@@ -40,6 +55,13 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
 
     model_class = instance.__class__
     object_type = f"{model_class._meta.app_label}.{model_class._meta.model_name}"
+
+    cache = _prechange_cache.get(None)
+    if cache is not None:
+        cache_key = (_get_active_branch_schema(), object_type, instance.pk)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return copy.deepcopy(cached)
 
     supported_models = extract_supported_models()
     model = supported_models.get(object_type)
@@ -77,9 +99,17 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
             prechange_data[field_name] = value
 
     if hasattr(instance, "get_custom_fields"):
-        custom_field_values = instance.get_custom_fields()
+        # NetBox's instance.get_custom_fields() calls CustomField.objects.get_for_model
+        # which uses a request-scoped query_cache - one DB hit per unique model per
+        # request. For /bulk-plan-apply touching dozens of unique models per batch,
+        # that's still 30-50 extras_customfield queries per call. Use the
+        # transformer-level lru_cache instead (process-wide, signal-invalidated)
+        # to make it once-per-process-per-model. Inlined logic matches NetBox's
+        # get_custom_fields() exactly: raw JSON value -> field.deserialize() so
+        # callers see datetimes/object instances/etc. rather than primitives.
         cfmap = {}
-        for cf, value in custom_field_values.items():
+        for cf in _get_custom_fields_for_model(instance._meta.model):
+            value = cf.deserialize(instance.custom_field_data.get(cf.name))
             if isinstance(value, datetime.datetime | datetime.date):
                 cfmap[cf.name] = value
             else:
@@ -92,6 +122,10 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
                 cfmap[cf.name] = serialized
         prechange_data["custom_fields"] = cfmap
     prechange_data = harmonize_formats(prechange_data)
+
+    if cache is not None:
+        cache[cache_key] = prechange_data
+        return copy.deepcopy(prechange_data)
 
     return prechange_data
 

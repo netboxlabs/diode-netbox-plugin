@@ -485,7 +485,9 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_rd | 1 | builtin | rd | N/A | Matches on unique field(s): rd | All versions |
+| logical_vrf_name_no_tenant | 1 | logical | name | rd is NULL AND tenant is NULL | Matches on fields: name where rd is NULL AND tenant is NULL | All versions |
+| logical_vrf_name_within_tenant | 2 | logical | name, tenant | rd is NULL AND tenant is NOT NULL | Matches on fields: name, tenant where rd is NULL AND tenant is NOT NULL | All versions |
+| unique_rd | 3 | builtin | rd | N/A | Matches on unique field(s): rd | All versions |
 
 ## tenancy.contact
 
@@ -584,6 +586,8 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | unique_primary_ip6 | 3 | builtin | primary_ip6 | N/A | Matches on unique field(s): primary_ip6 | All versions |
 | virtualization_virtualmachine_unique_name_cluster_tenant | 4 | builtin |  | N/A | Custom matcher | All versions |
 | virtualization_virtualmachine_unique_name_cluster | 5 | builtin |  | tenant is NULL | Custom matcher | All versions |
+| virtualization_virtualmachine_unique_name_device_tenant | 6 | builtin |  | cluster is NULL AND device is NOT NULL | Custom matcher | All versions |
+| virtualization_virtualmachine_unique_name_device | 7 | builtin |  | cluster is NULL AND device is NOT NULL AND tenant is NULL | Custom matcher | All versions |
 
 ## virtualization.vminterface
 

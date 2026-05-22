@@ -12,7 +12,7 @@ on:
 
 env:
   # Default NetBox version used for coverage reporting
-  DEFAULT_NETBOX_VERSION: "v4.5.5"
+  DEFAULT_NETBOX_VERSION: "v4.6.0"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -30,7 +30,7 @@ jobs:
     strategy:
       matrix:
         python: [ "3.10" ]
-        netbox: [ "v4.5.5", "v4.4.10" ]
+        netbox: [ "v4.6.0", "v4.5.5", "v4.4.10" ]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
