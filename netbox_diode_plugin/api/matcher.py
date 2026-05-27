@@ -102,22 +102,34 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 # The specific gaps (see _LOGICAL_MATCHERS below for the criteria):
 #   - dcim.macaddress: NetBox has no unique constraint on
 #     (mac_address, assigned_object_type, assigned_object_id).
+#   - dcim.modulebay: matched by (name, device); NetBox's parent-aware
+#     constraint does not catch unscoped duplicates the matcher dedupes.
 #   - ipam.vlan: NetBox's (group, vid) constraint does not enforce
 #     uniqueness when group is NULL.
 #   - ipam.vlangroup: NetBox does not enforce uniqueness of name when
 #     scope_type is NULL.
 #   - ipam.vrf: NetBox enforces uniqueness on rd, not name; multiple
 #     VRFs with rd=NULL and the same name are otherwise allowed.
+#   - virtualization.cluster: NetBox does not enforce uniqueness of
+#     name across scopes; matched by (name, scope_type, scope_id) or
+#     by name alone when unscoped and unparented.
+#   - virtualization.virtualmachine: NetBox does not enforce uniqueness
+#     of name when cluster is NULL.
+#   - wireless.wirelesslan: NetBox does not enforce ssid uniqueness.
 #
 # This closes the common race (concurrent plan, sequential apply).
 # It does not close TOCTOU under truly concurrent apply across
-# replicas — that would require a DB unique constraint or a
+# replicas - that would require a DB unique constraint or a
 # coordinating lock.
 _REQUIRES_PRE_SAVE_MATCH = frozenset({
     "dcim.macaddress",
+    "dcim.modulebay",
     "ipam.vlan",
     "ipam.vlangroup",
     "ipam.vrf",
+    "virtualization.cluster",
+    "virtualization.virtualmachine",
+    "wireless.wirelesslan",
 })
 
 
