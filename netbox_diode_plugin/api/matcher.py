@@ -91,6 +91,41 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 # These should represent the likely intent of a user when
 # matching existing objects.
 #
+# Object types whose logical match criteria are NOT backed by a DB
+# unique constraint. For CREATE changes on these types the applier
+# must call find_existing_object BEFORE serializer.save(); otherwise
+# concurrent planners can each emit CREATE for the same logical row
+# and both inserts succeed, producing duplicates. The standard
+# IntegrityError fallback in _create_or_find_instance cannot catch
+# this because save() does not fail.
+#
+# The specific gaps (see _LOGICAL_MATCHERS below for the criteria):
+#   - dcim.macaddress: NetBox has no unique constraint on
+#     (mac_address, assigned_object_type, assigned_object_id).
+#   - ipam.vlan: NetBox's (group, vid) constraint does not enforce
+#     uniqueness when group is NULL.
+#   - ipam.vlangroup: NetBox does not enforce uniqueness of name when
+#     scope_type is NULL.
+#   - ipam.vrf: NetBox enforces uniqueness on rd, not name; multiple
+#     VRFs with rd=NULL and the same name are otherwise allowed.
+#
+# This closes the common race (concurrent plan, sequential apply).
+# It does not close TOCTOU under truly concurrent apply across
+# replicas — that would require a DB unique constraint or a
+# coordinating lock.
+_REQUIRES_PRE_SAVE_MATCH = frozenset({
+    "dcim.macaddress",
+    "ipam.vlan",
+    "ipam.vlangroup",
+    "ipam.vrf",
+})
+
+
+def requires_pre_save_match(object_type: str) -> bool:
+    """Whether the applier must look up an existing row before CREATE."""
+    return object_type in _REQUIRES_PRE_SAVE_MATCH
+
+
 _LOGICAL_MATCHERS = {
     "dcim.macaddress": lambda: [
         ObjectMatchCriteria(

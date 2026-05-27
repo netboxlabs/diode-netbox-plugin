@@ -5,8 +5,9 @@
 import logging
 from types import SimpleNamespace
 from unittest import mock
+from uuid import uuid4
 
-from dcim.models import Site
+from dcim.models import MACAddress, Site
 from rest_framework import status
 from utilities.testing import APITestCase
 
@@ -375,6 +376,106 @@ class BulkPlanApplyTestCase(APITestCase):
         """Missing token returns 403 (DiodeOAuth2Authentication has no authenticate_header)."""
         response = self.client.post(self.url, data={"entities": []}, format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    # --- Cross-request plan race must not produce duplicate MACAddress ---
+
+    def test_concurrent_plans_dedupe_macaddress_via_pre_save_match(self):
+        """
+        Two requests planning the same MAC must apply to a single row.
+
+        Two reconciler workers planning equivalent change_sets for the same
+        interface + MAC each see no existing MAC row and each plan a CREATE.
+        Two sequential ``/bulk-plan/`` calls model this exactly: each request
+        has its own request-scoped obj_cache, so plan B cannot see plan A's
+        pending CREATE.
+
+        NetBox has no DB-level unique constraint on
+        (mac_address, assigned_object_type, assigned_object_id), so the
+        applier dedupes by routing dcim.macaddress through the find-first
+        CREATE path (matcher.requires_pre_save_match). Apply B's CREATE
+        therefore matches the row apply A just committed instead of
+        inserting a second one.
+        """
+        suffix = uuid4().hex[:8]
+        mac = "00:00:00:00:00:42"
+
+        plan_payload = {
+            "entities": [
+                {
+                    "id": f"race-{suffix}",
+                    "object_type": "dcim.interface",
+                    "entity": {
+                        "interface": {
+                            "name": f"eth0-{suffix}",
+                            "type": "1000base-t",
+                            "device": {
+                                "name": f"dev-{suffix}",
+                                "role": {"name": f"role-{suffix}"},
+                                "site": {"name": f"site-{suffix}"},
+                                "device_type": {
+                                    "manufacturer": {"name": f"mfr-{suffix}"},
+                                    "model": f"dt-{suffix}",
+                                },
+                            },
+                            "primary_mac_address": {"mac_address": mac},
+                        },
+                    },
+                }
+            ]
+        }
+
+        plan_url = "/netbox/api/plugins/diode/bulk-plan/"
+        apply_url = "/netbox/api/plugins/diode/bulk-apply/"
+
+        plan_a = self.client.post(
+            plan_url, data=plan_payload, format="json", **self.authorization_header
+        )
+        plan_b = self.client.post(
+            plan_url, data=plan_payload, format="json", **self.authorization_header
+        )
+        self.assertEqual(plan_a.status_code, status.HTTP_200_OK, plan_a.json())
+        self.assertEqual(plan_b.status_code, status.HTTP_200_OK, plan_b.json())
+
+        result_a = plan_a.json()["results"][0]
+        result_b = plan_b.json()["results"][0]
+        self.assertIsNone(result_a.get("errors"), result_a)
+        self.assertIsNone(result_b.get("errors"), result_b)
+        cs_a = result_a.get("change_set")
+        cs_b = result_b.get("change_set")
+        self.assertIsNotNone(cs_a, result_a)
+        self.assertIsNotNone(cs_b, result_b)
+
+        def mac_creates(change_set):
+            return [
+                c for c in change_set["changes"]
+                if c["object_type"] == "dcim.macaddress" and c["change_type"] == "create"
+            ]
+
+        self.assertEqual(len(mac_creates(cs_a)), 1, cs_a)
+        self.assertEqual(len(mac_creates(cs_b)), 1, cs_b)
+
+        apply_a = self.client.post(
+            apply_url,
+            data={"change_sets": [cs_a]},
+            format="json",
+            **self.authorization_header,
+        )
+        apply_b = self.client.post(
+            apply_url,
+            data={"change_sets": [cs_b]},
+            format="json",
+            **self.authorization_header,
+        )
+        self.assertEqual(apply_a.status_code, status.HTTP_200_OK, apply_a.json())
+        self.assertEqual(apply_b.status_code, status.HTTP_200_OK, apply_b.json())
+
+        macs = MACAddress.objects.filter(mac_address=mac)
+        self.assertEqual(
+            macs.count(),
+            1,
+            f"expected exactly one MAC row after dedup, got {macs.count()}: "
+            f"{list(macs.values('pk', 'mac_address', 'assigned_object_id'))}",
+        )
 
     def test_insufficient_scope_returns_403(self):
         """Token with only read scope cannot call bulk-plan-apply (requires write)."""
