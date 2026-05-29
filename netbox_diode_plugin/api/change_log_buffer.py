@@ -193,57 +193,91 @@ post_save.connect(_buffered_handler)
 m2m_changed.connect(_buffered_handler)
 
 
+# Cap on drain iterations. Re-emitting `post_save` for a flushed
+# ObjectChange fires every receiver connected for that signal,
+# including denormalisation receivers that may save related models
+# and so trigger MORE ObjectChange events through `_buffered_handler`.
+# Those cascading events land back in the same buffer and a second
+# flush picks them up. In practice the cascade depth is 1-2 (NetBox
+# denormalisation does not chain arbitrarily); the cap is a guard
+# against pathological loops, not a typical operating value.
+_MAX_DRAIN_ITERATIONS = 5
+
+
 @contextmanager
 def buffered_change_logging():
     """
-    Collect ObjectChange writes during apply and flush them as a single bulk_create.
+    Collect ObjectChange writes during apply and flush them as bulk_create batches.
 
     No-op when ``apply_buffer_change_logging`` is False (the default),
     which means the buffered handler still runs but delegates straight
     through to upstream NetBox without touching the buffer.
 
-    The flush runs inside the caller's transaction, so if the caller's
-    outer transaction rolls back the bulk_create rolls back with it.
+    The flush runs inside the caller's transaction. The buffer
+    contextvar is kept active during the flush so that any cascading
+    model saves triggered by the re-emitted ``post_save`` (for
+    example, by NetBox's denormalisation receiver
+    ``update_denormalized_fields`` saving related rows) land back in
+    the buffer and are picked up by a subsequent drain iteration.
+    Without this, the cascade fell through to upstream
+    ``handle_changed_object`` and produced single-row INSERTs into
+    ``core_objectchange`` after every bulk_create - effectively
+    double-writing the audit log.
+
     Raising inside the ``with`` block skips the flush entirely - the
     buffered ObjectChange instances are dropped without being
-    persisted.
+    persisted, and the outer transaction.atomic() rolls back any
+    model writes that produced them.
     """
     if not get_plugin_config("netbox_diode_plugin", "apply_buffer_change_logging"):
         yield
         return
 
     token = _apply_change_buffer.set({})
-    flushed_buffer = None
     try:
         yield
-        # Capture the buffer for a successful exit. Reading via .get()
-        # after a successful yield gives us the populated dict; we
-        # defer the actual flush until after `reset(token)` so any
-        # post_save signals re-emitted during the flush do not
-        # re-enter the buffer path.
-        flushed_buffer = _apply_change_buffer.get()
+        # The buffer is still active here; cascading saves caused by
+        # re-emitted signals will land in the same dict and the loop
+        # below picks them up on the next iteration.
+        buffer = _apply_change_buffer.get()
+        iterations = 0
+        while buffer and iterations < _MAX_DRAIN_ITERATIONS:
+            # Mutate the dict in place so the contextvar still points
+            # at the active buffer for any cascading saves during the
+            # flush. Clearing before the flush also prevents a
+            # cascading m2m_changed for an already-flushed instance
+            # from merging into the now-saved row in memory and being
+            # silently dropped.
+            items = list(buffer.values())
+            buffer.clear()
+            created = ObjectChange.objects.bulk_create(items)
+            # bulk_create does not fire post_save. Manually re-emit so
+            # that receivers connected to ObjectChange (notably the
+            # branching plugin's `record_change_diff`) see each
+            # ObjectChange exactly once, with `created=True` matching
+            # the action that produced it.
+            #
+            # Pass the full kwargs set that Django's own
+            # `Model._save_table` would pass: some NetBox receivers
+            # (e.g. `update_denormalized_fields`) declare `raw` as a
+            # required positional argument and would raise TypeError
+            # if we sent the signal with only `instance`/`created`.
+            for obj in created:
+                post_save.send(
+                    sender=ObjectChange,
+                    instance=obj,
+                    created=True,
+                    update_fields=None,
+                    raw=False,
+                    using=obj._state.db,
+                )
+            iterations += 1
+        if buffer:
+            logger.warning(
+                "buffered_change_logging: drain did not converge after %d iterations; "
+                "%d entries dropped",
+                _MAX_DRAIN_ITERATIONS,
+                len(buffer),
+            )
     finally:
         _apply_change_buffer.reset(token)
-
-    if not flushed_buffer:
-        return
-
-    created = ObjectChange.objects.bulk_create(list(flushed_buffer.values()))
-    # bulk_create does not fire post_save. Manually re-emit so that
-    # receivers connected to ObjectChange (notably the branching
-    # plugin's `record_change_diff`) see each ObjectChange exactly
-    # once, with `created=True` matching the action that produced it.
-    #
-    # Pass the full kwargs set that Django's own `Model._save_table`
-    # would pass: some NetBox receivers (e.g. `update_denormalized_fields`)
-    # declare `raw` as a required positional argument and would raise
-    # TypeError if we sent the signal with only `instance`/`created`.
-    for obj in created:
-        post_save.send(
-            sender=ObjectChange,
-            instance=obj,
-            created=True,
-            update_fields=None,
-            raw=False,
-            using=obj._state.db,
-        )

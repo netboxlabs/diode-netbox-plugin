@@ -197,3 +197,63 @@ class BufferedChangeLoggingTestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
         self.assertTrue(Site.objects.filter(slug=f"site-{suffix}").exists())
         self.assertEqual(self._site_change_count(), 0)
+
+    # --- Cascading saves during re-emit go back into the buffer ---
+
+    def test_cascading_save_during_reemit_lands_in_buffer_not_upstream(self):
+        """
+        A receiver that saves a model when ObjectChange fires must be re-buffered, not single-row INSERTed.
+
+        Simulates the production behaviour observed under the v1 flush
+        design: a `post_save(sender=ObjectChange)` receiver (in real
+        deployments, `netbox.denormalized.update_denormalized_fields`
+        and similar) saves a related model during the re-emit window.
+        Under v1 the buffer contextvar was already reset by then so
+        the cascading save fell through to upstream
+        `handle_changed_object` and produced single-row INSERTs.
+        Under the drain-to-fixpoint flush the cascading save lands
+        back in the (still active) buffer and is included in a
+        subsequent bulk_create iteration, with no single-row write.
+        """
+        suffix = uuid4().hex[:8]
+        cascade_slug = f"cascade-{suffix}"
+        cascade_invoked = {"count": 0}
+
+        def cascade_receiver(sender, instance, created, **kwargs):
+            # Fire once - the cascade-created Site itself fires
+            # post_save and would re-trigger this receiver in an
+            # infinite loop without the guard.
+            if cascade_invoked["count"] > 0:
+                return
+            if not getattr(instance, "changed_object_type", None):
+                return
+            if instance.changed_object_type.model != "site":
+                return
+            cascade_invoked["count"] += 1
+            Site.objects.create(name=f"Cascade {suffix}", slug=cascade_slug)
+
+        post_save.connect(cascade_receiver, sender=ObjectChange)
+        try:
+            with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True):
+                response = self.client.post(
+                    self.url, data=self._make_payload(suffix), format="json", **self.authorization_header
+                )
+        finally:
+            post_save.disconnect(cascade_receiver, sender=ObjectChange)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
+        # Both Sites exist: the apply-created one and the cascade-created one.
+        self.assertTrue(Site.objects.filter(slug=f"site-{suffix}").exists())
+        self.assertTrue(Site.objects.filter(slug=cascade_slug).exists())
+        # The cascade receiver did fire exactly once.
+        self.assertEqual(cascade_invoked["count"], 1)
+        # The cascade-created Site must have an ObjectChange row.
+        cascade_site = Site.objects.get(slug=cascade_slug)
+        self.assertTrue(
+            ObjectChange.objects.filter(
+                changed_object_type__app_label="dcim",
+                changed_object_type__model="site",
+                changed_object_id=cascade_site.pk,
+            ).exists(),
+            "Cascading save during re-emit must produce an ObjectChange row",
+        )
