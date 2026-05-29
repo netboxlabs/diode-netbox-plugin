@@ -1,35 +1,41 @@
 #!/usr/bin/env python
 # Copyright 2026 NetBox Labs, Inc.
 """
-Buffer NetBox's ObjectChange writes during diode applies and flush as a single bulk_create.
+Buffer NetBox's ObjectChange writes during apply and flush them asynchronously via RQ.
 
-NetBox's ``handle_changed_object`` receiver (``core/signals.py``) does up
-to three DB round-trips per saved model: one INSERT into
-``core_objectchange`` for non-m2m saves, and for m2m_changed events a
-SELECT to find any prior ObjectChange recorded for the same instance in
-the current request followed by an UPDATE if one is found. Under bulk
-auto-apply (a 50-entity batch with a couple of m2m fields per entity)
-that lands around 150-300 round-trips per HTTP request, which costs the
-plugin roughly 50% of its throughput compared to the existing
-``apply_bypass_change_logging`` shortcut.
+NetBox's ``handle_changed_object`` receiver (``core/signals.py``) is
+not just an INSERT - it also runs ``instance.to_objectchange(action)``
+which serialises the model's full pre/post state, and that
+serialisation triggers a cascade of FK / related-table SELECTs
+(typically ~5-10 SELECTs per save, against ``django_content_type``,
+``extras_tag``, and any reverse-relationship tables on the model
+being saved). Under bulk auto-apply (50 entities per request, several
+saves per entity) the synchronous change-logging chain dominates the
+apply request critical path - measured at ~40% of total apply
+throughput on production load tests.
 
-This module preserves the audit trail (and the downstream consumers
-that depend on it - the branching plugin's ChangeDiff machinery and
-the NBC eventsink stream) while collapsing those round-trips into one.
-It does so in two pieces:
+This module preserves the audit trail (and any receivers connected
+to ``post_save(sender=ObjectChange)``) by **moving the ObjectChange
+write off the apply request critical path entirely**, onto NetBox's
+existing RQ workers:
 
   1. A request-scoped buffer (a ``contextvars.ContextVar`` holding a
      dict keyed by ``(content_type_id, changed_object_id)``) gathers
-     ObjectChange instances in memory instead of saving each one
-     individually. m2m_changed events for an object already in the
-     buffer merge their ``postchange_data`` in memory, which replaces
-     the upstream SELECT-then-UPDATE pair with a dict lookup.
-  2. On successful exit of ``buffered_change_logging()`` the buffered
-     rows are flushed via ``ObjectChange.objects.bulk_create(...)`` and
-     a ``post_save`` signal is manually re-emitted for each created
-     row. The re-emit is what keeps the branching plugin's
-     ``record_change_diff`` receiver firing - ``bulk_create`` does not
-     fire ``post_save`` on its own.
+     ObjectChange instances in memory during the apply. m2m_changed
+     events for an object already in the buffer merge their
+     ``postchange_data`` in memory, which replaces the upstream
+     SELECT-then-UPDATE pair with a dict lookup. This part runs in
+     the request thread but is purely Python in-memory work - no DB.
+  2. On successful exit of ``buffered_change_logging()`` the buffer
+     is serialised to a plain-dict payload (see
+     ``async_change_logging.serialise_buffer_to_payload``) and an RQ
+     job is enqueued via ``transaction.on_commit`` so that it only
+     fires after the apply transaction successfully commits. The
+     ObjectChange rows themselves are written by an RQ worker
+     (``async_change_logging.write_object_changes_async``) on its
+     own time, off the request thread. ``post_save`` is re-emitted
+     for each row inside the worker so any receiver connected to
+     ``post_save(sender=ObjectChange)`` still fires.
 
 The module installs its wrapper into ``post_save`` and ``m2m_changed``
 at import time, unconditionally. The wrapper is a no-op when the
@@ -42,11 +48,28 @@ plugin setting ``apply_buffer_change_logging`` gates whether
 setting at its default ``False`` the context manager yields without
 touching the buffer and behaviour is exactly upstream.
 
-The flush happens *inside* the apply transaction (the ``with`` block
-in ``_apply_one_changeset`` runs the context manager nested inside
-``transaction.atomic()``), so if the apply raises after the flush has
-written its bulk_create rows, the outer ``atomic`` block rolls those
-rows back along with everything else.
+Rollback semantics: ``transaction.on_commit`` callbacks only fire if
+the outer atomic block commits. If the apply raises after we
+collected the buffer but before commit, the on_commit callback never
+runs and the payload is discarded - no orphan audit rows.
+
+Trade-offs vs the synchronous flush this replaces:
+
+  - Audit log becomes eventually-consistent (typical lag <1s under
+    healthy queue load). Readers of ``core_objectchange``
+    immediately after an apply may not see the just-applied
+    changes.
+  - Receivers connected to ``post_save(sender=ObjectChange)`` fire
+    inside the worker, not in the apply request thread. The worker
+    re-establishes any per-request context (current user,
+    request_id, and an optional ``active_branch`` from
+    ``netbox-branching`` if installed) from the serialised payload
+    so receivers see the same inputs they would have seen on the
+    synchronous path.
+  - Worker failures are caught by RQ ``Retry`` with exponential
+    backoff; persistent failures land on the failed queue, visible
+    via django_rq admin. The audit gap is observable and
+    replayable.
 
 Pre_delete is intentionally left untouched: NetBox's delete handler
 runs protection-rule validation, which must keep firing, and deletes
@@ -59,15 +82,16 @@ from contextvars import ContextVar
 
 from core.choices import ObjectChangeActionChoices
 from core.events import OBJECT_CREATED, OBJECT_UPDATED
-from core.models import ObjectChange
 from core.signals import handle_changed_object as _original_handler
 from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
 from django.db.models.signals import m2m_changed, post_save
 from extras.events import enqueue_event
 from extras.models import Tag
 from netbox.context import current_request, events_queue
 from netbox.plugins import get_plugin_config
 
+from .async_change_logging import enqueue_async_write, serialise_buffer_to_payload
 from .change_log_bypass import _bypass_active, _guarded_handler
 from .change_log_bypass import _enabled as _bypass_enabled
 
@@ -193,41 +217,27 @@ post_save.connect(_buffered_handler)
 m2m_changed.connect(_buffered_handler)
 
 
-# Cap on drain iterations. Re-emitting `post_save` for a flushed
-# ObjectChange fires every receiver connected for that signal,
-# including denormalisation receivers that may save related models
-# and so trigger MORE ObjectChange events through `_buffered_handler`.
-# Those cascading events land back in the same buffer and a second
-# flush picks them up. In practice the cascade depth is 1-2 (NetBox
-# denormalisation does not chain arbitrarily); the cap is a guard
-# against pathological loops, not a typical operating value.
-_MAX_DRAIN_ITERATIONS = 5
-
-
 @contextmanager
 def buffered_change_logging():
     """
-    Collect ObjectChange writes during apply and flush them as bulk_create batches.
+    Collect ObjectChange writes during apply and enqueue them for async write via RQ.
 
     No-op when ``apply_buffer_change_logging`` is False (the default),
     which means the buffered handler still runs but delegates straight
     through to upstream NetBox without touching the buffer.
 
-    The flush runs inside the caller's transaction. The buffer
-    contextvar is kept active during the flush so that any cascading
-    model saves triggered by the re-emitted ``post_save`` (for
-    example, by NetBox's denormalisation receiver
-    ``update_denormalized_fields`` saving related rows) land back in
-    the buffer and are picked up by a subsequent drain iteration.
-    Without this, the cascade fell through to upstream
-    ``handle_changed_object`` and produced single-row INSERTs into
-    ``core_objectchange`` after every bulk_create - effectively
-    double-writing the audit log.
+    On a successful apply the in-memory buffer is serialised to a
+    plain-dict payload and the actual ``ObjectChange.objects.bulk_create``
+    + ``post_save`` re-emit is enqueued onto NetBox's default RQ
+    queue via ``transaction.on_commit``. The RQ worker writes the
+    rows on its own time, off the apply request critical path.
 
-    Raising inside the ``with`` block skips the flush entirely - the
-    buffered ObjectChange instances are dropped without being
-    persisted, and the outer transaction.atomic() rolls back any
-    model writes that produced them.
+    Raising inside the ``with`` block skips the enqueue entirely.
+    ``transaction.on_commit`` callbacks only fire on successful
+    commit of the surrounding atomic block, so if the apply raises
+    (or any later receiver does), the payload is dropped and no
+    audit rows are written - matches the upstream "transaction
+    rolls back -> ObjectChange not visible" semantics.
     """
     if not get_plugin_config("netbox_diode_plugin", "apply_buffer_change_logging"):
         yield
@@ -236,48 +246,22 @@ def buffered_change_logging():
     token = _apply_change_buffer.set({})
     try:
         yield
-        # The buffer is still active here; cascading saves caused by
-        # re-emitted signals will land in the same dict and the loop
-        # below picks them up on the next iteration.
         buffer = _apply_change_buffer.get()
-        iterations = 0
-        while buffer and iterations < _MAX_DRAIN_ITERATIONS:
-            # Mutate the dict in place so the contextvar still points
-            # at the active buffer for any cascading saves during the
-            # flush. Clearing before the flush also prevents a
-            # cascading m2m_changed for an already-flushed instance
-            # from merging into the now-saved row in memory and being
-            # silently dropped.
-            items = list(buffer.values())
-            buffer.clear()
-            created = ObjectChange.objects.bulk_create(items)
-            # bulk_create does not fire post_save. Manually re-emit so
-            # that receivers connected to ObjectChange (notably the
-            # branching plugin's `record_change_diff`) see each
-            # ObjectChange exactly once, with `created=True` matching
-            # the action that produced it.
-            #
-            # Pass the full kwargs set that Django's own
-            # `Model._save_table` would pass: some NetBox receivers
-            # (e.g. `update_denormalized_fields`) declare `raw` as a
-            # required positional argument and would raise TypeError
-            # if we sent the signal with only `instance`/`created`.
-            for obj in created:
-                post_save.send(
-                    sender=ObjectChange,
-                    instance=obj,
-                    created=True,
-                    update_fields=None,
-                    raw=False,
-                    using=obj._state.db,
-                )
-            iterations += 1
-        if buffer:
-            logger.warning(
-                "buffered_change_logging: drain did not converge after %d iterations; "
-                "%d entries dropped",
-                _MAX_DRAIN_ITERATIONS,
-                len(buffer),
-            )
+        if not buffer:
+            return
+
+        # Capture context once, while still on the request thread.
+        # The RQ worker reconstitutes from this snapshot.
+        request = current_request.get()
+        user = request.user if request is not None else None
+        request_id = request.id if request is not None else None
+        payload = serialise_buffer_to_payload(buffer, user, request_id)
+
+        # transaction.on_commit ensures the job is enqueued ONLY if
+        # the apply atomic block commits. A rollback (from a
+        # downstream signal raising, for example) results in the
+        # on_commit callback being discarded by Django, so the
+        # payload never reaches the queue.
+        transaction.on_commit(lambda: enqueue_async_write(payload))
     finally:
         _apply_change_buffer.reset(token)

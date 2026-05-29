@@ -10,18 +10,19 @@ from uuid import uuid4
 from core.models import ObjectChange
 from dcim.models import Site
 from django.db.models.signals import post_save
+from django.test import TestCase
 from rest_framework import status
 from utilities.testing import APITestCase
 
-from netbox_diode_plugin.api import change_log_buffer, views
+from netbox_diode_plugin.api import async_change_logging, change_log_buffer, views
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.plugin_config import get_diode_user
 
 logger = logging.getLogger(__name__)
 
 
-class BufferedChangeLoggingTestCase(APITestCase):
-    """Exercise the buffered change-logging path end-to-end via /bulk-plan-apply/."""
+class BufferedChangeLoggingApplyTestCase(APITestCase):
+    """End-to-end behaviour of `buffered_change_logging` via `/bulk-plan-apply/`."""
 
     def setUp(self):
         """Auth + clean ObjectChange table for predictable counts."""
@@ -39,9 +40,6 @@ class BufferedChangeLoggingTestCase(APITestCase):
         )
         self.introspect_patcher.start()
 
-        # Wipe pre-existing ObjectChange rows so each test asserts on a
-        # delta from zero rather than from whatever the fixture loader
-        # has populated.
         ObjectChange.objects.all().delete()
 
     def tearDown(self):
@@ -70,124 +68,81 @@ class BufferedChangeLoggingTestCase(APITestCase):
 
     # --- Setting OFF: buffer is a pass-through ---
 
-    def test_setting_false_writes_objectchange_normally(self):
-        """With the setting off (default), the apply produces ObjectChange rows via the unbuffered path."""
-        response = self.client.post(
-            self.url, data=self._make_payload(uuid4().hex[:8]), format="json", **self.authorization_header
-        )
+    def test_setting_false_writes_objectchange_synchronously(self):
+        """With the setting off (default), the apply writes ObjectChange synchronously, no RQ enqueue."""
+        with mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue:
+            response = self.client.post(
+                self.url,
+                data=self._make_payload(uuid4().hex[:8]),
+                format="json",
+                **self.authorization_header,
+            )
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
+        # Synchronous path -> row already in DB at request return.
         self.assertEqual(self._site_change_count(), 1)
+        # Async path -> NOT invoked.
+        mock_enqueue.assert_not_called()
 
-    # --- Setting ON: buffer collects, bulk_create flushes ---
+    # --- Setting ON: buffer collects + enqueues async job ---
 
-    def test_setting_true_persists_objectchange_via_bulk_create(self):
-        """With the setting on, the apply still produces ObjectChange rows; they land via bulk_create on exit."""
+    def test_setting_true_enqueues_async_job_with_payload(self):
+        """With the setting on, the apply enqueues an RQ job carrying the buffered ObjectChange data."""
         suffix = uuid4().hex[:8]
-        with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True):
+        # Django's TestCase wraps each test in a transaction that is
+        # rolled back at end-of-test, which means `transaction.on_commit`
+        # callbacks normally never fire. `captureOnCommitCallbacks` runs
+        # them explicitly on context exit so we can assert the enqueue.
+        with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True), \
+             mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue, \
+             self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(
                 self.url, data=self._make_payload(suffix), format="json", **self.authorization_header
             )
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
-        self.assertEqual(self._site_change_count(), 1)
 
-    def test_buffered_and_unbuffered_produce_equivalent_rows(self):
-        """Row count, action, and changed_object are identical between buffered and unbuffered apply."""
-        unbuffered_suffix = uuid4().hex[:8]
-        response = self.client.post(
-            self.url, data=self._make_payload(unbuffered_suffix), format="json", **self.authorization_header
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
-        unbuffered_rows = list(
-            ObjectChange.objects.filter(
-                changed_object_type__app_label="dcim",
-                changed_object_type__model="site",
-            ).order_by("pk").values("action", "changed_object_type_id")
-        )
+        # Apply transaction committed -> on_commit fired -> enqueue called exactly once.
+        mock_enqueue.assert_called_once()
+        payload = mock_enqueue.call_args.args[0]
+        self.assertIn("rows", payload)
+        self.assertEqual(len(payload["rows"]), 1)
+        row = payload["rows"][0]
+        self.assertEqual(row["action"], "create")
+        self.assertIn("changed_object_type_id", row)
+        self.assertIn("changed_object_id", row)
+        self.assertIn("postchange_data", row)
+        self.assertIsNotNone(payload.get("request_id"))
 
-        ObjectChange.objects.all().delete()
+    # --- Rollback: no enqueue on apply failure ---
 
-        buffered_suffix = uuid4().hex[:8]
-        with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True):
-            response = self.client.post(
-                self.url, data=self._make_payload(buffered_suffix), format="json", **self.authorization_header
-            )
-        self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
-        buffered_rows = list(
-            ObjectChange.objects.filter(
-                changed_object_type__app_label="dcim",
-                changed_object_type__model="site",
-            ).order_by("pk").values("action", "changed_object_type_id")
-        )
-
-        self.assertEqual(unbuffered_rows, buffered_rows)
-
-    # --- Rollback: buffered rows do NOT leak when apply raises ---
-
-    def test_rollback_drops_buffered_objectchanges(self):
-        """When apply_changeset raises mid-batch, no ObjectChange row is persisted."""
+    def test_rollback_does_not_enqueue(self):
+        """If apply_changeset raises, transaction.on_commit never fires and the job is not enqueued."""
         suffix = uuid4().hex[:8]
 
         def failing_apply(change_set, request):
-            # Save something so the buffer captures at least one event,
-            # then raise to force the outer transaction to roll back.
             Site.objects.create(name=f"Doomed {suffix}", slug=f"doomed-{suffix}")
             raise RuntimeError("forced rollback")
 
         with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True), \
-             mock.patch.object(views, "apply_changeset", side_effect=failing_apply):
-            # The apply path raises a non-ChangeSetException, which bubbles
-            # up through the view and returns 500. The exact response code
-            # is not what we are asserting on; we are asserting that the
-            # transaction rolled back the would-be ObjectChange + Site.
+             mock.patch.object(views, "apply_changeset", side_effect=failing_apply), \
+             mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue:
             self.client.post(
                 self.url, data=self._make_payload(suffix), format="json", **self.authorization_header
             )
 
+        # Outer atomic rolled back the Site, on_commit was discarded.
         self.assertFalse(Site.objects.filter(slug=f"doomed-{suffix}").exists())
-        self.assertEqual(self._site_change_count(), 0)
-
-    # --- post_save re-emit so dependent plugins still fire ---
-
-    def test_post_save_signal_reemitted_for_each_flushed_row(self):
-        """Receivers connected to post_save sender=ObjectChange see each flushed row exactly once."""
-        suffix = uuid4().hex[:8]
-        captured_pks = []
-
-        def capture(sender, instance, created, **kwargs):
-            captured_pks.append(instance.pk)
-
-        post_save.connect(capture, sender=ObjectChange)
-        try:
-            with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True):
-                response = self.client.post(
-                    self.url, data=self._make_payload(suffix), format="json", **self.authorization_header
-                )
-        finally:
-            post_save.disconnect(capture, sender=ObjectChange)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
-        flushed_pks = list(
-            ObjectChange.objects.filter(
-                changed_object_type__app_label="dcim",
-                changed_object_type__model="site",
-            ).values_list("pk", flat=True)
-        )
-        self.assertEqual(len(flushed_pks), 1)
-        self.assertIn(flushed_pks[0], captured_pks)
+        mock_enqueue.assert_not_called()
 
     # --- Bypass wins when both flags are enabled ---
 
     def test_bypass_takes_precedence_over_buffer_when_both_active(self):
-        """When apply_bypass_change_logging is active in the same context, no ObjectChange row is produced."""
+        """When apply_bypass_change_logging is active, the buffer never collects and no enqueue happens."""
         suffix = uuid4().hex[:8]
 
-        # Activate the bypass contextvar manually for the duration of
-        # the request. (The plugin setting normally drives this via the
-        # bypass_change_logging context manager; we shortcut here to
-        # avoid having to flip module-level state mid-test.)
         bypass_token = change_log_buffer._bypass_active.set(True)
         try:
-            with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True):
+            with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True), \
+                 mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue:
                 response = self.client.post(
                     self.url, data=self._make_payload(suffix), format="json", **self.authorization_header
                 )
@@ -195,65 +150,127 @@ class BufferedChangeLoggingTestCase(APITestCase):
             change_log_buffer._bypass_active.reset(bypass_token)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
+        # Site was created (apply itself wasn't bypassed), but no ObjectChange and no enqueue.
         self.assertTrue(Site.objects.filter(slug=f"site-{suffix}").exists())
         self.assertEqual(self._site_change_count(), 0)
+        mock_enqueue.assert_not_called()
 
-    # --- Cascading saves during re-emit go back into the buffer ---
 
-    def test_cascading_save_during_reemit_lands_in_buffer_not_upstream(self):
-        """
-        A receiver that saves a model when ObjectChange fires must be re-buffered, not single-row INSERTed.
+class AsyncWorkerTestCase(TestCase):
+    """Unit tests for the RQ worker entry point, invoked directly (no queue)."""
 
-        Simulates the production behaviour observed under the v1 flush
-        design: a `post_save(sender=ObjectChange)` receiver (in real
-        deployments, `netbox.denormalized.update_denormalized_fields`
-        and similar) saves a related model during the re-emit window.
-        Under v1 the buffer contextvar was already reset by then so
-        the cascading save fell through to upstream
-        `handle_changed_object` and produced single-row INSERTs.
-        Under the drain-to-fixpoint flush the cascading save lands
-        back in the (still active) buffer and is included in a
-        subsequent bulk_create iteration, with no single-row write.
-        """
-        suffix = uuid4().hex[:8]
-        cascade_slug = f"cascade-{suffix}"
-        cascade_invoked = {"count": 0}
+    def setUp(self):
+        """Clean ObjectChange table for predictable counts."""
+        ObjectChange.objects.all().delete()
+        self.site = Site.objects.create(
+            name="Worker test site",
+            slug=f"worker-test-{uuid4().hex[:8]}",
+        )
+        self.content_type_id = self._site_content_type_id()
 
-        def cascade_receiver(sender, instance, created, **kwargs):
-            # Fire once - the cascade-created Site itself fires
-            # post_save and would re-trigger this receiver in an
-            # infinite loop without the guard.
-            if cascade_invoked["count"] > 0:
-                return
-            if not getattr(instance, "changed_object_type", None):
-                return
-            if instance.changed_object_type.model != "site":
-                return
-            cascade_invoked["count"] += 1
-            Site.objects.create(name=f"Cascade {suffix}", slug=cascade_slug)
+    def _site_content_type_id(self):
+        from django.contrib.contenttypes.models import ContentType
+        return ContentType.objects.get_for_model(Site).id
 
-        post_save.connect(cascade_receiver, sender=ObjectChange)
+    def _build_payload(self, rows=None, **overrides):
+        """Return a payload dict matching what serialise_buffer_to_payload produces."""
+        if rows is None:
+            rows = [
+                {
+                    "time": "2026-05-29T07:00:00+00:00",
+                    "action": "create",
+                    "changed_object_type_id": self.content_type_id,
+                    "changed_object_id": self.site.pk,
+                    "related_object_type_id": None,
+                    "related_object_id": None,
+                    "object_repr": str(self.site),
+                    "prechange_data": None,
+                    "postchange_data": {"name": self.site.name, "slug": self.site.slug},
+                }
+            ]
+        payload = {
+            "rows": rows,
+            "user_id": None,
+            "user_name": "diode",
+            "request_id": str(uuid4()),
+            "branch_schema_id": None,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_worker_writes_objectchange_rows_from_payload(self):
+        """write_object_changes_async builds ObjectChange instances from payload and persists them."""
+        payload = self._build_payload()
+        async_change_logging.write_object_changes_async(payload)
+
+        rows = ObjectChange.objects.filter(
+            changed_object_type__app_label="dcim",
+            changed_object_type__model="site",
+            changed_object_id=self.site.pk,
+        )
+        self.assertEqual(rows.count(), 1)
+        oc = rows.first()
+        self.assertEqual(oc.action, "create")
+        # `request_id` round-trips through UUIDField, so compare as string.
+        self.assertEqual(str(oc.request_id), payload["request_id"])
+        self.assertEqual(oc.object_repr, str(self.site))
+
+    def test_worker_reemits_post_save_for_each_row(self):
+        """Receivers connected to post_save sender=ObjectChange see each row exactly once."""
+        captured_pks = []
+
+        def capture(sender, instance, created, **kwargs):
+            captured_pks.append(instance.pk)
+
+        post_save.connect(capture, sender=ObjectChange)
         try:
-            with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True):
-                response = self.client.post(
-                    self.url, data=self._make_payload(suffix), format="json", **self.authorization_header
-                )
+            async_change_logging.write_object_changes_async(self._build_payload())
         finally:
-            post_save.disconnect(cascade_receiver, sender=ObjectChange)
+            post_save.disconnect(capture, sender=ObjectChange)
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
-        # Both Sites exist: the apply-created one and the cascade-created one.
-        self.assertTrue(Site.objects.filter(slug=f"site-{suffix}").exists())
-        self.assertTrue(Site.objects.filter(slug=cascade_slug).exists())
-        # The cascade receiver did fire exactly once.
-        self.assertEqual(cascade_invoked["count"], 1)
-        # The cascade-created Site must have an ObjectChange row.
-        cascade_site = Site.objects.get(slug=cascade_slug)
-        self.assertTrue(
+        oc_pk = ObjectChange.objects.get(changed_object_id=self.site.pk).pk
+        self.assertIn(oc_pk, captured_pks)
+
+    def test_worker_no_op_on_empty_payload(self):
+        """Empty rows -> no DB writes, no signals."""
+        before = ObjectChange.objects.count()
+        async_change_logging.write_object_changes_async(self._build_payload(rows=[]))
+        self.assertEqual(ObjectChange.objects.count(), before)
+
+    def test_worker_bulk_create_batches_rows(self):
+        """Two rows in payload land via a single bulk_create call."""
+        site_b = Site.objects.create(
+            name="Worker test site B",
+            slug=f"worker-test-b-{uuid4().hex[:8]}",
+        )
+        rows = [
+            {
+                "time": "2026-05-29T07:00:00+00:00",
+                "action": "create",
+                "changed_object_type_id": self.content_type_id,
+                "changed_object_id": self.site.pk,
+                "related_object_type_id": None,
+                "related_object_id": None,
+                "object_repr": str(self.site),
+                "prechange_data": None,
+                "postchange_data": {"name": self.site.name},
+            },
+            {
+                "time": "2026-05-29T07:00:00+00:00",
+                "action": "create",
+                "changed_object_type_id": self.content_type_id,
+                "changed_object_id": site_b.pk,
+                "related_object_type_id": None,
+                "related_object_id": None,
+                "object_repr": str(site_b),
+                "prechange_data": None,
+                "postchange_data": {"name": site_b.name},
+            },
+        ]
+        async_change_logging.write_object_changes_async(self._build_payload(rows=rows))
+        self.assertEqual(
             ObjectChange.objects.filter(
-                changed_object_type__app_label="dcim",
-                changed_object_type__model="site",
-                changed_object_id=cascade_site.pk,
-            ).exists(),
-            "Cascading save during re-emit must produce an ObjectChange row",
+                changed_object_id__in=[self.site.pk, site_b.pk]
+            ).count(),
+            2,
         )

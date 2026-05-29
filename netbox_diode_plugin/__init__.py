@@ -79,15 +79,21 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # instance.clean()/save() re-queries extras_customfield. Cache
         # is invalidated on CustomField post_save/post_delete signals.
         #
-        # apply_buffer_change_logging: keep the audit trail intact but
-        # collect ObjectChange writes in memory during apply and flush
-        # them as a single bulk_create at end of transaction, instead
-        # of one INSERT per save. post_save is manually re-emitted for
-        # each created ObjectChange so plugins that consume those
-        # signals (notably netbox-branching's ChangeDiff machinery)
-        # still fire. Mutually exclusive in intent with
-        # apply_bypass_change_logging - if both are enabled the bypass
-        # wins (no rows produced).
+        # apply_buffer_change_logging: keep the audit trail intact
+        # but move ObjectChange writes off the apply request critical
+        # path entirely. During apply, ObjectChange instances are
+        # collected in an in-memory buffer (no DB writes, no
+        # `to_objectchange` serialisation cost during the request).
+        # On successful commit of the apply transaction an RQ job is
+        # enqueued onto NetBox's default queue; the worker drains
+        # the buffer, runs `bulk_create`, and re-emits `post_save`
+        # so receivers connected to `post_save(ObjectChange)` still
+        # fire. Trade-off: audit log becomes eventually-consistent.
+        # Reads of `core_objectchange` immediately after apply may
+        # miss the just-applied rows until the worker drains
+        # (typical lag <1s with a healthy queue). Mutually exclusive
+        # in intent with `apply_bypass_change_logging` - if both are
+        # enabled, bypass wins (no rows produced at all).
         "apply_bypass_counter_updates": False,
         "apply_bypass_change_logging": False,
         "apply_bypass_search_indexing": False,
