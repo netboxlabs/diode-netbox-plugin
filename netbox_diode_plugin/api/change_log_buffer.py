@@ -106,11 +106,23 @@ logger = logging.getLogger(__name__)
 # run by the time we read the reference.
 _previous_handler = _guarded_handler if _bypass_enabled else _original_handler
 
-# Request-scoped buffer. The value type is `dict[tuple[int, int], ObjectChange]`
+# Per-entity buffer. The value type is `dict[tuple[int, int], ObjectChange]`
 # keyed by (content_type_id, changed_object_id). A value of None
-# means the context manager is not active and we should delegate.
+# means the per-entity context manager is not active and the wrapper
+# should delegate to upstream.
 _apply_change_buffer: ContextVar = ContextVar(
     "diode_apply_change_buffer", default=None
+)
+
+# Request-scoped batch list. The value type is `list[dict] | None`.
+# When set (via `request_change_logging_batch`), the per-entity
+# context manager appends each entity's payload here instead of
+# enqueueing an RQ job per entity. The outer context manager then
+# enqueues a single consolidated job at request end - dramatically
+# fewer worker invocations and bigger UNNEST batches at the
+# `bulk_create` boundary.
+_request_batch: ContextVar = ContextVar(
+    "diode_request_change_logging_batch", default=None
 )
 
 
@@ -257,11 +269,109 @@ def buffered_change_logging():
         request_id = request.id if request is not None else None
         payload = serialise_buffer_to_payload(buffer, user, request_id)
 
-        # transaction.on_commit ensures the job is enqueued ONLY if
-        # the apply atomic block commits. A rollback (from a
-        # downstream signal raising, for example) results in the
-        # on_commit callback being discarded by Django, so the
-        # payload never reaches the queue.
-        transaction.on_commit(lambda: enqueue_async_write(payload))
+        # If a request-level batch is active (the view wrapped the
+        # entity loop in `request_change_logging_batch`), append the
+        # payload to the batch and let the outer context manager
+        # enqueue ONE consolidated job at request end. Otherwise
+        # (e.g. a single-changeset endpoint that doesn't loop),
+        # enqueue per entity as the fallback.
+        #
+        # In both cases `transaction.on_commit` ensures the work is
+        # deferred until the apply atomic block commits - a rollback
+        # discards the callback so the payload never reaches the
+        # batch list or the queue.
+        batch = _request_batch.get()
+        if batch is not None:
+            transaction.on_commit(lambda: batch.append(payload))
+        else:
+            transaction.on_commit(lambda: enqueue_async_write(payload))
     finally:
         _apply_change_buffer.reset(token)
+
+
+def _consolidate_payloads(payloads):
+    """
+    Merge per-entity payloads into a single payload with all rows.
+
+    Per-entity payloads share the same ``user_id``/``user_name``/
+    ``request_id``/``branch_schema_id`` (one HTTP request, one user,
+    one request id, one branch context), so we take those fields
+    from the first payload and concatenate the row lists.
+    """
+    if not payloads:
+        return {"rows": []}
+    rows = []
+    for p in payloads:
+        rows.extend(p.get("rows") or [])
+    first = payloads[0]
+    consolidated = {
+        "rows": rows,
+        "user_id": first.get("user_id"),
+        "user_name": first.get("user_name", ""),
+        "request_id": first.get("request_id"),
+    }
+    if first.get("branch_schema_id") is not None:
+        consolidated["branch_schema_id"] = first["branch_schema_id"]
+    return consolidated
+
+
+@contextmanager
+def request_change_logging_batch():
+    """
+    Wrap a request that runs multiple ``buffered_change_logging`` cycles.
+
+    Without this wrapper each per-entity ``buffered_change_logging``
+    enqueues its own RQ job at end-of-entity. For endpoints that
+    process many entities per HTTP request (``/bulk-plan-apply/``,
+    ``/bulk-apply/``), that's one job per entity - small payloads,
+    high enqueue rate, and the worker pays the RQ overhead per
+    entity.
+
+    Entering this context redirects each per-entity payload into a
+    shared list. On exit (after all entities are processed), the
+    list is consolidated into a single payload and enqueued as one
+    RQ job. The worker then runs a single ``bulk_create`` covering
+    every entity's ObjectChange rows in one INSERT.
+
+    Per-entity rollback semantics are preserved: each entity's
+    payload is appended via ``transaction.on_commit`` on its own
+    atomic block. A failed entity rolls back its atomic, its
+    on_commit callback is discarded, and its rows never reach the
+    batch list. Successful entities contribute; failed ones don't.
+
+    No-op when ``apply_buffer_change_logging`` is False (matches the
+    per-entity context manager's gate, so the two stay in lockstep).
+    """
+    if not get_plugin_config("netbox_diode_plugin", "apply_buffer_change_logging"):
+        yield
+        return
+
+    batch: list = []
+    token = _request_batch.set(batch)
+    try:
+        yield
+    finally:
+        # Register the consolidate-and-enqueue via `transaction.on_commit`
+        # rather than calling it inline so the ordering matches the
+        # per-entity appends. Per-entity payloads are appended via
+        # `transaction.on_commit` callbacks queued at the outermost
+        # atomic; Django fires queued callbacks FIFO. Registering ours
+        # last guarantees we see a fully-populated batch.
+        #
+        # When the request has no surrounding atomic block (the typical
+        # production case for these endpoints), `on_commit` with no
+        # active transaction fires the callback immediately - same
+        # effect as calling enqueue_async_write directly.
+        #
+        # Registration is in `finally` so partial batches from
+        # successful entities still get enqueued even if a later
+        # entity's apply raised an unhandled exception that
+        # interrupted the loop. Each entity's per-entity atomic
+        # commits or rolls back independently; failed entities'
+        # appends are discarded by Django, so the batch contains
+        # only rows that genuinely committed.
+        def _flush_batch():
+            if batch:
+                enqueue_async_write(_consolidate_payloads(batch))
+        transaction.on_commit(_flush_batch)
+        _request_batch.reset(token)

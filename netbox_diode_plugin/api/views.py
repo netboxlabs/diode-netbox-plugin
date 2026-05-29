@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from . import customfield_cache  # noqa: F401 - imported for side-effect install at module load
 from .applier import apply_changeset
 from .authentication import DiodeOAuth2Authentication
-from .change_log_buffer import buffered_change_logging
+from .change_log_buffer import buffered_change_logging, request_change_logging_batch
 from .change_log_bypass import bypass_change_logging
 from .common import (
     ChangeSet,
@@ -499,24 +499,28 @@ class BulkApplyView(views.APIView):
         if len(change_sets) == 0:
             raise ValidationError({"change_sets": ["change_sets must not be empty"]})
 
-        results = []
-        for entry in change_sets:
-            if not isinstance(entry, dict):
-                results.append(
-                    ChangeSetResult(
-                        errors={"request": {"change_set": ["change_set must be an object"]}}
+        # Wrap the batch in the request-scope change-log batch so all
+        # per-changeset buffered change-logging payloads land in a
+        # single RQ job, not one per changeset.
+        with request_change_logging_batch():
+            results = []
+            for entry in change_sets:
+                if not isinstance(entry, dict):
+                    results.append(
+                        ChangeSetResult(
+                            errors={"request": {"change_set": ["change_set must be an object"]}}
+                        ).to_dict()
+                    )
+                    continue
+                try:
+                    change_set = ChangeSet.from_dict(entry)
+                    result = _apply_one_changeset(change_set, request).to_dict()
+                except Exception as e:
+                    logger.error(f"Error parsing batch entry: {e}")
+                    result = ChangeSetResult(
+                        errors={"request": {"change_set": [f"invalid change_set: {e}"]}}
                     ).to_dict()
-                )
-                continue
-            try:
-                change_set = ChangeSet.from_dict(entry)
-                result = _apply_one_changeset(change_set, request).to_dict()
-            except Exception as e:
-                logger.error(f"Error parsing batch entry: {e}")
-                result = ChangeSetResult(
-                    errors={"request": {"change_set": [f"invalid change_set: {e}"]}}
-                ).to_dict()
-            results.append(result)
+                results.append(result)
 
         http_status = (
             status.HTTP_207_MULTI_STATUS
@@ -588,12 +592,18 @@ class BulkPlanApplyView(views.APIView):
         obj_token = enter_request_obj_cache()
         prechange_token = enter_prechange_cache()
         try:
-            results = []
-            for entry in entities:
-                entity_id = entry.get("id")
-                result = self._process_entity(entry, branch_schema_id, request)
-                result["id"] = entity_id
-                results.append(result)
+            # Wrap the entity loop so that all per-entity buffered
+            # change-logging payloads land in a single batch and are
+            # enqueued as ONE RQ job at end of request. Without this
+            # wrapper each entity enqueues its own job (still correct,
+            # but pays per-entity worker overhead).
+            with request_change_logging_batch():
+                results = []
+                for entry in entities:
+                    entity_id = entry.get("id")
+                    result = self._process_entity(entry, branch_schema_id, request)
+                    result["id"] = entity_id
+                    results.append(result)
         finally:
             exit_prechange_cache(prechange_token)
             exit_request_obj_cache(obj_token)

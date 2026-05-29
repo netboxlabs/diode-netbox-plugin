@@ -155,6 +155,90 @@ class BufferedChangeLoggingApplyTestCase(APITestCase):
         self.assertEqual(self._site_change_count(), 0)
         mock_enqueue.assert_not_called()
 
+    # --- Request-level batching: many entities -> one consolidated enqueue ---
+
+    def test_multi_entity_request_enqueues_one_consolidated_job(self):
+        """3 entities in one request -> ONE RQ enqueue carrying all 3 entities' rows."""
+        suffix = uuid4().hex[:8]
+        payload = {
+            "entities": [
+                {
+                    "id": f"entity-{i}-{suffix}",
+                    "object_type": "dcim.site",
+                    "entity": {"site": {"name": f"Site {i} {suffix}", "slug": f"site-{i}-{suffix}"}},
+                }
+                for i in range(3)
+            ]
+        }
+
+        with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True), \
+             mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue, \
+             self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self.url, data=payload, format="json", **self.authorization_header
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
+        # Single enqueue for the whole request, not one per entity.
+        mock_enqueue.assert_called_once()
+        consolidated = mock_enqueue.call_args.args[0]
+        # The consolidated payload contains all 3 entities' rows.
+        self.assertEqual(len(consolidated["rows"]), 3)
+        slugs_in_payload = {row["object_repr"] for row in consolidated["rows"]}
+        self.assertEqual(
+            slugs_in_payload,
+            {f"Site 0 {suffix}", f"Site 1 {suffix}", f"Site 2 {suffix}"},
+        )
+
+    def test_failed_entity_excluded_from_consolidated_batch(self):
+        """When one entity fails, its rows are dropped from the consolidated payload."""
+        suffix = uuid4().hex[:8]
+        good_slug = f"good-{suffix}"
+        bad_slug = f"bad-{suffix}"
+        payload = {
+            "entities": [
+                {
+                    "id": f"good-{suffix}",
+                    "object_type": "dcim.site",
+                    "entity": {"site": {"name": f"Good {suffix}", "slug": good_slug}},
+                },
+                {
+                    "id": f"bad-{suffix}",
+                    "object_type": "dcim.site",
+                    "entity": {"site": {"name": f"Bad {suffix}", "slug": bad_slug}},
+                },
+            ]
+        }
+
+        original_apply = views.apply_changeset
+        call_count = {"n": 0}
+
+        def selective_failing_apply(change_set, request):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return original_apply(change_set, request)
+            # Second entity's apply raises mid-flight.
+            from dcim.models import Site
+            Site.objects.create(name=f"Bad inner {suffix}", slug=bad_slug)
+            raise RuntimeError("forced rollback for second entity")
+
+        with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True), \
+             mock.patch.object(views, "apply_changeset", side_effect=selective_failing_apply), \
+             mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue, \
+             self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                self.url, data=payload, format="json", **self.authorization_header
+            )
+
+        # Good entity made it through; bad entity rolled back.
+        self.assertTrue(Site.objects.filter(slug=good_slug).exists())
+        self.assertFalse(Site.objects.filter(slug=bad_slug).exists())
+        # Consolidated enqueue happens (good entity succeeded) but only contains the good row.
+        mock_enqueue.assert_called_once()
+        consolidated = mock_enqueue.call_args.args[0]
+        self.assertEqual(len(consolidated["rows"]), 1)
+        self.assertEqual(consolidated["rows"][0]["object_repr"], f"Good {suffix}")
+
 
 class AsyncWorkerTestCase(TestCase):
     """Unit tests for the RQ worker entry point, invoked directly (no queue)."""
