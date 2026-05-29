@@ -18,6 +18,7 @@ from rest_framework.response import Response
 from . import customfield_cache  # noqa: F401 - imported for side-effect install at module load
 from .applier import apply_changeset
 from .authentication import DiodeOAuth2Authentication
+from .change_log_buffer import buffered_change_logging
 from .change_log_bypass import bypass_change_logging
 from .common import (
     ChangeSet,
@@ -129,12 +130,21 @@ def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
       NetBox has no built-in periodic reindex; deployments enabling
       this bypass must schedule ``manage.py reindex`` (or a system_job)
       to keep the UI search box current.
+
+    ``buffered_change_logging`` is layered on the same signal chain
+    but takes a different trade-off: it keeps the audit trail and the
+    downstream plugins that consume it (branching's ChangeDiff,
+    eventsink), and just batches the writes. Gated by
+    ``apply_buffer_change_logging`` (default off). Has no effect when
+    ``apply_bypass_change_logging`` is also on - the bypass returns
+    early and the buffer never receives any events.
     """
     try:
         with (
             transaction.atomic(),
             bypass_counter_updates(),
             bypass_change_logging(),
+            buffered_change_logging(),
             bypass_search_indexing(),
         ):
             return apply_changeset(change_set, request)

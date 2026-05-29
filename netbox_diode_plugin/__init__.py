@@ -78,10 +78,21 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # fields (empty-QuerySet truthiness bug), so under load every
         # instance.clean()/save() re-queries extras_customfield. Cache
         # is invalidated on CustomField post_save/post_delete signals.
+        #
+        # apply_buffer_change_logging: keep the audit trail intact but
+        # collect ObjectChange writes in memory during apply and flush
+        # them as a single bulk_create at end of transaction, instead
+        # of one INSERT per save. post_save is manually re-emitted for
+        # each created ObjectChange so plugins that consume those
+        # signals (notably netbox-branching's ChangeDiff machinery)
+        # still fire. Mutually exclusive in intent with
+        # apply_bypass_change_logging - if both are enabled the bypass
+        # wins (no rows produced).
         "apply_bypass_counter_updates": False,
         "apply_bypass_change_logging": False,
         "apply_bypass_search_indexing": False,
         "apply_bypass_customfield_query_cache": False,
+        "apply_buffer_change_logging": False,
 
         # Per-entity retry on Postgres deadlock (SQLSTATE 40P01) during
         # the apply phase of /bulk-plan-apply. Cross-batch concurrent
