@@ -133,8 +133,8 @@ def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
 
     ``buffered_change_logging`` is layered on the same signal chain
     but takes a different trade-off: it keeps the audit trail and the
-    downstream plugins that consume it (branching's ChangeDiff,
-    eventsink), and just batches the writes. Gated by
+    receivers connected to ``post_save(sender=ObjectChange)`` that
+    consume it, and just batches the writes. Gated by
     ``apply_buffer_change_logging`` (default off). Has no effect when
     ``apply_bypass_change_logging`` is also on - the bypass returns
     early and the buffer never receives any events.
@@ -500,8 +500,8 @@ class BulkApplyView(views.APIView):
             raise ValidationError({"change_sets": ["change_sets must not be empty"]})
 
         # Wrap the batch in the request-scope change-log batch so all
-        # per-changeset buffered change-logging payloads land in a
-        # single RQ job, not one per changeset.
+        # per-changeset buffered ObjectChange rows are flushed as a
+        # single bulk_create, not one per changeset.
         with request_change_logging_batch():
             results = []
             for entry in change_sets:
@@ -593,10 +593,10 @@ class BulkPlanApplyView(views.APIView):
         prechange_token = enter_prechange_cache()
         try:
             # Wrap the entity loop so that all per-entity buffered
-            # change-logging payloads land in a single batch and are
-            # enqueued as ONE RQ job at end of request. Without this
-            # wrapper each entity enqueues its own job (still correct,
-            # but pays per-entity worker overhead).
+            # ObjectChange rows land in a single batch and are flushed
+            # as ONE bulk_create at end of request. Without this wrapper
+            # each entity flushes its own buffer (still correct, but
+            # resolves m2m relations per entity instead of in bulk).
             with request_change_logging_batch():
                 results = []
                 for entry in entities:

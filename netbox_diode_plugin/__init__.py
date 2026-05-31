@@ -79,21 +79,19 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # instance.clean()/save() re-queries extras_customfield. Cache
         # is invalidated on CustomField post_save/post_delete signals.
         #
-        # apply_buffer_change_logging: keep the audit trail intact
-        # but move ObjectChange writes off the apply request critical
-        # path entirely. During apply, ObjectChange instances are
-        # collected in an in-memory buffer (no DB writes, no
-        # `to_objectchange` serialisation cost during the request).
-        # On successful commit of the apply transaction an RQ job is
-        # enqueued onto NetBox's default queue; the worker drains
-        # the buffer, runs `bulk_create`, and re-emits `post_save`
-        # so receivers connected to `post_save(ObjectChange)` still
-        # fire. Trade-off: audit log becomes eventually-consistent.
-        # Reads of `core_objectchange` immediately after apply may
-        # miss the just-applied rows until the worker drains
-        # (typical lag <1s with a healthy queue). Mutually exclusive
-        # in intent with `apply_bypass_change_logging` - if both are
-        # enabled, bypass wins (no rows produced at all).
+        # apply_buffer_change_logging: keep the audit trail intact but
+        # cut the per-save change-logging cost. During apply,
+        # ObjectChange serialisation skips the per-m2m-relation SELECTs
+        # that dominate `to_objectchange` (one query per m2m field on
+        # every save), and the rows are collected in an in-memory
+        # buffer instead of being written one at a time. On successful
+        # commit the buffer is flushed as a single `bulk_create`, with
+        # all objects' m2m relations resolved in one query per relation,
+        # and `post_save` is re-emitted so receivers connected to
+        # `post_save(ObjectChange)` still fire. The flush runs inline at
+        # commit, so the audit log stays immediately consistent.
+        # Mutually exclusive in intent with `apply_bypass_change_logging`
+        # - if both are enabled, bypass wins (no rows produced at all).
         "apply_bypass_counter_updates": False,
         "apply_bypass_change_logging": False,
         "apply_bypass_search_indexing": False,

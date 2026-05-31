@@ -9,12 +9,14 @@ from uuid import uuid4
 
 from core.models import ObjectChange
 from dcim.models import Site
-from django.db.models.signals import post_save
+from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
+from extras.models import Tag
+from ipam.models import ASN, RIR
 from rest_framework import status
 from utilities.testing import APITestCase
 
-from netbox_diode_plugin.api import async_change_logging, change_log_buffer, views
+from netbox_diode_plugin.api import change_log_buffer, views
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.plugin_config import get_diode_user
 
@@ -66,56 +68,48 @@ class BufferedChangeLoggingApplyTestCase(APITestCase):
             changed_object_type__model="site",
         ).count()
 
-    # --- Setting OFF: buffer is a pass-through ---
+    # --- Setting OFF: buffer is a pass-through, upstream writes synchronously ---
 
     def test_setting_false_writes_objectchange_synchronously(self):
-        """With the setting off (default), the apply writes ObjectChange synchronously, no RQ enqueue."""
-        with mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue:
-            response = self.client.post(
-                self.url,
-                data=self._make_payload(uuid4().hex[:8]),
-                format="json",
-                **self.authorization_header,
-            )
+        """With the setting off (default), the apply writes ObjectChange synchronously via upstream."""
+        response = self.client.post(
+            self.url,
+            data=self._make_payload(uuid4().hex[:8]),
+            format="json",
+            **self.authorization_header,
+        )
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
-        # Synchronous path -> row already in DB at request return.
+        # Upstream synchronous path -> row already in DB at request return.
         self.assertEqual(self._site_change_count(), 1)
-        # Async path -> NOT invoked.
-        mock_enqueue.assert_not_called()
 
-    # --- Setting ON: buffer collects + enqueues async job ---
+    # --- Setting ON: buffer collects + flushes one bulk_create at commit ---
 
-    def test_setting_true_enqueues_async_job_with_payload(self):
-        """With the setting on, the apply enqueues an RQ job carrying the buffered ObjectChange data."""
+    def test_setting_true_flushes_objectchange_on_commit(self):
+        """With the setting on, the buffered ObjectChange is written by the on_commit flush."""
         suffix = uuid4().hex[:8]
         # Django's TestCase wraps each test in a transaction that is
         # rolled back at end-of-test, which means `transaction.on_commit`
         # callbacks normally never fire. `captureOnCommitCallbacks` runs
-        # them explicitly on context exit so we can assert the enqueue.
+        # them explicitly on context exit so we can assert the flush.
         with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True), \
-             mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue, \
              self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(
                 self.url, data=self._make_payload(suffix), format="json", **self.authorization_header
             )
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
 
-        # Apply transaction committed -> on_commit fired -> enqueue called exactly once.
-        mock_enqueue.assert_called_once()
-        payload = mock_enqueue.call_args.args[0]
-        self.assertIn("rows", payload)
-        self.assertEqual(len(payload["rows"]), 1)
-        row = payload["rows"][0]
-        self.assertEqual(row["action"], "create")
-        self.assertIn("changed_object_type_id", row)
-        self.assertIn("changed_object_id", row)
-        self.assertIn("postchange_data", row)
-        self.assertIsNotNone(payload.get("request_id"))
+        # Apply transaction committed -> on_commit fired -> exactly one row.
+        self.assertEqual(self._site_change_count(), 1)
+        oc = ObjectChange.objects.get(
+            changed_object_type__app_label="dcim", changed_object_type__model="site"
+        )
+        self.assertEqual(oc.action, "create")
+        self.assertEqual(oc.object_repr, f"Site {suffix}")
 
-    # --- Rollback: no enqueue on apply failure ---
+    # --- Rollback: no flush on apply failure ---
 
-    def test_rollback_does_not_enqueue(self):
-        """If apply_changeset raises, transaction.on_commit never fires and the job is not enqueued."""
+    def test_rollback_does_not_flush(self):
+        """If apply_changeset raises, transaction.on_commit never fires and nothing is written."""
         suffix = uuid4().hex[:8]
 
         def failing_apply(change_set, request):
@@ -124,25 +118,28 @@ class BufferedChangeLoggingApplyTestCase(APITestCase):
 
         with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True), \
              mock.patch.object(views, "apply_changeset", side_effect=failing_apply), \
-             mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue:
+             mock.patch.object(change_log_buffer, "_flush_objectchanges") as mock_flush, \
+             self.captureOnCommitCallbacks(execute=True):
             self.client.post(
                 self.url, data=self._make_payload(suffix), format="json", **self.authorization_header
             )
 
-        # Outer atomic rolled back the Site, on_commit was discarded.
+        # Outer atomic rolled back the Site; the append on_commit was discarded.
         self.assertFalse(Site.objects.filter(slug=f"doomed-{suffix}").exists())
-        mock_enqueue.assert_not_called()
+        # Flush still runs at request end but the batch is empty.
+        if mock_flush.called:
+            self.assertEqual(list(mock_flush.call_args.args[0]), [])
 
     # --- Bypass wins when both flags are enabled ---
 
     def test_bypass_takes_precedence_over_buffer_when_both_active(self):
-        """When apply_bypass_change_logging is active, the buffer never collects and no enqueue happens."""
+        """When apply_bypass_change_logging is active, the buffer never collects and nothing is written."""
         suffix = uuid4().hex[:8]
 
         bypass_token = change_log_buffer._bypass_active.set(True)
         try:
             with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True), \
-                 mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue:
+                 self.captureOnCommitCallbacks(execute=True):
                 response = self.client.post(
                     self.url, data=self._make_payload(suffix), format="json", **self.authorization_header
                 )
@@ -150,15 +147,14 @@ class BufferedChangeLoggingApplyTestCase(APITestCase):
             change_log_buffer._bypass_active.reset(bypass_token)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
-        # Site was created (apply itself wasn't bypassed), but no ObjectChange and no enqueue.
+        # Site was created (apply itself wasn't bypassed), but no ObjectChange.
         self.assertTrue(Site.objects.filter(slug=f"site-{suffix}").exists())
         self.assertEqual(self._site_change_count(), 0)
-        mock_enqueue.assert_not_called()
 
-    # --- Request-level batching: many entities -> one consolidated enqueue ---
+    # --- Request-level batching: many entities -> one consolidated flush ---
 
-    def test_multi_entity_request_enqueues_one_consolidated_job(self):
-        """3 entities in one request -> ONE RQ enqueue carrying all 3 entities' rows."""
+    def test_multi_entity_request_flushes_one_batch(self):
+        """3 entities in one request -> ONE flush carrying all 3 entities' rows."""
         suffix = uuid4().hex[:8]
         payload = {
             "entities": [
@@ -172,26 +168,26 @@ class BufferedChangeLoggingApplyTestCase(APITestCase):
         }
 
         with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True), \
-             mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue, \
+             mock.patch.object(
+                 change_log_buffer, "_flush_objectchanges",
+                 side_effect=change_log_buffer._flush_objectchanges,
+             ) as spy_flush, \
              self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(
                 self.url, data=payload, format="json", **self.authorization_header
             )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
-        # Single enqueue for the whole request, not one per entity.
-        mock_enqueue.assert_called_once()
-        consolidated = mock_enqueue.call_args.args[0]
-        # The consolidated payload contains all 3 entities' rows.
-        self.assertEqual(len(consolidated["rows"]), 3)
-        slugs_in_payload = {row["object_repr"] for row in consolidated["rows"]}
-        self.assertEqual(
-            slugs_in_payload,
-            {f"Site 0 {suffix}", f"Site 1 {suffix}", f"Site 2 {suffix}"},
-        )
+        # Single flush for the whole request, not one per entity.
+        spy_flush.assert_called_once()
+        flushed = list(spy_flush.call_args.args[0])
+        self.assertEqual(len(flushed), 3)
+        reprs = {oc.object_repr for oc in flushed}
+        self.assertEqual(reprs, {f"Site 0 {suffix}", f"Site 1 {suffix}", f"Site 2 {suffix}"})
+        self.assertEqual(self._site_change_count(), 3)
 
-    def test_failed_entity_excluded_from_consolidated_batch(self):
-        """When one entity fails, its rows are dropped from the consolidated payload."""
+    def test_failed_entity_excluded_from_batch(self):
+        """When one entity fails, its rows are dropped from the consolidated flush."""
         suffix = uuid4().hex[:8]
         good_slug = f"good-{suffix}"
         bad_slug = f"bad-{suffix}"
@@ -217,14 +213,15 @@ class BufferedChangeLoggingApplyTestCase(APITestCase):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return original_apply(change_set, request)
-            # Second entity's apply raises mid-flight.
-            from dcim.models import Site
             Site.objects.create(name=f"Bad inner {suffix}", slug=bad_slug)
             raise RuntimeError("forced rollback for second entity")
 
         with mock.patch.object(change_log_buffer, "get_plugin_config", return_value=True), \
              mock.patch.object(views, "apply_changeset", side_effect=selective_failing_apply), \
-             mock.patch.object(change_log_buffer, "enqueue_async_write") as mock_enqueue, \
+             mock.patch.object(
+                 change_log_buffer, "_flush_objectchanges",
+                 side_effect=change_log_buffer._flush_objectchanges,
+             ) as spy_flush, \
              self.captureOnCommitCallbacks(execute=True):
             self.client.post(
                 self.url, data=payload, format="json", **self.authorization_header
@@ -233,128 +230,107 @@ class BufferedChangeLoggingApplyTestCase(APITestCase):
         # Good entity made it through; bad entity rolled back.
         self.assertTrue(Site.objects.filter(slug=good_slug).exists())
         self.assertFalse(Site.objects.filter(slug=bad_slug).exists())
-        # Consolidated enqueue happens (good entity succeeded) but only contains the good row.
-        mock_enqueue.assert_called_once()
-        consolidated = mock_enqueue.call_args.args[0]
-        self.assertEqual(len(consolidated["rows"]), 1)
-        self.assertEqual(consolidated["rows"][0]["object_repr"], f"Good {suffix}")
+        # Flush happens but only contains the good row.
+        spy_flush.assert_called_once()
+        flushed = list(spy_flush.call_args.args[0])
+        self.assertEqual(len(flushed), 1)
+        self.assertEqual(flushed[0].object_repr, f"Good {suffix}")
 
 
-class AsyncWorkerTestCase(TestCase):
-    """Unit tests for the RQ worker entry point, invoked directly (no queue)."""
+class FastSerializeTestCase(TestCase):
+    """`_fast_serialize_object` parity and the buffer-active gate."""
 
     def setUp(self):
-        """Clean ObjectChange table for predictable counts."""
+        """Create a Site with an m2m relation (asns) and a tag."""
         ObjectChange.objects.all().delete()
-        self.site = Site.objects.create(
-            name="Worker test site",
-            slug=f"worker-test-{uuid4().hex[:8]}",
+        self.site = Site.objects.create(name="Parity site", slug=f"parity-{uuid4().hex[:8]}")
+        self.site.tags.add(
+            Tag.objects.create(name="alpha", slug="alpha"),
+            Tag.objects.create(name="beta", slug="beta"),
         )
-        self.content_type_id = self._site_content_type_id()
+        rir = RIR.objects.create(name="Test RIR", slug=f"rir-{uuid4().hex[:8]}")
+        self.asn = ASN.objects.create(asn=65001, rir=rir)
+        self.site.asns.add(self.asn)
 
-    def _site_content_type_id(self):
-        from django.contrib.contenttypes.models import ContentType
-        return ContentType.objects.get_for_model(Site).id
+    def test_fast_serialize_omits_only_m2m(self):
+        """Fast output equals the upstream serializer output minus m2m relation fields."""
+        vanilla = change_log_buffer._original_serialize_object(self.site, exclude=[])
+        fast = change_log_buffer._fast_serialize_object(self.site, exclude=[])
 
-    def _build_payload(self, rows=None, **overrides):
-        """Return a payload dict matching what serialise_buffer_to_payload produces."""
-        if rows is None:
-            rows = [
-                {
-                    "time": "2026-05-29T07:00:00+00:00",
-                    "action": "create",
-                    "changed_object_type_id": self.content_type_id,
-                    "changed_object_id": self.site.pk,
-                    "related_object_type_id": None,
-                    "related_object_id": None,
-                    "object_repr": str(self.site),
-                    "prechange_data": None,
-                    "postchange_data": {"name": self.site.name, "slug": self.site.slug},
-                }
-            ]
-        payload = {
-            "rows": rows,
-            "user_id": None,
-            "user_name": "diode",
-            "request_id": str(uuid4()),
-            "branch_schema_id": None,
-        }
-        payload.update(overrides)
-        return payload
+        # `asns` is the only serialisable m2m on Site; the fast path drops it.
+        m2m_names = {f.name for f in Site._meta.local_many_to_many if f.serialize}
+        self.assertIn("asns", m2m_names)
+        self.assertNotIn("asns", fast)
 
-    def test_worker_writes_objectchange_rows_from_payload(self):
-        """write_object_changes_async builds ObjectChange instances from payload and persists them."""
-        payload = self._build_payload()
-        async_change_logging.write_object_changes_async(payload)
+        # Everything else (scalars, FKs, custom_fields, tags) is identical.
+        expected = {k: v for k, v in vanilla.items() if k not in m2m_names}
+        self.assertEqual(fast, expected)
 
-        rows = ObjectChange.objects.filter(
-            changed_object_type__app_label="dcim",
-            changed_object_type__model="site",
-            changed_object_id=self.site.pk,
-        )
-        self.assertEqual(rows.count(), 1)
-        oc = rows.first()
-        self.assertEqual(oc.action, "create")
-        # `request_id` round-trips through UUIDField, so compare as string.
-        self.assertEqual(str(oc.request_id), payload["request_id"])
-        self.assertEqual(oc.object_repr, str(self.site))
+    def test_fast_serialize_preserves_tags(self):
+        """Tags are recorded by name on the fast path, same as upstream."""
+        fast = change_log_buffer._fast_serialize_object(self.site, exclude=[])
+        self.assertEqual(fast["tags"], ["alpha", "beta"])
 
-    def test_worker_reemits_post_save_for_each_row(self):
-        """Receivers connected to post_save sender=ObjectChange see each row exactly once."""
-        captured_pks = []
-
-        def capture(sender, instance, created, **kwargs):
-            captured_pks.append(instance.pk)
-
-        post_save.connect(capture, sender=ObjectChange)
-        try:
-            async_change_logging.write_object_changes_async(self._build_payload())
-        finally:
-            post_save.disconnect(capture, sender=ObjectChange)
-
-        oc_pk = ObjectChange.objects.get(changed_object_id=self.site.pk).pk
-        self.assertIn(oc_pk, captured_pks)
-
-    def test_worker_no_op_on_empty_payload(self):
-        """Empty rows -> no DB writes, no signals."""
-        before = ObjectChange.objects.count()
-        async_change_logging.write_object_changes_async(self._build_payload(rows=[]))
-        self.assertEqual(ObjectChange.objects.count(), before)
-
-    def test_worker_bulk_create_batches_rows(self):
-        """Two rows in payload land via a single bulk_create call."""
-        site_b = Site.objects.create(
-            name="Worker test site B",
-            slug=f"worker-test-b-{uuid4().hex[:8]}",
-        )
-        rows = [
-            {
-                "time": "2026-05-29T07:00:00+00:00",
-                "action": "create",
-                "changed_object_type_id": self.content_type_id,
-                "changed_object_id": self.site.pk,
-                "related_object_type_id": None,
-                "related_object_id": None,
-                "object_repr": str(self.site),
-                "prechange_data": None,
-                "postchange_data": {"name": self.site.name},
-            },
-            {
-                "time": "2026-05-29T07:00:00+00:00",
-                "action": "create",
-                "changed_object_type_id": self.content_type_id,
-                "changed_object_id": site_b.pk,
-                "related_object_type_id": None,
-                "related_object_id": None,
-                "object_repr": str(site_b),
-                "prechange_data": None,
-                "postchange_data": {"name": site_b.name},
-            },
-        ]
-        async_change_logging.write_object_changes_async(self._build_payload(rows=rows))
+    def test_serialize_object_gate_is_inactive_without_buffer(self):
+        """With no buffer active, serialize_object delegates to the upstream implementation."""
+        # Identical output to the captured original means the gate did not
+        # engage the fast path.
         self.assertEqual(
-            ObjectChange.objects.filter(
-                changed_object_id__in=[self.site.pk, site_b.pk]
-            ).count(),
-            2,
+            self.site.serialize_object(),
+            change_log_buffer._original_serialize_object(self.site),
         )
+
+    def test_serialize_object_gate_engages_fast_path_with_buffer(self):
+        """With a buffer active, serialize_object routes through the fast path (no m2m)."""
+        token = change_log_buffer._apply_change_buffer.set({})
+        try:
+            gated = self.site.serialize_object()
+        finally:
+            change_log_buffer._apply_change_buffer.reset(token)
+        self.assertNotIn("asns", gated)
+
+
+class EnrichM2MTestCase(TestCase):
+    """`_enrich_m2m` re-adds m2m relations to buffered rows in bulk."""
+
+    def setUp(self):
+        """Two Sites, each with distinct ASNs, to exercise per-object grouping."""
+        ObjectChange.objects.all().delete()
+        rir = RIR.objects.create(name="Enrich RIR", slug=f"erir-{uuid4().hex[:8]}")
+        self.asn1 = ASN.objects.create(asn=65010, rir=rir)
+        self.asn2 = ASN.objects.create(asn=65011, rir=rir)
+        self.site_a = Site.objects.create(name="Enrich A", slug=f"enrich-a-{uuid4().hex[:8]}")
+        self.site_b = Site.objects.create(name="Enrich B", slug=f"enrich-b-{uuid4().hex[:8]}")
+        self.site_a.asns.add(self.asn1, self.asn2)
+        self.site_b.asns.add(self.asn1)
+        self.ct_id = ContentType.objects.get_for_model(Site).id
+
+    def _row(self, site):
+        return ObjectChange(
+            changed_object_type_id=self.ct_id,
+            changed_object_id=site.pk,
+            action="create",
+            postchange_data=change_log_buffer._fast_serialize_object(site, exclude=[]),
+        )
+
+    def test_enrich_populates_m2m_per_object(self):
+        """Each row's postchange_data gets its own object's relation, sorted."""
+        rows = [self._row(self.site_a), self._row(self.site_b)]
+        change_log_buffer._enrich_m2m(rows)
+
+        self.assertEqual(rows[0].postchange_data["asns"], sorted([self.asn1.pk, self.asn2.pk]))
+        self.assertEqual(rows[1].postchange_data["asns"], [self.asn1.pk])
+
+    def test_enriched_membership_matches_upstream(self):
+        """After enrichment, m2m membership matches what the upstream serializer records."""
+        vanilla = change_log_buffer._original_serialize_object(self.site_a, exclude=[])
+        row = self._row(self.site_a)
+        change_log_buffer._enrich_m2m([row])
+        self.assertEqual(set(row.postchange_data["asns"]), set(vanilla["asns"]))
+
+    def test_enrich_is_bulk_one_query_per_relation(self):
+        """Resolving N objects' relations costs one query per relation, not one per object."""
+        rows = [self._row(self.site_a), self._row(self.site_b)]
+        # Site has a single serialisable m2m (asns) -> exactly one query.
+        with self.assertNumQueries(1):
+            change_log_buffer._enrich_m2m(rows)

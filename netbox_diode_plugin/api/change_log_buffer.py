@@ -1,97 +1,90 @@
 #!/usr/bin/env python
 # Copyright 2026 NetBox Labs, Inc.
 """
-Buffer NetBox's ObjectChange writes during apply and flush them asynchronously via RQ.
+Buffer NetBox's ObjectChange writes during diode applies and flush them as one bulk_create.
 
-NetBox's ``handle_changed_object`` receiver (``core/signals.py``) is
-not just an INSERT - it also runs ``instance.to_objectchange(action)``
-which serialises the model's full pre/post state, and that
-serialisation triggers a cascade of FK / related-table SELECTs
-(typically ~5-10 SELECTs per save, against ``django_content_type``,
-``extras_tag``, and any reverse-relationship tables on the model
-being saved). Under bulk auto-apply (50 entities per request, several
-saves per entity) the synchronous change-logging chain dominates the
-apply request critical path - measured at ~40% of total apply
-throughput on production load tests.
+NetBox's ``handle_changed_object`` receiver (``core/signals.py``) runs
+``instance.to_objectchange(action)`` on every saved model, and that
+serialisation is expensive: Django's ``serializers.serialize('json',
+[obj])`` issues one SELECT per many-to-many relation on the model (its
+``handle_m2m_field`` walks each m2m manager). For a model like
+``dcim.Interface`` with three m2m relations that is three DB
+round-trips on *every* save, which dominates the apply request critical
+path - measured at roughly 40% of total apply throughput on production
+load.
 
-This module preserves the audit trail (and any receivers connected
-to ``post_save(sender=ObjectChange)``) by **moving the ObjectChange
-write off the apply request critical path entirely**, onto NetBox's
-existing RQ workers:
+This module removes that cost while preserving the audit trail (and the
+receivers connected to ``post_save(sender=ObjectChange)``) in three
+pieces:
 
-  1. A request-scoped buffer (a ``contextvars.ContextVar`` holding a
-     dict keyed by ``(content_type_id, changed_object_id)``) gathers
-     ObjectChange instances in memory during the apply. m2m_changed
-     events for an object already in the buffer merge their
-     ``postchange_data`` in memory, which replaces the upstream
-     SELECT-then-UPDATE pair with a dict lookup. This part runs in
-     the request thread but is purely Python in-memory work - no DB.
-  2. On successful exit of ``buffered_change_logging()`` the buffer
-     is serialised to a plain-dict payload (see
-     ``async_change_logging.serialise_buffer_to_payload``) and an RQ
-     job is enqueued via ``transaction.on_commit`` so that it only
-     fires after the apply transaction successfully commits. The
-     ObjectChange rows themselves are written by an RQ worker
-     (``async_change_logging.write_object_changes_async``) on its
-     own time, off the request thread. ``post_save`` is re-emitted
-     for each row inside the worker so any receiver connected to
-     ``post_save(sender=ObjectChange)`` still fires.
+  1. **Fast serialisation.** While a diode apply buffer is active,
+     ``ChangeLoggingMixin.serialize_object`` is routed through
+     ``_fast_serialize_object``, which restricts Django's serializer to
+     the model's local (non-m2m) fields via the ``fields=`` allowlist.
+     Django then skips ``handle_m2m_field`` entirely, so no per-relation
+     SELECT is issued. The omitted m2m fields are re-added in bulk at
+     flush (see piece 3). Outside the apply path the original
+     serialiser runs unchanged.
 
-The module installs its wrapper into ``post_save`` and ``m2m_changed``
-at import time, unconditionally. The wrapper is a no-op when the
-context manager is not active (it just delegates to whichever handler
-was previously connected, which is NetBox's ``handle_changed_object``
-or - if ``apply_bypass_change_logging`` is enabled in the bypass
-module - the bypass-aware wrapper from ``change_log_bypass``). The
-plugin setting ``apply_buffer_change_logging`` gates whether
-``buffered_change_logging()`` actually activates the buffer; with the
-setting at its default ``False`` the context manager yields without
-touching the buffer and behaviour is exactly upstream.
+  2. **In-memory buffer.** A request-scoped ``contextvars.ContextVar``
+     holds a dict of ObjectChange instances keyed by
+     ``(content_type_id, changed_object_id)``. m2m_changed events for an
+     object already in the buffer merge their ``postchange_data`` in
+     memory, replacing the upstream SELECT-then-UPDATE pair with a dict
+     lookup.
 
-Rollback semantics: ``transaction.on_commit`` callbacks only fire if
-the outer atomic block commits. If the apply raises after we
-collected the buffer but before commit, the on_commit callback never
-runs and the payload is discarded - no orphan audit rows.
+  3. **Batched flush with bulk m2m enrichment.** The per-entity buffers
+     are collected into a request-level batch (via
+     ``request_change_logging_batch``). After the apply commits, the
+     batch is flushed: for each model, one query per m2m relation
+     resolves the relation for *all* buffered objects at once and patches
+     the lists back into ``postchange_data``; then a single
+     ``bulk_create`` writes every row and ``post_save`` is re-emitted so
+     downstream receivers still fire. This turns O(saves x relations)
+     round-trips into O(models x relations) per request.
 
-Trade-offs vs the synchronous flush this replaces:
+Gating: the plugin setting ``apply_buffer_change_logging`` (default
+``False``) controls whether the buffer activates. With it off the
+buffered handler delegates straight through to upstream NetBox and the
+fast serialiser is never engaged.
 
-  - Audit log becomes eventually-consistent (typical lag <1s under
-    healthy queue load). Readers of ``core_objectchange``
-    immediately after an apply may not see the just-applied
-    changes.
-  - Receivers connected to ``post_save(sender=ObjectChange)`` fire
-    inside the worker, not in the apply request thread. The worker
-    re-establishes any per-request context (current user,
-    request_id, and an optional ``active_branch`` from
-    ``netbox-branching`` if installed) from the serialised payload
-    so receivers see the same inputs they would have seen on the
-    synchronous path.
-  - Worker failures are caught by RQ ``Retry`` with exponential
-    backoff; persistent failures land on the failed queue, visible
-    via django_rq admin. The audit gap is observable and
-    replayable.
+Flush timing: the per-entity append and the request-level flush are both
+registered via ``transaction.on_commit``. A rolled-back entity's append
+callback never fires, so its rows never reach the batch; only changes
+that genuinely committed are written. The flush runs after commit, so
+the bulk m2m queries observe the final committed relation state.
 
-Pre_delete is intentionally left untouched: NetBox's delete handler
-runs protection-rule validation, which must keep firing, and deletes
-are uncommon on the auto-apply path.
+m2m ordering: enrichment records each relation as a sorted list of
+related primary keys. This is deterministic but may differ in order
+(not membership) from the queryset order Django's serializer would
+produce on the synchronous path.
+
+Pre_delete is intentionally left untouched: NetBox's delete handler runs
+protection-rule validation, which must keep firing, and deletes are
+uncommon on the auto-apply path.
 """
 
+import json
 import logging
+from collections import defaultdict
 from contextlib import contextmanager
 from contextvars import ContextVar
 
 from core.choices import ObjectChangeActionChoices
 from core.events import OBJECT_CREATED, OBJECT_UPDATED
+from core.models import ObjectChange
 from core.signals import handle_changed_object as _original_handler
 from django.contrib.contenttypes.models import ContentType
+from django.core import serializers as dj_serializers
 from django.db import transaction
 from django.db.models.signals import m2m_changed, post_save
 from extras.events import enqueue_event
 from extras.models import Tag
+from extras.utils import is_taggable
 from netbox.context import current_request, events_queue
+from netbox.models.features import ChangeLoggingMixin
 from netbox.plugins import get_plugin_config
 
-from .async_change_logging import enqueue_async_write, serialise_buffer_to_payload
 from .change_log_bypass import _bypass_active, _guarded_handler
 from .change_log_bypass import _enabled as _bypass_enabled
 
@@ -114,16 +107,72 @@ _apply_change_buffer: ContextVar = ContextVar(
     "diode_apply_change_buffer", default=None
 )
 
-# Request-scoped batch list. The value type is `list[dict] | None`.
-# When set (via `request_change_logging_batch`), the per-entity
-# context manager appends each entity's payload here instead of
-# enqueueing an RQ job per entity. The outer context manager then
-# enqueues a single consolidated job at request end - dramatically
-# fewer worker invocations and bigger UNNEST batches at the
-# `bulk_create` boundary.
+# Request-scoped batch. The value type is `list[ObjectChange] | None`.
+# When set (via `request_change_logging_batch`), each per-entity buffer
+# appends its ObjectChange instances here instead of flushing on its
+# own. The outer context manager flushes the whole batch as one
+# bulk_create at request end, which is also where m2m enrichment can
+# resolve every buffered object's relations in one query per relation.
 _request_batch: ContextVar = ContextVar(
     "diode_request_change_logging_batch", default=None
 )
+
+
+def _fast_serialize_object(obj, exclude=None):
+    """
+    Serialise ``obj`` for change logging without issuing per-m2m SELECTs.
+
+    Mirrors ``utilities.serialization.serialize_object`` but passes
+    ``fields=`` to Django's serializer restricted to the model's local
+    (non-m2m) fields. Django skips ``handle_m2m_field`` for any field
+    not in the allowlist, so the m2m round-trips are eliminated. The
+    omitted m2m fields are re-added in bulk by ``_enrich_m2m`` at flush.
+
+    FK fields are matched by Django on ``attname[:-3]`` (the field name
+    without the ``_id`` suffix), so passing field *names* keeps every
+    scalar and FK field while dropping only the m2m relations.
+
+    Tag resolution is unchanged from upstream: tags are recorded by name
+    via the explicit manager read (or the ``_tags`` cache), not via the
+    serializer's m2m handling.
+    """
+    field_names = [f.name for f in obj._meta.local_fields]
+    json_str = dj_serializers.serialize("json", [obj], fields=field_names)
+    data = json.loads(json_str)[0]["fields"]
+    exclude = exclude or []
+
+    if "custom_field_data" in data:
+        data["custom_fields"] = data.pop("custom_field_data")
+
+    if is_taggable(obj):
+        tags = getattr(obj, "_tags", None) or obj.tags.all()
+        data["tags"] = sorted([tag.name for tag in tags])
+
+    for key in list(data.keys()):
+        if key in exclude:
+            data.pop(key)
+
+    return data
+
+
+_original_serialize_object = ChangeLoggingMixin.serialize_object
+
+
+def _serialize_object_gated(self, exclude=None):
+    """
+    Route serialisation through the fast path only while a buffer is active.
+
+    Installed over ``ChangeLoggingMixin.serialize_object`` at import.
+    When no diode apply buffer is active in the current context this
+    delegates to the original method, so all non-apply change logging
+    (the UI, the REST API, etc.) is byte-for-byte unchanged.
+    """
+    if _apply_change_buffer.get() is not None:
+        return _fast_serialize_object(self, exclude=exclude or [])
+    return _original_serialize_object(self, exclude=exclude)
+
+
+ChangeLoggingMixin.serialize_object = _serialize_object_gated
 
 
 def _classify_signal(instance, kwargs):
@@ -207,7 +256,7 @@ def _buffered_handler(sender, instance, **kwargs):
 
     # Append to the request-scoped events queue exactly as upstream
     # does. NetBox flushes this queue at `request_finished`, which is
-    # how the eventsink plugin receives webhook payloads. Buffering
+    # how downstream signal consumers receive their payloads. Buffering
     # the ObjectChange writes does not change this path.
     queue = events_queue.get()
     enqueue_event(queue, instance, request, event_type)
@@ -229,27 +278,97 @@ post_save.connect(_buffered_handler)
 m2m_changed.connect(_buffered_handler)
 
 
+def _enrich_m2m(objectchanges):
+    """
+    Re-add m2m relations to buffered ObjectChange rows in bulk.
+
+    ``_fast_serialize_object`` omits m2m fields to avoid a per-save
+    SELECT per relation. This restores them: rows are grouped by content
+    type, and for each m2m relation on the model a single through-table
+    query resolves the relation for every object at once. The resolved
+    primary keys are written back into each row's ``postchange_data`` as
+    a sorted list, matching the membership Django's serializer would
+    have recorded.
+
+    Must run after the apply transaction commits so the through-table
+    reads observe the final relation state.
+    """
+    by_ct: dict[int, list] = defaultdict(list)
+    for oc in objectchanges:
+        if oc.postchange_data is not None and oc.changed_object_id is not None:
+            by_ct[oc.changed_object_type_id].append(oc)
+
+    for ct_id, rows in by_ct.items():
+        model = ContentType.objects.get_for_id(ct_id).model_class()
+        if model is None:
+            continue
+
+        m2m_fields = [f for f in model._meta.local_many_to_many if f.serialize]
+        if not m2m_fields:
+            continue
+
+        obj_ids = [oc.changed_object_id for oc in rows]
+        for field in m2m_fields:
+            through = field.remote_field.through
+            src_col = field.m2m_column_name()
+            tgt_col = field.m2m_reverse_name()
+
+            relation: dict[int, list] = defaultdict(list)
+            pairs = through.objects.filter(
+                **{f"{src_col}__in": obj_ids}
+            ).values_list(src_col, tgt_col)
+            for src_id, tgt_id in pairs:
+                relation[src_id].append(tgt_id)
+
+            for oc in rows:
+                oc.postchange_data[field.name] = sorted(relation.get(oc.changed_object_id, []))
+
+
+def _flush_objectchanges(objectchanges):
+    """
+    Persist buffered ObjectChange rows as one bulk_create and re-emit post_save.
+
+    bulk_create does not fire ``post_save``; we re-emit it for each row
+    so receivers connected to ``post_save(sender=ObjectChange)`` fire
+    exactly once. The full kwargs set Django's own ``_save_table`` would
+    pass is supplied because some NetBox receivers (e.g.
+    ``update_denormalized_fields``) declare ``raw`` as required.
+    """
+    if not objectchanges:
+        return
+
+    _enrich_m2m(objectchanges)
+    created = ObjectChange.objects.bulk_create(objectchanges)
+    for obj in created:
+        post_save.send(
+            sender=ObjectChange,
+            instance=obj,
+            created=True,
+            update_fields=None,
+            raw=False,
+            using=obj._state.db,
+        )
+
+
 @contextmanager
 def buffered_change_logging():
     """
-    Collect ObjectChange writes during apply and enqueue them for async write via RQ.
+    Collect ObjectChange writes during an apply and flush them in bulk.
 
     No-op when ``apply_buffer_change_logging`` is False (the default),
     which means the buffered handler still runs but delegates straight
     through to upstream NetBox without touching the buffer.
 
-    On a successful apply the in-memory buffer is serialised to a
-    plain-dict payload and the actual ``ObjectChange.objects.bulk_create``
-    + ``post_save`` re-emit is enqueued onto NetBox's default RQ
-    queue via ``transaction.on_commit``. The RQ worker writes the
-    rows on its own time, off the apply request critical path.
+    On a successful apply the buffered ObjectChange instances are handed
+    off for flushing. If a request-level batch is active (the view
+    wrapped its entity loop in ``request_change_logging_batch``) the
+    instances are appended to the batch and the outer context manager
+    flushes everything as one bulk_create at request end. Otherwise this
+    flushes its own buffer directly.
 
-    Raising inside the ``with`` block skips the enqueue entirely.
-    ``transaction.on_commit`` callbacks only fire on successful
-    commit of the surrounding atomic block, so if the apply raises
-    (or any later receiver does), the payload is dropped and no
-    audit rows are written - matches the upstream "transaction
-    rolls back -> ObjectChange not visible" semantics.
+    Both paths register their work via ``transaction.on_commit`` so a
+    rolled-back apply drops the buffered rows without persisting them and
+    the bulk m2m enrichment observes committed relation state.
     """
     if not get_plugin_config("netbox_diode_plugin", "apply_buffer_change_logging"):
         yield
@@ -262,82 +381,34 @@ def buffered_change_logging():
         if not buffer:
             return
 
-        # Capture context once, while still on the request thread.
-        # The RQ worker reconstitutes from this snapshot.
-        request = current_request.get()
-        user = request.user if request is not None else None
-        request_id = request.id if request is not None else None
-        payload = serialise_buffer_to_payload(buffer, user, request_id)
-
-        # If a request-level batch is active (the view wrapped the
-        # entity loop in `request_change_logging_batch`), append the
-        # payload to the batch and let the outer context manager
-        # enqueue ONE consolidated job at request end. Otherwise
-        # (e.g. a single-changeset endpoint that doesn't loop),
-        # enqueue per entity as the fallback.
-        #
-        # In both cases `transaction.on_commit` ensures the work is
-        # deferred until the apply atomic block commits - a rollback
-        # discards the callback so the payload never reaches the
-        # batch list or the queue.
+        instances = list(buffer.values())
         batch = _request_batch.get()
         if batch is not None:
-            transaction.on_commit(lambda: batch.append(payload))
+            transaction.on_commit(lambda: batch.extend(instances))
         else:
-            transaction.on_commit(lambda: enqueue_async_write(payload))
+            transaction.on_commit(lambda: _flush_objectchanges(instances))
     finally:
         _apply_change_buffer.reset(token)
-
-
-def _consolidate_payloads(payloads):
-    """
-    Merge per-entity payloads into a single payload with all rows.
-
-    Per-entity payloads share the same ``user_id``/``user_name``/
-    ``request_id``/``branch_schema_id`` (one HTTP request, one user,
-    one request id, one branch context), so we take those fields
-    from the first payload and concatenate the row lists.
-    """
-    if not payloads:
-        return {"rows": []}
-    rows = []
-    for p in payloads:
-        rows.extend(p.get("rows") or [])
-    first = payloads[0]
-    consolidated = {
-        "rows": rows,
-        "user_id": first.get("user_id"),
-        "user_name": first.get("user_name", ""),
-        "request_id": first.get("request_id"),
-    }
-    if first.get("branch_schema_id") is not None:
-        consolidated["branch_schema_id"] = first["branch_schema_id"]
-    return consolidated
 
 
 @contextmanager
 def request_change_logging_batch():
     """
-    Wrap a request that runs multiple ``buffered_change_logging`` cycles.
+    Collect every per-entity buffer in a request and flush them as one bulk_create.
 
-    Without this wrapper each per-entity ``buffered_change_logging``
-    enqueues its own RQ job at end-of-entity. For endpoints that
-    process many entities per HTTP request (``/bulk-plan-apply/``,
-    ``/bulk-apply/``), that's one job per entity - small payloads,
-    high enqueue rate, and the worker pays the RQ overhead per
-    entity.
+    Endpoints that process many entities per HTTP request
+    (``/bulk-plan-apply/``, ``/bulk-apply/``) wrap their entity loop in
+    this context. Each per-entity ``buffered_change_logging`` appends its
+    ObjectChange instances to a shared list; on exit the whole list is
+    flushed once. Flushing at request scope is also what lets
+    ``_enrich_m2m`` resolve every object's relations in one query per
+    relation instead of one per entity.
 
-    Entering this context redirects each per-entity payload into a
-    shared list. On exit (after all entities are processed), the
-    list is consolidated into a single payload and enqueued as one
-    RQ job. The worker then runs a single ``bulk_create`` covering
-    every entity's ObjectChange rows in one INSERT.
-
-    Per-entity rollback semantics are preserved: each entity's
-    payload is appended via ``transaction.on_commit`` on its own
-    atomic block. A failed entity rolls back its atomic, its
-    on_commit callback is discarded, and its rows never reach the
-    batch list. Successful entities contribute; failed ones don't.
+    Per-entity rollback semantics are preserved: each entity's append is
+    registered via ``transaction.on_commit`` on its own atomic block, so
+    a failed entity contributes nothing. The flush itself is registered
+    via ``on_commit`` in ``finally`` so a partial batch from the entities
+    that did commit is still written even if a later entity raised.
 
     No-op when ``apply_buffer_change_logging`` is False (matches the
     per-entity context manager's gate, so the two stay in lockstep).
@@ -351,27 +422,11 @@ def request_change_logging_batch():
     try:
         yield
     finally:
-        # Register the consolidate-and-enqueue via `transaction.on_commit`
-        # rather than calling it inline so the ordering matches the
-        # per-entity appends. Per-entity payloads are appended via
-        # `transaction.on_commit` callbacks queued at the outermost
-        # atomic; Django fires queued callbacks FIFO. Registering ours
-        # last guarantees we see a fully-populated batch.
-        #
-        # When the request has no surrounding atomic block (the typical
-        # production case for these endpoints), `on_commit` with no
-        # active transaction fires the callback immediately - same
-        # effect as calling enqueue_async_write directly.
-        #
-        # Registration is in `finally` so partial batches from
-        # successful entities still get enqueued even if a later
-        # entity's apply raised an unhandled exception that
-        # interrupted the loop. Each entity's per-entity atomic
-        # commits or rolls back independently; failed entities'
-        # appends are discarded by Django, so the batch contains
-        # only rows that genuinely committed.
-        def _flush_batch():
-            if batch:
-                enqueue_async_write(_consolidate_payloads(batch))
-        transaction.on_commit(_flush_batch)
+        # Register the flush via on_commit rather than calling it inline
+        # so it queues after the per-entity appends. Django fires queued
+        # on_commit callbacks FIFO, so registering ours last guarantees a
+        # fully-populated batch. When the request has no surrounding
+        # atomic block, on_commit fires immediately - by which point the
+        # per-entity atomics have already committed and appended.
+        transaction.on_commit(lambda: _flush_objectchanges(batch))
         _request_batch.reset(token)
