@@ -22,9 +22,10 @@ pieces:
      ``_fast_serialize_object``, which restricts Django's serializer to
      the model's local (non-m2m) fields via the ``fields=`` allowlist.
      Django then skips ``handle_m2m_field`` entirely, so no per-relation
-     SELECT is issued. The omitted m2m fields are re-added in bulk at
-     flush (see piece 3). Outside the apply path the original
-     serialiser runs unchanged.
+     SELECT is issued. Tags are left as an empty placeholder rather than
+     queried per save. Both the omitted m2m fields and the tags are
+     re-added in bulk at flush (see piece 3). Outside the apply path the
+     original serialiser runs unchanged.
 
   2. **In-memory buffer.** A request-scoped ``contextvars.ContextVar``
      holds a dict of ObjectChange instances keyed by
@@ -33,12 +34,12 @@ pieces:
      memory, replacing the upstream SELECT-then-UPDATE pair with a dict
      lookup.
 
-  3. **Batched flush with bulk m2m enrichment.** The per-entity buffers
+  3. **Batched flush with bulk enrichment.** The per-entity buffers
      are collected into a request-level batch (via
      ``request_change_logging_batch``). After the apply commits, the
-     batch is flushed: for each model, one query per m2m relation
-     resolves the relation for *all* buffered objects at once and patches
-     the lists back into ``postchange_data``; then a single
+     batch is flushed: for each model, one query per m2m relation and
+     one query for tags resolve them for *all* buffered objects at once
+     and patch the values back into ``postchange_data``; then a single
      ``bulk_create`` writes every row and ``post_save`` is re-emitted so
      downstream receivers still fire. This turns O(saves x relations)
      round-trips into O(models x relations) per request.
@@ -80,6 +81,7 @@ from django.db import transaction
 from django.db.models.signals import m2m_changed, post_save
 from extras.events import enqueue_event
 from extras.models import Tag
+from extras.models.tags import TaggedItem
 from extras.utils import is_taggable
 from netbox.context import current_request, events_queue
 from netbox.models.features import ChangeLoggingMixin
@@ -132,9 +134,10 @@ def _fast_serialize_object(obj, exclude=None):
     without the ``_id`` suffix), so passing field *names* keeps every
     scalar and FK field while dropping only the m2m relations.
 
-    Tag resolution is unchanged from upstream: tags are recorded by name
-    via the explicit manager read (or the ``_tags`` cache), not via the
-    serializer's m2m handling.
+    Tags get an empty placeholder rather than a per-save query;
+    ``_enrich_tags`` fills it in bulk at flush. The placeholder is only
+    added for taggable models, which is also how a row is later
+    recognised as needing tag enrichment.
     """
     field_names = [f.name for f in obj._meta.local_fields]
     json_str = dj_serializers.serialize("json", [obj], fields=field_names)
@@ -144,9 +147,14 @@ def _fast_serialize_object(obj, exclude=None):
     if "custom_field_data" in data:
         data["custom_fields"] = data.pop("custom_field_data")
 
+    # Resolving tags here would cost one query per save. Leave an empty
+    # placeholder for taggable models and let `_enrich_tags` fill it in
+    # bulk at flush. The placeholder's presence also marks the row as
+    # taggable: is_taggable needs the live instance we have here but not
+    # at flush time. (The `_tags` instance cache upstream consults is not
+    # populated on the diode apply path that this fast route serves.)
     if is_taggable(obj):
-        tags = getattr(obj, "_tags", None) or obj.tags.all()
-        data["tags"] = sorted([tag.name for tag in tags])
+        data["tags"] = []
 
     for key in list(data.keys()):
         if key in exclude:
@@ -324,6 +332,44 @@ def _enrich_m2m(objectchanges):
                 oc.postchange_data[field.name] = sorted(relation.get(oc.changed_object_id, []))
 
 
+def _enrich_tags(objectchanges):
+    """
+    Fill the tag placeholder left by ``_fast_serialize_object`` in bulk.
+
+    ``_fast_serialize_object`` records ``tags: []`` for taggable models
+    instead of resolving tags per save (one query each). This resolves
+    them for all buffered objects at once: rows are grouped by content
+    type and one query over ``extras_taggeditem`` returns every object's
+    tag names, written back as a sorted list - matching what upstream
+    ``serialize_object`` records.
+
+    Only rows that carry the ``tags`` placeholder (taggable models) are
+    touched, so non-taggable rows keep no ``tags`` key, exactly as
+    upstream. Must run after the apply transaction commits so the reads
+    observe the final tag assignments.
+    """
+    by_ct: dict[int, list] = defaultdict(list)
+    for oc in objectchanges:
+        if (
+            oc.postchange_data is not None
+            and "tags" in oc.postchange_data
+            and oc.changed_object_id is not None
+        ):
+            by_ct[oc.changed_object_type_id].append(oc)
+
+    for ct_id, rows in by_ct.items():
+        obj_ids = [oc.changed_object_id for oc in rows]
+        tags_by_obj: dict[int, list] = defaultdict(list)
+        pairs = TaggedItem.objects.filter(
+            content_type_id=ct_id, object_id__in=obj_ids
+        ).values_list("object_id", "tag__name")
+        for obj_id, tag_name in pairs:
+            tags_by_obj[obj_id].append(tag_name)
+
+        for oc in rows:
+            oc.postchange_data["tags"] = sorted(tags_by_obj.get(oc.changed_object_id, []))
+
+
 def _flush_objectchanges(objectchanges):
     """
     Persist buffered ObjectChange rows as one bulk_create and re-emit post_save.
@@ -338,6 +384,7 @@ def _flush_objectchanges(objectchanges):
         return
 
     _enrich_m2m(objectchanges)
+    _enrich_tags(objectchanges)
     created = ObjectChange.objects.bulk_create(objectchanges)
     for obj in created:
         post_save.send(

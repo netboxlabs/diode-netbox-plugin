@@ -252,8 +252,8 @@ class FastSerializeTestCase(TestCase):
         self.asn = ASN.objects.create(asn=65001, rir=rir)
         self.site.asns.add(self.asn)
 
-    def test_fast_serialize_omits_only_m2m(self):
-        """Fast output equals the upstream serializer output minus m2m relation fields."""
+    def test_fast_serialize_omits_m2m_and_placeholders_tags(self):
+        """Fast output equals upstream minus m2m, with tags left as an empty placeholder."""
         vanilla = change_log_buffer._original_serialize_object(self.site, exclude=[])
         fast = change_log_buffer._fast_serialize_object(self.site, exclude=[])
 
@@ -261,15 +261,30 @@ class FastSerializeTestCase(TestCase):
         m2m_names = {f.name for f in Site._meta.local_many_to_many if f.serialize}
         self.assertIn("asns", m2m_names)
         self.assertNotIn("asns", fast)
+        # Tags are a placeholder, resolved in bulk at flush, not per-save.
+        self.assertEqual(fast["tags"], [])
 
-        # Everything else (scalars, FKs, custom_fields, tags) is identical.
-        expected = {k: v for k, v in vanilla.items() if k not in m2m_names}
-        self.assertEqual(fast, expected)
+        # Every other field matches upstream exactly.
+        expected = {k: v for k, v in vanilla.items() if k not in m2m_names and k != "tags"}
+        actual = {k: v for k, v in fast.items() if k != "tags"}
+        self.assertEqual(actual, expected)
 
-    def test_fast_serialize_preserves_tags(self):
-        """Tags are recorded by name on the fast path, same as upstream."""
-        fast = change_log_buffer._fast_serialize_object(self.site, exclude=[])
-        self.assertEqual(fast["tags"], ["alpha", "beta"])
+    def test_full_parity_after_enrichment(self):
+        """Fast serialize + m2m + tag enrichment reproduces the upstream serializer output."""
+        vanilla = change_log_buffer._original_serialize_object(self.site, exclude=[])
+        row = ObjectChange(
+            changed_object_type_id=ContentType.objects.get_for_model(Site).id,
+            changed_object_id=self.site.pk,
+            action="create",
+            postchange_data=change_log_buffer._fast_serialize_object(self.site, exclude=[]),
+        )
+        change_log_buffer._enrich_m2m([row])
+        change_log_buffer._enrich_tags([row])
+
+        # m2m ordering: enrichment sorts, upstream uses queryset order;
+        # compare membership for the relation, then the rest exactly.
+        self.assertEqual(set(row.postchange_data.pop("asns")), set(vanilla.pop("asns")))
+        self.assertEqual(row.postchange_data, vanilla)
 
     def test_serialize_object_gate_is_inactive_without_buffer(self):
         """With no buffer active, serialize_object delegates to the upstream implementation."""
@@ -334,3 +349,57 @@ class EnrichM2MTestCase(TestCase):
         # Site has a single serialisable m2m (asns) -> exactly one query.
         with self.assertNumQueries(1):
             change_log_buffer._enrich_m2m(rows)
+
+
+class EnrichTagsTestCase(TestCase):
+    """`_enrich_tags` fills the tag placeholder left by the fast serializer in bulk."""
+
+    def setUp(self):
+        """Two Sites with overlapping tags to exercise per-object grouping."""
+        ObjectChange.objects.all().delete()
+        self.red = Tag.objects.create(name="red", slug="red")
+        self.blue = Tag.objects.create(name="blue", slug="blue")
+        self.site_a = Site.objects.create(name="Tag A", slug=f"tag-a-{uuid4().hex[:8]}")
+        self.site_b = Site.objects.create(name="Tag B", slug=f"tag-b-{uuid4().hex[:8]}")
+        self.site_a.tags.add(self.red, self.blue)
+        self.site_b.tags.add(self.red)
+        self.ct_id = ContentType.objects.get_for_model(Site).id
+
+    def _row(self, site):
+        return ObjectChange(
+            changed_object_type_id=self.ct_id,
+            changed_object_id=site.pk,
+            action="create",
+            postchange_data=change_log_buffer._fast_serialize_object(site, exclude=[]),
+        )
+
+    def test_enrich_fills_tags_per_object_sorted(self):
+        """Each row gets its own object's tag names, sorted."""
+        rows = [self._row(self.site_a), self._row(self.site_b)]
+        change_log_buffer._enrich_tags(rows)
+        self.assertEqual(rows[0].postchange_data["tags"], ["blue", "red"])
+        self.assertEqual(rows[1].postchange_data["tags"], ["red"])
+
+    def test_enrich_tags_one_query_per_content_type(self):
+        """N taggable objects of one model cost a single tag query, not one per object."""
+        rows = [self._row(self.site_a), self._row(self.site_b)]
+        with self.assertNumQueries(1):
+            change_log_buffer._enrich_tags(rows)
+
+    def test_enrich_tags_empty_for_untagged_object(self):
+        """A taggable object with no tags keeps the empty placeholder."""
+        site_c = Site.objects.create(name="Tag C", slug=f"tag-c-{uuid4().hex[:8]}")
+        row = self._row(site_c)
+        change_log_buffer._enrich_tags([row])
+        self.assertEqual(row.postchange_data["tags"], [])
+
+    def test_enrich_tags_skips_rows_without_placeholder(self):
+        """Rows whose postchange_data has no `tags` key (non-taggable shape) are not given one."""
+        row = ObjectChange(
+            changed_object_type_id=self.ct_id,
+            changed_object_id=self.site_a.pk,
+            action="create",
+            postchange_data={"name": "no-tags-key"},
+        )
+        change_log_buffer._enrich_tags([row])
+        self.assertNotIn("tags", row.postchange_data)
