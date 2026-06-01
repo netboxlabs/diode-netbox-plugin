@@ -83,6 +83,7 @@ from extras.events import enqueue_event
 from extras.models import Tag
 from extras.models.tags import TaggedItem
 from extras.utils import is_taggable
+from netbox.config import get_config
 from netbox.context import current_request, events_queue
 from netbox.models.features import ChangeLoggingMixin
 from netbox.plugins import get_plugin_config
@@ -181,6 +182,49 @@ def _serialize_object_gated(self, exclude=None):
 
 
 ChangeLoggingMixin.serialize_object = _serialize_object_gated
+
+
+def snapshot_for_apply(instance):
+    """
+    Capture a prechange snapshot for a diode-applied update.
+
+    NetBox records prechange state by calling ``instance.snapshot()`` in its
+    view and DRF viewset layers (``get_object_with_snapshot`` and the bulk
+    update/destroy mixins). The diode apply path applies through a plain
+    APIView and a direct ``serializer.save()``, so it bypasses those and would
+    otherwise record no ``prechange_data`` for updates. Call this after
+    fetching the instance and before saving to bring diode-applied updates to
+    parity with how NetBox itself records every other update.
+
+    The prechange must be format-consistent with the postchange this module
+    produces, or the changelog diff reports spurious changes:
+
+    - Buffer inactive: defer to NetBox's ``snapshot()`` (full serialiser),
+      which matches the unbuffered postchange exactly.
+    - Buffer active: build the prechange the same way the buffered postchange
+      is built - scalar fields via the fast serialiser, m2m and tags resolved
+      now and sorted to match ``_enrich_m2m`` / ``_enrich_tags``. They must be
+      read here because the before-state is gone once the update commits, so
+      the flush-time enrichment cannot recover them.
+    """
+    if not hasattr(instance, "serialize_object"):
+        return
+
+    if _apply_change_buffer.get() is None:
+        instance.snapshot()
+        return
+
+    exclude = ["last_updated"] if get_config().CHANGELOG_SKIP_EMPTY_CHANGES else []
+    data = _fast_serialize_object(instance, exclude=exclude)
+    for field in instance._meta.local_many_to_many:
+        if field.serialize:
+            data[field.name] = sorted(
+                getattr(instance, field.name).values_list("pk", flat=True)
+            )
+    if is_taggable(instance) and "tags" in data:
+        data["tags"] = sorted(instance.tags.values_list("name", flat=True))
+
+    instance._prechange_snapshot = data
 
 
 def _classify_signal(instance, kwargs):

@@ -13,6 +13,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from extras.models import Tag
 from ipam.models import ASN, RIR
+from netbox.config import get_config
 from rest_framework import status
 from utilities.testing import APITestCase
 
@@ -403,3 +404,57 @@ class EnrichTagsTestCase(TestCase):
         )
         change_log_buffer._enrich_tags([row])
         self.assertNotIn("tags", row.postchange_data)
+
+
+class SnapshotForApplyTestCase(TestCase):
+    """`snapshot_for_apply` captures prechange consistent with the buffered postchange."""
+
+    def setUp(self):
+        """A Site with an m2m relation (asns) and a tag."""
+        ObjectChange.objects.all().delete()
+        self.site = Site.objects.create(name="Snap site", slug=f"snap-{uuid4().hex[:8]}")
+        self.site.tags.add(Tag.objects.create(name="green", slug="green"))
+        rir = RIR.objects.create(name="Snap RIR", slug=f"srir-{uuid4().hex[:8]}")
+        self.asn = ASN.objects.create(asn=65100, rir=rir)
+        self.site.asns.add(self.asn)
+        self.ct_id = ContentType.objects.get_for_model(Site).id
+        self._exclude = ["last_updated"] if get_config().CHANGELOG_SKIP_EMPTY_CHANGES else []
+
+    def _snapshot_with_buffer(self):
+        token = change_log_buffer._apply_change_buffer.set({})
+        try:
+            change_log_buffer.snapshot_for_apply(self.site)
+        finally:
+            change_log_buffer._apply_change_buffer.reset(token)
+        return self.site._prechange_snapshot
+
+    def test_buffer_active_captures_sorted_m2m_and_tags(self):
+        """With the buffer active, prechange records m2m + tags resolved now, sorted."""
+        snap = self._snapshot_with_buffer()
+        self.assertEqual(snap["asns"], [self.asn.pk])
+        self.assertEqual(snap["tags"], ["green"])
+
+    def test_prechange_matches_postchange_for_unchanged_object(self):
+        """Prechange and postchange are identical for an unmodified object (no spurious diff)."""
+        prechange = self._snapshot_with_buffer()
+
+        # Build postchange exactly as the buffered flush would.
+        row = ObjectChange(
+            changed_object_type_id=self.ct_id,
+            changed_object_id=self.site.pk,
+            action="update",
+            postchange_data=change_log_buffer._fast_serialize_object(self.site, exclude=self._exclude),
+        )
+        change_log_buffer._enrich_m2m([row])
+        change_log_buffer._enrich_tags([row])
+
+        self.assertEqual(prechange, row.postchange_data)
+
+    def test_buffer_inactive_delegates_to_netbox_snapshot(self):
+        """With no buffer, prechange comes from NetBox's own snapshot (full serializer)."""
+        if hasattr(self.site, "_prechange_snapshot"):
+            del self.site._prechange_snapshot
+        change_log_buffer.snapshot_for_apply(self.site)
+        self.assertTrue(hasattr(self.site, "_prechange_snapshot"))
+        # The full serializer includes the m2m relation directly.
+        self.assertIn("asns", self.site._prechange_snapshot)

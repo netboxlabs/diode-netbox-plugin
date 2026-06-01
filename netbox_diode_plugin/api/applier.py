@@ -10,6 +10,7 @@ from django.db import models, transaction
 from django.db.utils import IntegrityError
 from rest_framework.exceptions import ValidationError as ValidationError
 
+from .change_log_buffer import snapshot_for_apply
 from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
 from .matcher import find_existing_object, invalidate_find_obj_entry
 from .plugin_utils import get_object_type_model, legal_fields
@@ -78,6 +79,7 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
     try:
         instance = find_existing_object(data, object_type)
         if instance:
+            snapshot_for_apply(instance)
             serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             result = serializer.save()
@@ -124,6 +126,7 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
     elif change_type == ChangeType.UPDATE:
         if object_id := change.object_id:
             instance = model_class.objects.get(id=object_id)
+            snapshot_for_apply(instance)
             serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             serializer.save()
