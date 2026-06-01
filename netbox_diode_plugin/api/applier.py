@@ -12,7 +12,7 @@ from rest_framework.exceptions import ValidationError as ValidationError
 
 from .change_log_buffer import snapshot_for_apply
 from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
-from .matcher import find_existing_object, invalidate_find_obj_entry
+from .matcher import find_existing_object, invalidate_find_obj_entry, requires_pre_save_match
 from .plugin_utils import get_object_type_model, legal_fields
 from .profile import profiled
 from .supported_models import get_serializer_for_model
@@ -112,8 +112,13 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         # For component types that may be auto-created from e.g. DeviceType or ModuleType templates,
         # try to find existing object first before attempting to create.
         # This prevents duplicates when components are instantiated during Device/Module save()
+        # The same find-first path also handles types whose logical match
+        # criteria are not enforced by a DB unique constraint (see
+        # matcher._REQUIRES_PRE_SAVE_MATCH): concurrent planners would
+        # otherwise each emit CREATE for the same logical row and both
+        # inserts would succeed without IntegrityError to fall back on.
         instance = None
-        if _is_auto_created_component(change.object_type):
+        if _is_auto_created_component(change.object_type) or requires_pre_save_match(change.object_type):
             instance = _try_find_and_update_existing_instance(data, change.object_type, serializer_class, request)
 
         if not instance:
