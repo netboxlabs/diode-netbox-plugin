@@ -92,3 +92,52 @@ class IsSupportedGenericObjectTestCase(TestCase):
         a_terms = cable_node.get("a_terminations")
         self.assertIsInstance(a_terms, list)
         self.assertEqual(len(a_terms), 0)
+
+
+def _wrap(variant_key, inner):
+    return {variant_key: inner}
+
+
+class GenericObjectListExtractionTestCase(TestCase):
+    """Each certified termination variant extracts to {object_type, object_id}."""
+
+    CERTIFIED = [
+        ("object_interface", "dcim.interface"),
+        ("object_front_port", "dcim.frontport"),
+        ("object_rear_port", "dcim.rearport"),
+        ("object_console_port", "dcim.consoleport"),
+        ("object_console_server_port", "dcim.consoleserverport"),
+        ("object_power_port", "dcim.powerport"),
+        ("object_power_outlet", "dcim.poweroutlet"),
+        ("object_power_feed", "dcim.powerfeed"),
+        ("object_circuit_termination", "circuits.circuittermination"),
+    ]
+
+    def _inner_for(self, object_type):
+        if object_type == "circuits.circuittermination":
+            return {"term_side": "A", "circuit": {"cid": "C1"}}
+        if object_type == "dcim.powerfeed":
+            return {"name": "feed1", "power_panel": {"name": "panel1"}}
+        return {"name": "p1", "device": {"name": "Device A"}}
+
+    def test_each_variant_extracts_termination_dict_and_refs(self):
+        supported = extract_supported_models()
+        for variant_key, expected_ot in self.CERTIFIED:
+            with self.subTest(variant=variant_key):
+                entity = {
+                    "a_terminations": [_wrap(variant_key, self._inner_for(expected_ot))],
+                    "b_terminations": [_wrap("object_interface", {"name": "eth1", "device": {"name": "Device B"}})],
+                }
+                nodes = transformer._transform_proto_json_1(entity, "dcim.cable", supported)
+                cable = nodes[0]
+                self.assertNotIn("a_terminations", cable["_warnings"])
+                terms = cable["a_terminations"]
+                self.assertEqual(len(terms), 1)
+                t = terms[0]
+                self.assertEqual(set(t.keys()), {"object_type", "object_id"})
+                self.assertEqual(t["object_type"], expected_ot)
+                self.assertIsInstance(t["object_id"], UnresolvedReference)
+                self.assertEqual(t["object_id"].object_type, expected_ot)
+                self.assertIn(t["object_id"].uuid, cable["_refs"])
+                child_types = {n["_object_type"] for n in nodes[1:]}
+                self.assertIn(expected_ot, child_types)
