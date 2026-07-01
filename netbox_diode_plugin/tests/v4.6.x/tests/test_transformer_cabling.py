@@ -174,6 +174,10 @@ class Obs1080AndMultiTerminationTestCase(TestCase):
     """OBS-1080 payload transforms cleanly; multi-object-per-end is supported."""
 
     def test_obs_1080_payload_extracts_both_interfaces(self):
+        # NOTE: IsSupportedGenericObjectTestCase.test_a_terminations_list_processing_non_empty
+        # already covers the single-interface-per-end path.  This test is distinct in that it
+        # exercises both a_terminations AND b_terminations simultaneously and asserts the two
+        # child interface nodes are emitted (len == 2), which the earlier test does not check.
         supported = extract_supported_models()
         entity = {
             "a_terminations": [{"object_interface": {"name": "eth0", "device": {"name": "A"}}}],
