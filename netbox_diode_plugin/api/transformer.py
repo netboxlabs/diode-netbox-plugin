@@ -23,6 +23,7 @@ from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
     apply_format_transformations,
+    get_generic_object_variant,
     get_json_ref_info,
     get_object_type_model,
     get_primary_value,
