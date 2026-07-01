@@ -140,6 +140,12 @@ def requires_pre_save_match(object_type: str) -> bool:
 
 
 _LOGICAL_MATCHERS = {
+    "dcim.cable": lambda: [
+        CableTerminationSetMatcher(
+            model_class=get_object_type_model("dcim.cable"),
+            name="logical_cable_termination_set",
+        )
+    ],
     "dcim.macaddress": lambda: [
         ObjectMatchCriteria(
             fields=("mac_address", "assigned_object_type", "assigned_object_id"),

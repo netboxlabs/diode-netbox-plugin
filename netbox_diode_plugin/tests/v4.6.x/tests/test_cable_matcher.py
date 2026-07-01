@@ -2,11 +2,14 @@
 # Copyright 2026 NetBox Labs, Inc.
 """Unit tests for CableTerminationSetMatcher and dcim.cable pre-save routing."""
 
+from dcim.models import Cable, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 from django.test import TestCase
 
 from netbox_diode_plugin.api.matcher import (
     CableTerminationSetMatcher,
     _find_obj_cache_key,
+    find_existing_object,
+    get_model_matchers,
     requires_pre_save_match,
 )
 from netbox_diode_plugin.api.plugin_utils import get_object_type_model
@@ -79,3 +82,93 @@ class FindObjCacheKeyCableTestCase(TestCase):
             "b_terminations": [{"object_type": "dcim.interface", "object_id": 2}],
         }
         self.assertIsNone(_find_obj_cache_key(data, "dcim.cable"))
+
+
+class CableTerminationSetMatcherRegistrationTestCase(TestCase):
+    """dcim.cable must resolve to a non-empty matcher list including the set matcher.
+
+    Regression for: CableTerminationSetMatcher was defined but never wired into
+    _LOGICAL_MATCHERS, so get_model_matchers("dcim.cable") returned [] and the
+    matcher's build_queryset/fingerprint logic never ran for real cable ingestion.
+    """
+
+    def test_get_model_matchers_returns_cable_termination_set_matcher(self):
+        model_class = get_object_type_model("dcim.cable")
+        matchers = get_model_matchers(model_class)
+        self.assertTrue(
+            any(isinstance(m, CableTerminationSetMatcher) for m in matchers),
+            "CableTerminationSetMatcher is not registered for dcim.cable "
+            "(get_model_matchers returned no such matcher)",
+        )
+
+
+class FindExistingObjectCableDbTestCase(TestCase):
+    """DB-backed regression: two distinct cables must not cross-resolve.
+
+    Exercises find_existing_object end-to-end (registration + build_queryset)
+    against real Cable/CableTermination rows, per brief Step 8.
+    """
+
+    def setUp(self):
+        manufacturer = Manufacturer.objects.create(name="CableTestMfr", slug="cable-test-mfr")
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model="CableTestModel", slug="cable-test-model")
+        device_role = DeviceRole.objects.create(name="CableTestRole", slug="cable-test-role", color="ff0000")
+        site = Site.objects.create(name="CableTestSite", slug="cable-test-site")
+
+        self.device1 = Device.objects.create(
+            name="CableTestDevice1", device_type=device_type, role=device_role, site=site,
+        )
+        self.device2 = Device.objects.create(
+            name="CableTestDevice2", device_type=device_type, role=device_role, site=site,
+        )
+        self.device3 = Device.objects.create(
+            name="CableTestDevice3", device_type=device_type, role=device_role, site=site,
+        )
+        self.device4 = Device.objects.create(
+            name="CableTestDevice4", device_type=device_type, role=device_role, site=site,
+        )
+
+        # A termination (interface) can belong to at most one cable, so each
+        # cable in this fixture uses its own dedicated pair of interfaces.
+        self.if1 = Interface.objects.create(device=self.device1, name="eth0", type="1000base-t")
+        self.if2 = Interface.objects.create(device=self.device2, name="eth0", type="1000base-t")
+        self.if3 = Interface.objects.create(device=self.device3, name="eth0", type="1000base-t")
+        self.if4 = Interface.objects.create(device=self.device4, name="eth0", type="1000base-t")
+
+        self.cable_12 = Cable.objects.create(status="connected")
+        self.cable_12.a_terminations = [self.if1]
+        self.cable_12.b_terminations = [self.if2]
+        self.cable_12.save()
+
+        self.cable_34 = Cable.objects.create(status="connected")
+        self.cable_34.a_terminations = [self.if3]
+        self.cable_34.b_terminations = [self.if4]
+        self.cable_34.save()
+
+    def _data(self, a_if, b_if):
+        return {
+            "status": "connected",
+            "a_terminations": [{"object_type": "dcim.interface", "object_id": a_if.pk}],
+            "b_terminations": [{"object_type": "dcim.interface", "object_id": b_if.pk}],
+        }
+
+    def test_finds_correct_cable_for_its_own_termination_set(self):
+        result = find_existing_object(self._data(self.if1, self.if2), "dcim.cable")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.pk, self.cable_12.pk)
+
+    def test_does_not_cross_resolve_distinct_cable(self):
+        result_34 = find_existing_object(self._data(self.if3, self.if4), "dcim.cable")
+        self.assertIsNotNone(result_34)
+        self.assertEqual(result_34.pk, self.cable_34.pk)
+        self.assertNotEqual(result_34.pk, self.cable_12.pk)
+
+    def test_ab_swap_still_resolves_same_cable(self):
+        # A/B order is insignificant for identity (spec 5.3 contract).
+        result = find_existing_object(self._data(self.if2, self.if1), "dcim.cable")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.pk, self.cable_12.pk)
+
+    def test_no_match_for_nonexistent_termination_set(self):
+        result = find_existing_object(self._data(self.if1, self.if3), "dcim.cable")
+        self.assertIsNone(result)
