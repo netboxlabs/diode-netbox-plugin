@@ -2,7 +2,7 @@
 # Copyright 2026 NetBox Labs, Inc.
 """Diode NetBox Plugin - Applier path-helper tests."""
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from netbox_diode_plugin.api.applier import _get_path, _pre_apply, _set_path
 from netbox_diode_plugin.api.common import Change, ChangeType
@@ -47,7 +47,7 @@ class _FakeInstance:
         self.pk = pk
 
 
-class PreApplyTerminationResolutionTestCase(SimpleTestCase):
+class PreApplyTerminationResolutionTestCase(TestCase):
     """_pre_apply resolves termination object_id refs to {object_type, object_id: pk}."""
 
     def test_termination_refs_resolve_to_pk_dict_shape(self):
