@@ -146,15 +146,21 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
 def _set_path(data, path, value):
     path = path.split(".")
     key = path.pop(0)
+    if key.isdigit():
+        key = int(key)
     while len(path) > 0:
         data = data[key]
         key = path.pop(0)
+        if key.isdigit():
+            key = int(key)
     data[key] = value
 
 def _get_path(data, path):
     path = path.split(".")
     v = data
     for p in path:
+        if p.isdigit():
+            p = int(p)
         v = v[p]
     return v
 
