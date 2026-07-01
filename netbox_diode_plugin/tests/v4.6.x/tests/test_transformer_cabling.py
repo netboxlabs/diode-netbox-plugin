@@ -141,3 +141,30 @@ class GenericObjectListExtractionTestCase(TestCase):
                 self.assertIn(t["object_id"].uuid, cable["_refs"])
                 child_types = {n["_object_type"] for n in nodes[1:]}
                 self.assertIn(expected_ot, child_types)
+
+
+class UnsupportedVariantTestCase(TestCase):
+    """Unknown/unsupported variant warns and skips that one termination."""
+
+    def test_unknown_key_warns_and_skips_keeps_cable(self):
+        supported = extract_supported_models()
+        entity = {
+            "a_terminations": [
+                {"object_interface": {"name": "eth0", "device": {"name": "Device A"}}},
+                {"object_not_a_real_variant": {"name": "x"}},
+            ],
+            "b_terminations": [
+                {"object_cable_termination": {"foo": "bar"}},  # deprecated -> variant map returns None
+                {"object_interface": {"name": "eth1", "device": {"name": "Device B"}}},
+            ],
+        }
+        nodes = transformer._transform_proto_json_1(entity, "dcim.cable", supported)
+        cable = nodes[0]
+        self.assertEqual(len(cable["a_terminations"]), 1)
+        self.assertEqual(cable["a_terminations"][0]["object_type"], "dcim.interface")
+        self.assertEqual(len(cable["b_terminations"]), 1)
+        self.assertEqual(cable["b_terminations"][0]["object_type"], "dcim.interface")
+        self.assertIn("a_terminations", cable["_warnings"])
+        self.assertIn("b_terminations", cable["_warnings"])
+        self.assertTrue(any("object_not_a_real_variant" in w for w in cable["_warnings"]["a_terminations"]))
+        self.assertTrue(any("object_cable_termination" in w for w in cable["_warnings"]["b_terminations"]))
