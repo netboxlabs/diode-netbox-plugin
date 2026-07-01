@@ -253,3 +253,17 @@ class CableTerminationSetMatcherQuerysetTestCase(TestCase):
         found = find_existing_object(data, "dcim.cable")
         self.assertIsNotNone(found)
         self.assertEqual(found.pk, self.cable.pk)
+
+
+class CableFingerprintsNoCrashTestCase(TestCase):
+    def test_fingerprints_no_crash_on_termination_dicts(self):
+        # Regression for OBS-1080: list-of-dict terminations must not raise
+        # "unhashable type: 'dict'" in _fingerprint_all.
+        from netbox_diode_plugin.api.matcher import fingerprints
+        data = {
+            "a_terminations": [{"object_type": "dcim.interface", "object_id": 1}],
+            "b_terminations": [{"object_type": "dcim.interface", "object_id": 2}],
+        }
+        fps = fingerprints(data, "dcim.cable")  # must not raise
+        self.assertIsInstance(fps, list)
+        self.assertGreaterEqual(len(fps), 1)
