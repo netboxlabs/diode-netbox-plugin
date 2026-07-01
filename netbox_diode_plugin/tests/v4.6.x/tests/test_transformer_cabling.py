@@ -5,6 +5,7 @@
 from django.test import SimpleTestCase, TestCase
 
 from netbox_diode_plugin.api import transformer
+from netbox_diode_plugin.api.common import UnresolvedReference
 from netbox_diode_plugin.api.supported_models import extract_supported_models
 
 
@@ -33,22 +34,16 @@ class IsSupportedGenericObjectTestCase(TestCase):
         self.assertNotIn("a_terminations", node["_warnings"])
         self.assertNotIn("b_terminations", node["_warnings"])
 
-    def test_a_terminations_list_processing_branch_gap(self):
-        """Non-empty a_terminations exercises the list loop (lines 202-212).
+    def test_a_terminations_list_processing_non_empty(self):
+        """Non-empty a_terminations with a valid generic-object item returns 200.
 
         Each item is a GenericObject dict such as {"object_interface": {...}}.
-        The list-processing branch recurses with ref_info.object_type="" because
-        is_generic_object=True carries an empty object_type on the RefInfo.
-        get_generic_object_variant is not yet called inside the loop to resolve
-        the concrete object_type before recursing.
-
-        Current behaviour (gap): _supported_diode_fields("") raises a
-        ValidationError because "" is not a registered supported type.
-        This test pins that behaviour and documents the coverage gap that must
-        be closed before OBS-1080 can be declared resolved.
+        The list-processing branch calls get_generic_object_variant to resolve
+        the concrete object_type ("dcim.interface") and recurses with that type.
+        The termination list item is emitted as
+        {'object_type': 'dcim.interface', 'object_id': UnresolvedReference(...)}.
+        OBS-1080 payload with non-empty terminations must not raise ValidationError.
         """
-        from rest_framework.exceptions import ValidationError
-
         supported = extract_supported_models()
         # Minimal OBS-1080-style payload: one interface termination on side A.
         payload = {
@@ -57,11 +52,43 @@ class IsSupportedGenericObjectTestCase(TestCase):
             ],
             "b_terminations": [],
         }
-        # The list loop recurses with object_type="" which is not a supported
-        # model, so the transformer currently raises rather than handling it.
-        with self.assertRaises(ValidationError) as ctx:
-            transformer._transform_proto_json_1(payload, "dcim.cable", supported)
-        self.assertIn(
-            "is not supported in this version",
-            str(ctx.exception.detail),
+        # Must not raise — the list loop resolves the concrete object_type.
+        result = transformer._transform_proto_json_1(payload, "dcim.cable", supported)
+        cable_node = result[0]
+
+        # a_terminations must be present and not warned as unsupported
+        self.assertNotIn("a_terminations", cable_node["_warnings"])
+
+        # The field is stored as a list of termination dicts
+        a_terms = cable_node.get("a_terminations")
+        self.assertIsInstance(a_terms, list)
+        self.assertEqual(len(a_terms), 1)
+
+        term = a_terms[0]
+        self.assertIsInstance(term, dict, "termination item must be a dict")
+        self.assertEqual(term.get("object_type"), "dcim.interface")
+        self.assertIsInstance(
+            term.get("object_id"),
+            UnresolvedReference,
+            "object_id must be an UnresolvedReference before resolution",
         )
+        self.assertEqual(term["object_id"].object_type, "dcim.interface")
+
+    def test_a_terminations_unknown_variant_warns_and_skips(self):
+        """An unrecognised variant key emits a warning and skips the item."""
+        supported = extract_supported_models()
+        payload = {
+            "a_terminations": [
+                {"object_totally_unknown_thing": {"name": "x"}}
+            ],
+            "b_terminations": [],
+        }
+        result = transformer._transform_proto_json_1(payload, "dcim.cable", supported)
+        cable_node = result[0]
+
+        # The item is skipped; a warning is recorded on a_terminations
+        self.assertIn("a_terminations", cable_node["_warnings"])
+        # The list is present but empty (item was skipped)
+        a_terms = cable_node.get("a_terminations")
+        self.assertIsInstance(a_terms, list)
+        self.assertEqual(len(a_terms), 0)

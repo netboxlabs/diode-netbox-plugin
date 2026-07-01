@@ -202,14 +202,39 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
         if isinstance(value, list):
             ref_value = []
             for item in value:
-                nested = _transform_proto_json_1(item, ref_info.object_type, supported_models, nested_context)
-                nodes += nested
-                ref_uuid = nested[0]['_uuid']
-                ref_value.append(UnresolvedReference(
-                    object_type=ref_info.object_type,
-                    uuid=ref_uuid,
-                ))
-                refs.append(ref_uuid)
+                if ref_info.is_generic_object:
+                    # Each item is a GenericObject dict, e.g. {"object_interface": {...}}.
+                    # Resolve the concrete object_type from the single variant key.
+                    if not isinstance(item, dict) or len(item) != 1:
+                        node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
+                            f"Skipping malformed generic-object item (expected single-key dict): {item!r}"
+                        ]
+                        continue
+                    variant_key = next(iter(item))
+                    concrete_type = get_generic_object_variant(variant_key)
+                    if concrete_type is None:
+                        node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
+                            f"Skipping unknown generic-object variant key: {variant_key!r}"
+                        ]
+                        continue
+                    item_payload = item[variant_key]
+                    nested = _transform_proto_json_1(item_payload, concrete_type, supported_models, nested_context)
+                    nodes += nested
+                    ref_uuid = nested[0]['_uuid']
+                    ref_value.append({
+                        'object_type': concrete_type,
+                        'object_id': UnresolvedReference(object_type=concrete_type, uuid=ref_uuid),
+                    })
+                    refs.append(ref_uuid)
+                else:
+                    nested = _transform_proto_json_1(item, ref_info.object_type, supported_models, nested_context)
+                    nodes += nested
+                    ref_uuid = nested[0]['_uuid']
+                    ref_value.append(UnresolvedReference(
+                        object_type=ref_info.object_type,
+                        uuid=ref_uuid,
+                    ))
+                    refs.append(ref_uuid)
         else:
             nested = _transform_proto_json_1(value, ref_info.object_type, supported_models, nested_context)
             nodes += nested
@@ -630,6 +655,9 @@ def _update_resolved_refs(data, new_refs):
                 if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
                     new_items.append(new_refs[item.uuid])
                     has_refs = True
+                elif isinstance(item, dict):
+                    _update_resolved_refs(item, new_refs)
+                    new_items.append(item)
                 else:
                     new_items.append(item)
             if has_refs:
@@ -651,6 +679,10 @@ def cleanup_unresolved_references(data: dict) -> list[str]:
                 if isinstance(item, UnresolvedReference):
                     unresolved.add(k)
                     items.append(str(item))
+                elif isinstance(item, dict):
+                    for uu in cleanup_unresolved_references(item):
+                        unresolved.add(f"{k}.{uu}")
+                    items.append(item)
                 else:
                     items.append(item)
             data[k] = items
