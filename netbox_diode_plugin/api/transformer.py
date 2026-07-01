@@ -665,7 +665,7 @@ def _update_resolved_refs(data, new_refs):
         elif isinstance(v, dict):
             _update_resolved_refs(v, new_refs)
 
-def cleanup_unresolved_references(data: dict) -> list[str]:
+def cleanup_unresolved_references(data: dict) -> list[str]:  # noqa: C901
     """Find and stringify unresolved references in fields."""
     unresolved = set()
     for k, v in data.items():

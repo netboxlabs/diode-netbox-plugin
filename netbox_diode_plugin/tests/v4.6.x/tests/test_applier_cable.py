@@ -3,7 +3,14 @@
 """Diode NetBox Plugin - Cable apply integration tests."""
 
 from dcim.models import (
-    Cable, CableTermination, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site,
+    Cable,
+    CableTermination,
+    Device,
+    DeviceRole,
+    DeviceType,
+    Interface,
+    Manufacturer,
+    Site,
 )
 from django.test import TestCase
 
@@ -16,6 +23,7 @@ class CableApplyTestCase(TestCase):
 
     @classmethod
     def setUpTestData(cls):
+        """Set up test fixtures."""
         mfr = Manufacturer.objects.create(name="MFR-Cable", slug="mfr-cable")
         dt = DeviceType.objects.create(manufacturer=mfr, model="DT-Cable", slug="dt-cable")
         role = DeviceRole.objects.create(name="Role-Cable", slug="role-cable")
@@ -42,6 +50,7 @@ class CableApplyTestCase(TestCase):
         )
 
     def test_cable_create_materializes_two_terminations(self):
+        """Cable create materializes two terminations."""
         cs = ChangeSet(id="cs-cable-1", changes=[self._cable_change(self.iface_a.pk, self.iface_b.pk)])
         apply_changeset(cs, request=None)
 
@@ -53,6 +62,7 @@ class CableApplyTestCase(TestCase):
         self.assertIn(("B", self.iface_b.pk), term_ids)
 
     def test_already_cabled_interface_fails_change_with_clean_error(self):
+        """Already cabled interface fails change with clean error."""
         # First cable connects A<->B. A second, distinct-termination-set cable
         # that reuses interface A (now already cabled) cannot be matched by
         # CableTerminationSetMatcher (different termination set: A<->C vs A<->B),

@@ -13,6 +13,7 @@ class TransformerImportTestCase(SimpleTestCase):
     """Imports needed by the generic-object-list arm are wired."""
 
     def test_get_generic_object_variant_imported(self):
+        """Get generic object variant imported."""
         self.assertTrue(
             hasattr(transformer, "get_generic_object_variant"),
             "transformer must import get_generic_object_variant from plugin_utils",
@@ -23,6 +24,7 @@ class IsSupportedGenericObjectTestCase(TestCase):
     """is_supported() accepts the generic-object-list field by its list name."""
 
     def test_a_terminations_is_supported(self):
+        """A terminations is supported."""
         supported = extract_supported_models()
         result = transformer._transform_proto_json_1(
             {"a_terminations": [], "b_terminations": []},
@@ -35,7 +37,8 @@ class IsSupportedGenericObjectTestCase(TestCase):
         self.assertNotIn("b_terminations", node["_warnings"])
 
     def test_a_terminations_list_processing_non_empty(self):
-        """Non-empty a_terminations with a valid generic-object item returns 200.
+        """
+        Non-empty a_terminations with a valid generic-object item returns 200.
 
         Each item is a GenericObject dict such as {"object_interface": {...}}.
         The list-processing branch calls get_generic_object_variant to resolve
@@ -121,6 +124,7 @@ class GenericObjectListExtractionTestCase(TestCase):
         return {"name": "p1", "device": {"name": "Device A"}}
 
     def test_each_variant_extracts_termination_dict_and_refs(self):
+        """Each variant extracts termination dict and refs."""
         supported = extract_supported_models()
         for variant_key, expected_ot in self.CERTIFIED:
             with self.subTest(variant=variant_key):
@@ -147,6 +151,7 @@ class UnsupportedVariantTestCase(TestCase):
     """Unknown/unsupported variant warns and skips that one termination."""
 
     def test_unknown_key_warns_and_skips_keeps_cable(self):
+        """Unknown key warns and skips keeps cable."""
         supported = extract_supported_models()
         entity = {
             "a_terminations": [
@@ -174,6 +179,7 @@ class Obs1080AndMultiTerminationTestCase(TestCase):
     """OBS-1080 payload transforms cleanly; multi-object-per-end is supported."""
 
     def test_obs_1080_payload_extracts_both_interfaces(self):
+        """Obs 1080 payload extracts both interfaces."""
         # NOTE: IsSupportedGenericObjectTestCase.test_a_terminations_list_processing_non_empty
         # already covers the single-interface-per-end path.  This test is distinct in that it
         # exercises both a_terminations AND b_terminations simultaneously and asserts the two
@@ -195,6 +201,7 @@ class Obs1080AndMultiTerminationTestCase(TestCase):
         self.assertIn(b_uuid, cable["_refs"])
 
     def test_multi_object_per_end(self):
+        """Multi object per end."""
         supported = extract_supported_models()
         entity = {
             "a_terminations": [

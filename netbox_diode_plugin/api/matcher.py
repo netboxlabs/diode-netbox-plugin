@@ -698,7 +698,8 @@ class GlobalIPNetworkIPMatcher:
 
 @dataclass
 class CableTerminationSetMatcher:
-    """Match a Cable by its canonical set of terminations (spec 5.3, contract F/G).
+    """
+    Match a Cable by its canonical set of terminations (spec 5.3, contract F/G).
 
     Cable has no DB unique constraint; identity is the sorted set of
     (object_type, logical-id) termination tuples across BOTH ends, with
@@ -722,7 +723,8 @@ class CableTerminationSetMatcher:
         return bool(a) and bool(b) and isinstance(a, list) and isinstance(b, list)
 
     def _reduce(self, term: dict):
-        """Reduce one termination dict to a hashable (object_type, logical_id) tuple.
+        """
+        Reduce one termination dict to a hashable (object_type, logical_id) tuple.
 
         logical_id is the resolved pk (int) when available; at transform time
         object_id is an UnresolvedReference -> reduce to ("__uuid__", uuid)
@@ -756,7 +758,8 @@ class CableTerminationSetMatcher:
         return reduced
 
     def fingerprint(self, data: dict) -> str | None:
-        """Order-insensitive hash over the union of A+B reduced tuples.
+        """
+        Order-insensitive hash over the union of A+B reduced tuples.
 
         Best-effort in-batch dedup: may be computed over uuids when terminations
         are unresolved. Authoritative matching is build_queryset.
@@ -771,7 +774,8 @@ class CableTerminationSetMatcher:
         )
 
     def build_queryset(self, data: dict) -> models.QuerySet | None:
-        """Authoritative exact-set match over real CableTermination rows.
+        """
+        Authoritative exact-set match over real CableTermination rows.
 
         Annotate the termination count per Cable, require count == requested
         count, then require every requested (termination_type ct_id,
@@ -1127,7 +1131,9 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     cacheable.
     """
     if object_type == "dcim.cable":
-        return None  # cable identity lives entirely in list fields skipped by the scalar-only cache key; always run the authoritative build_queryset matcher loop
+        # Cable identity lives entirely in list fields skipped by the scalar-only
+        # cache key; always run the authoritative build_queryset matcher loop.
+        return None
 
     items = []
     for k, v in sorted(data.items()):

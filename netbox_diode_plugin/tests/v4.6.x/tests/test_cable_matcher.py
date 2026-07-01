@@ -17,14 +17,20 @@ from netbox_diode_plugin.api.plugin_utils import get_object_type_model
 
 
 class RequiresPreSaveMatchTestCase(TestCase):
+    """Tests for requires_pre_save_match on dcim.cable."""
+
     def test_dcim_cable_requires_pre_save_match(self):
+        """Dcim cable requires pre save match."""
         # Cable has no DB unique constraint; uniqueness lives on CableTermination,
         # so the applier must look up an existing cable before CREATE (spec 5.3, contract H).
         self.assertTrue(requires_pre_save_match("dcim.cable"))
 
 
 class CableTerminationSetMatcherFingerprintTestCase(TestCase):
+    """Tests for CableTerminationSetMatcher.fingerprint."""
+
     def setUp(self):
+        """Set up test fixtures."""
         self.matcher = CableTerminationSetMatcher(
             model_class=get_object_type_model("dcim.cable"),
             name="logical_cable_termination_set",
@@ -37,24 +43,29 @@ class CableTerminationSetMatcherFingerprintTestCase(TestCase):
         }
 
     def test_has_required_fields_both_ends_nonempty(self):
+        """Has required fields both ends nonempty."""
         self.assertTrue(self.matcher.has_required_fields(
             self._data([("dcim.interface", 1)], [("dcim.interface", 2)])))
 
     def test_has_required_fields_missing_end(self):
+        """Has required fields missing end."""
         self.assertFalse(self.matcher.has_required_fields(
             {"a_terminations": [{"object_type": "dcim.interface", "object_id": 1}]}))
 
     def test_has_required_fields_empty_list(self):
+        """Has required fields empty list."""
         self.assertFalse(self.matcher.has_required_fields(
             {"a_terminations": [], "b_terminations": [{"object_type": "dcim.interface", "object_id": 2}]}))
 
     def test_fingerprint_equal_under_ab_swap(self):
+        """Fingerprint equal under ab swap."""
         fp1 = self.matcher.fingerprint(self._data([("dcim.interface", 1)], [("dcim.interface", 2)]))
         fp2 = self.matcher.fingerprint(self._data([("dcim.interface", 2)], [("dcim.interface", 1)]))
         self.assertIsNotNone(fp1)
         self.assertEqual(fp1, fp2)
 
     def test_fingerprint_equal_under_within_end_reorder(self):
+        """Fingerprint equal under within end reorder."""
         fp1 = self.matcher.fingerprint(self._data(
             [("dcim.interface", 1), ("dcim.interface", 3)], [("dcim.interface", 2)]))
         fp2 = self.matcher.fingerprint(self._data(
@@ -62,21 +73,27 @@ class CableTerminationSetMatcherFingerprintTestCase(TestCase):
         self.assertEqual(fp1, fp2)
 
     def test_fingerprint_differs_for_different_set(self):
+        """Fingerprint differs for different set."""
         fp1 = self.matcher.fingerprint(self._data([("dcim.interface", 1)], [("dcim.interface", 2)]))
         fp2 = self.matcher.fingerprint(self._data([("dcim.interface", 1)], [("dcim.interface", 9)]))
         self.assertNotEqual(fp1, fp2)
 
     def test_fingerprint_distinguishes_object_type(self):
+        """Fingerprint distinguishes object type."""
         fp1 = self.matcher.fingerprint(self._data([("dcim.interface", 1)], [("dcim.interface", 2)]))
         fp2 = self.matcher.fingerprint(self._data([("dcim.frontport", 1)], [("dcim.interface", 2)]))
         self.assertNotEqual(fp1, fp2)
 
     def test_fingerprint_none_when_not_matchable(self):
+        """Fingerprint none when not matchable."""
         self.assertIsNone(self.matcher.fingerprint({"a_terminations": []}))
 
 
 class FindObjCacheKeyCableTestCase(TestCase):
+    """Tests for _find_obj_cache_key with dcim.cable."""
+
     def test_find_obj_cache_key_none_for_cable(self):
+        """Find obj cache key none for cable."""
         data = {
             "status": "connected",
             "a_terminations": [{"object_type": "dcim.interface", "object_id": 1}],
@@ -86,7 +103,8 @@ class FindObjCacheKeyCableTestCase(TestCase):
 
 
 class CableTerminationSetMatcherRegistrationTestCase(TestCase):
-    """dcim.cable must resolve to a non-empty matcher list including the set matcher.
+    """
+    dcim.cable must resolve to a non-empty matcher list including the set matcher.
 
     Regression for: CableTerminationSetMatcher was defined but never wired into
     _LOGICAL_MATCHERS, so get_model_matchers("dcim.cable") returned [] and the
@@ -94,6 +112,7 @@ class CableTerminationSetMatcherRegistrationTestCase(TestCase):
     """
 
     def test_get_model_matchers_returns_cable_termination_set_matcher(self):
+        """Get model matchers returns cable termination set matcher."""
         model_class = get_object_type_model("dcim.cable")
         matchers = get_model_matchers(model_class)
         self.assertTrue(
@@ -104,13 +123,15 @@ class CableTerminationSetMatcherRegistrationTestCase(TestCase):
 
 
 class FindExistingObjectCableDbTestCase(TestCase):
-    """DB-backed regression: two distinct cables must not cross-resolve.
+    """
+    DB-backed regression: two distinct cables must not cross-resolve.
 
     Exercises find_existing_object end-to-end (registration + build_queryset)
     against real Cable/CableTermination rows, per brief Step 8.
     """
 
     def setUp(self):
+        """Set up test fixtures."""
         manufacturer = Manufacturer.objects.create(name="CableTestMfr", slug="cable-test-mfr")
         device_type = DeviceType.objects.create(manufacturer=manufacturer, model="CableTestModel", slug="cable-test-model")
         device_role = DeviceRole.objects.create(name="CableTestRole", slug="cable-test-role", color="ff0000")
@@ -154,30 +175,37 @@ class FindExistingObjectCableDbTestCase(TestCase):
         }
 
     def test_finds_correct_cable_for_its_own_termination_set(self):
+        """Finds correct cable for its own termination set."""
         result = find_existing_object(self._data(self.if1, self.if2), "dcim.cable")
         self.assertIsNotNone(result)
         self.assertEqual(result.pk, self.cable_12.pk)
 
     def test_does_not_cross_resolve_distinct_cable(self):
+        """Does not cross resolve distinct cable."""
         result_34 = find_existing_object(self._data(self.if3, self.if4), "dcim.cable")
         self.assertIsNotNone(result_34)
         self.assertEqual(result_34.pk, self.cable_34.pk)
         self.assertNotEqual(result_34.pk, self.cable_12.pk)
 
     def test_ab_swap_still_resolves_same_cable(self):
+        """Ab swap still resolves same cable."""
         # A/B order is insignificant for identity (spec 5.3 contract).
         result = find_existing_object(self._data(self.if2, self.if1), "dcim.cable")
         self.assertIsNotNone(result)
         self.assertEqual(result.pk, self.cable_12.pk)
 
     def test_no_match_for_nonexistent_termination_set(self):
+        """No match for nonexistent termination set."""
         result = find_existing_object(self._data(self.if1, self.if3), "dcim.cable")
         self.assertIsNone(result)
 
 
 class CableTerminationSetMatcherQuerysetTestCase(TestCase):
+    """Tests for CableTerminationSetMatcher.build_queryset."""
+
     @classmethod
     def setUpTestData(cls):
+        """Set Up Test Data."""
         site = Site.objects.create(name="S1", slug="s1")
         mfr = Manufacturer.objects.create(name="M1", slug="m1")
         dt = DeviceType.objects.create(manufacturer=mfr, model="DT1", slug="dt1")
@@ -198,12 +226,14 @@ class CableTerminationSetMatcherQuerysetTestCase(TestCase):
         return {"a_terminations": terms[:1], "b_terminations": terms[1:]}
 
     def test_exact_set_matches(self):
+        """Exact set matches."""
         data = self._data(("dcim.interface", self.if1.pk), ("dcim.interface", self.if2.pk))
         qs = self.matcher.build_queryset(data)
         self.assertIsNotNone(qs)
         self.assertEqual(list(qs.values_list("pk", flat=True)), [self.cable.pk])
 
     def test_exact_set_matches_under_ab_swap(self):
+        """Exact set matches under ab swap."""
         data = {
             "a_terminations": [{"object_type": "dcim.interface", "object_id": self.if2.pk}],
             "b_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
@@ -214,6 +244,7 @@ class CableTerminationSetMatcherQuerysetTestCase(TestCase):
         )
 
     def test_empty_end_returns_none(self):
+        """Empty end returns none."""
         qs = self.matcher.build_queryset(
             {"a_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
              "b_terminations": []}
@@ -221,6 +252,7 @@ class CableTerminationSetMatcherQuerysetTestCase(TestCase):
         self.assertIsNone(qs)  # has_required_fields False for empty b
 
     def test_superset_rejected(self):
+        """Superset rejected."""
         data = {
             "a_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
             "b_terminations": [
@@ -231,6 +263,7 @@ class CableTerminationSetMatcherQuerysetTestCase(TestCase):
         self.assertEqual(list(self.matcher.build_queryset(data)), [])
 
     def test_partial_overlap_rejected(self):
+        """Partial overlap rejected."""
         data = {
             "a_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
             "b_terminations": [{"object_type": "dcim.interface", "object_id": self.if3.pk}],
@@ -238,6 +271,7 @@ class CableTerminationSetMatcherQuerysetTestCase(TestCase):
         self.assertEqual(list(self.matcher.build_queryset(data)), [])
 
     def test_unresolved_returns_none(self):
+        """Unresolved returns none."""
         data = {
             "a_terminations": [{"object_type": "dcim.interface",
                                 "object_id": UnresolvedReference("dcim.interface", "u-1")}],
@@ -246,6 +280,7 @@ class CableTerminationSetMatcherQuerysetTestCase(TestCase):
         self.assertIsNone(self.matcher.build_queryset(data))
 
     def test_find_existing_object_matches_via_matcher(self):
+        """Find existing object matches via matcher."""
         data = {
             "a_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
             "b_terminations": [{"object_type": "dcim.interface", "object_id": self.if2.pk}],
@@ -256,7 +291,10 @@ class CableTerminationSetMatcherQuerysetTestCase(TestCase):
 
 
 class CableFingerprintsNoCrashTestCase(TestCase):
+    """Regression: cable fingerprinting must not crash on edge-case input."""
+
     def test_fingerprints_no_crash_on_termination_dicts(self):
+        """Fingerprints no crash on termination dicts."""
         # Regression for OBS-1080: list-of-dict terminations must not raise
         # "unhashable type: 'dict'" in _fingerprint_all.
         from netbox_diode_plugin.api.matcher import fingerprints

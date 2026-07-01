@@ -13,6 +13,7 @@ class PathHelperListIndexTestCase(SimpleTestCase):
     """_get_path / _set_path must treat all-digit segments as list indices."""
 
     def test_get_path_into_list_of_dicts(self):
+        """Get path into list of dicts."""
         data = {
             "a_terminations": [
                 {"object_type": "dcim.interface", "object_id": "new_object:dcim.interface:u0"},
@@ -23,6 +24,7 @@ class PathHelperListIndexTestCase(SimpleTestCase):
         self.assertEqual(_get_path(data, "a_terminations.1.object_id"), "new_object:dcim.interface:u1")
 
     def test_set_path_into_list_of_dicts(self):
+        """Set path into list of dicts."""
         data = {
             "b_terminations": [
                 {"object_type": "dcim.interface", "object_id": "new_object:dcim.interface:u9"},
@@ -33,6 +35,7 @@ class PathHelperListIndexTestCase(SimpleTestCase):
         self.assertEqual(data["b_terminations"][0]["object_type"], "dcim.interface")
 
     def test_string_keys_still_work(self):
+        """String keys still work."""
         data = {"name": {"nested": "x"}}
         self.assertEqual(_get_path(data, "name.nested"), "x")
         _set_path(data, "name.nested", "y")
@@ -48,6 +51,7 @@ class PreApplyTerminationResolutionTestCase(SimpleTestCase):
     """_pre_apply resolves termination object_id refs to {object_type, object_id: pk}."""
 
     def test_termination_refs_resolve_to_pk_dict_shape(self):
+        """Termination refs resolve to pk dict shape."""
         ref_a = "new_object:dcim.interface:ua"
         ref_b = "new_object:dcim.interface:ub"
         change = Change(
