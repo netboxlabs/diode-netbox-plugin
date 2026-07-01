@@ -6557,5 +6557,294 @@
         "length": 5.0,
         "length_unit": "m"
       }
+    },
+    {
+      "name": "dcim_cable_frontport_rearport",
+      "object_type": "dcim.cable",
+      "lookup": { "label": "Cable FP-RP" },
+      "create_expect": {
+        "label": "Cable FP-RP",
+        "status": "connected",
+        "a_terminations.0.name": "FrontPort1",
+        "b_terminations.0.name": "RearPort2"
+      },
+      "create": {
+        "cable": {
+          "label": "Cable FP-RP",
+          "status": "connected",
+          "a_terminations": [
+            { "object_front_port": {
+                "name": "FrontPort1",
+                "type": "8p8c",
+                "device": {
+                  "name": "Patch Panel A",
+                  "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" },
+                  "site": { "name": "Site 1" }
+                },
+                "rear_port": {
+                  "name": "RearPort1",
+                  "type": "8p8c",
+                  "device": {
+                    "name": "Patch Panel A",
+                    "role": { "name": "Device Role 1" },
+                    "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" },
+                    "site": { "name": "Site 1" }
+                  }
+                }
+            } }
+          ],
+          "b_terminations": [
+            { "object_rear_port": {
+                "name": "RearPort2",
+                "type": "8p8c",
+                "device": {
+                  "name": "Patch Panel B",
+                  "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" },
+                  "site": { "name": "Site 1" }
+                }
+            } }
+          ]
+        }
+      },
+      "update": {
+        "cable": {
+          "label": "Cable FP-RP",
+          "status": "planned",
+          "a_terminations": [
+            { "object_front_port": {
+                "name": "FrontPort1", "type": "8p8c",
+                "device": { "name": "Patch Panel A", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } },
+                "rear_port": { "name": "RearPort1", "type": "8p8c",
+                  "device": { "name": "Patch Panel A", "role": { "name": "Device Role 1" },
+                    "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } } }
+            } }
+          ],
+          "b_terminations": [
+            { "object_rear_port": {
+                "name": "RearPort2", "type": "8p8c",
+                "device": { "name": "Patch Panel B", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ]
+        }
+      },
+      "update_expect": { "status": "planned" }
+    },
+    {
+      "name": "dcim_cable_power",
+      "object_type": "dcim.cable",
+      "lookup": { "label": "Cable PWR" },
+      "create_expect": {
+        "label": "Cable PWR",
+        "a_terminations.0.name": "PowerPort1",
+        "b_terminations.0.name": "PowerOutlet1"
+      },
+      "create": {
+        "cable": {
+          "label": "Cable PWR",
+          "status": "connected",
+          "a_terminations": [
+            { "object_power_port": {
+                "name": "PowerPort1",
+                "device": { "name": "PDU Consumer", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ],
+          "b_terminations": [
+            { "object_power_outlet": {
+                "name": "PowerOutlet1",
+                "device": { "name": "PDU Source", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ]
+        }
+      },
+      "update": {
+        "cable": {
+          "label": "Cable PWR", "status": "connected", "color": "ff0000",
+          "a_terminations": [
+            { "object_power_port": {
+                "name": "PowerPort1",
+                "device": { "name": "PDU Consumer", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ],
+          "b_terminations": [
+            { "object_power_outlet": {
+                "name": "PowerOutlet1",
+                "device": { "name": "PDU Source", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ]
+        }
+      },
+      "update_expect": { "color": "ff0000" }
+    },
+    {
+      "name": "dcim_cable_console",
+      "object_type": "dcim.cable",
+      "lookup": { "label": "Cable CON" },
+      "create_expect": {
+        "label": "Cable CON",
+        "a_terminations.0.name": "ConsolePort1",
+        "b_terminations.0.name": "ConsoleServerPort1"
+      },
+      "create": {
+        "cable": {
+          "label": "Cable CON",
+          "status": "connected",
+          "a_terminations": [
+            { "object_console_port": {
+                "name": "ConsolePort1",
+                "device": { "name": "Console Device", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ],
+          "b_terminations": [
+            { "object_console_server_port": {
+                "name": "ConsoleServerPort1",
+                "device": { "name": "Console Server", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ]
+        }
+      },
+      "update": {
+        "cable": {
+          "label": "Cable CON", "status": "decommissioning",
+          "a_terminations": [
+            { "object_console_port": {
+                "name": "ConsolePort1",
+                "device": { "name": "Console Device", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ],
+          "b_terminations": [
+            { "object_console_server_port": {
+                "name": "ConsoleServerPort1",
+                "device": { "name": "Console Server", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ]
+        }
+      },
+      "update_expect": { "status": "decommissioning" }
+    },
+    {
+      "name": "dcim_cable_circuit",
+      "object_type": "dcim.cable",
+      "lookup": { "label": "Cable CKT" },
+      "create_expect": {
+        "label": "Cable CKT",
+        "a_terminations.0.term_side": "A",
+        "b_terminations.0.name": "eth-ckt"
+      },
+      "create": {
+        "cable": {
+          "label": "Cable CKT",
+          "status": "connected",
+          "a_terminations": [
+            { "object_circuit_termination": {
+                "term_side": "A",
+                "circuit": {
+                  "cid": "CKT-1",
+                  "provider": { "name": "Provider 1" },
+                  "type": { "name": "Circuit Type 1" }
+                },
+                "termination_site": { "name": "Site 1" }
+            } }
+          ],
+          "b_terminations": [
+            { "object_interface": {
+                "name": "eth-ckt",
+                "type": "1000base-t",
+                "device": { "name": "CKT Device", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ]
+        }
+      },
+      "update": {
+        "cable": {
+          "label": "Cable CKT", "status": "planned",
+          "a_terminations": [
+            { "object_circuit_termination": {
+                "term_side": "A",
+                "circuit": {
+                  "cid": "CKT-1",
+                  "provider": { "name": "Provider 1" },
+                  "type": { "name": "Circuit Type 1" }
+                },
+                "termination_site": { "name": "Site 1" }
+            } }
+          ],
+          "b_terminations": [
+            { "object_interface": {
+                "name": "eth-ckt",
+                "type": "1000base-t",
+                "device": { "name": "CKT Device", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ]
+        }
+      },
+      "update_expect": { "status": "planned" }
+    },
+    {
+      "name": "dcim_cable_powerfeed",
+      "object_type": "dcim.cable",
+      "lookup": { "label": "Cable PF" },
+      "create_expect": {
+        "label": "Cable PF",
+        "a_terminations.0.name": "Feed1",
+        "b_terminations.0.name": "PowerPortPF"
+      },
+      "create": {
+        "cable": {
+          "label": "Cable PF",
+          "status": "connected",
+          "a_terminations": [
+            { "object_power_feed": {
+                "name": "Feed1",
+                "power_panel": {
+                  "name": "Panel 1",
+                  "site": { "name": "Site 1" }
+                }
+            } }
+          ],
+          "b_terminations": [
+            { "object_power_port": {
+                "name": "PowerPortPF",
+                "device": { "name": "PF Consumer", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ]
+        }
+      },
+      "update": {
+        "cable": {
+          "label": "Cable PF", "status": "connected", "color": "00ff00",
+          "a_terminations": [
+            { "object_power_feed": {
+                "name": "Feed1",
+                "power_panel": {
+                  "name": "Panel 1",
+                  "site": { "name": "Site 1" }
+                }
+            } }
+          ],
+          "b_terminations": [
+            { "object_power_port": {
+                "name": "PowerPortPF",
+                "device": { "name": "PF Consumer", "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" }, "site": { "name": "Site 1" } }
+            } }
+          ]
+        }
+      },
+      "update_expect": { "color": "00ff00" }
     }
 ]
