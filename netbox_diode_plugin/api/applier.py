@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - API - Applier."""
 
 
+import copy
 import logging
 
 from django.core.exceptions import ObjectDoesNotExist
@@ -165,7 +166,14 @@ def _get_path(data, path):
     return v
 
 def _pre_apply(model_class: models.Model, change: Change, created: dict):
-    data = change.data.copy()
+    # `_set_path` mutates in place along the traversed path, and `new_refs`
+    # paths may descend into lists of dicts (e.g. "a_terminations.0.object_id").
+    # A shallow copy would leave those nested containers shared with
+    # `change.data`, so resolving refs here would permanently overwrite the
+    # original string refs with resolved pks -- breaking any retry of this
+    # same change (e.g. on deadlock) which needs the original refs again.
+    # Deep-copy just enough (dicts/lists) to isolate mutations.
+    data = copy.deepcopy(change.data)
 
     # resolve foreign key references to new objects
     for ref_field in change.new_refs:
