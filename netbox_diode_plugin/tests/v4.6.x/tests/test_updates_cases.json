@@ -6476,5 +6476,86 @@
         "update_expect": {
             "virtual_machine_type.name": "VM Type B"
         }
+    },
+    {
+      "name": "dcim_cable_iface_iface",
+      "object_type": "dcim.cable",
+      "lookup": { "label": "Cable A-B" },
+      "create_expect": {
+        "label": "Cable A-B",
+        "status": "connected",
+        "type": "cat6",
+        "a_terminations.0.name": "GigabitEthernet0/1",
+        "b_terminations.0.name": "GigabitEthernet0/2"
+      },
+      "create": {
+        "cable": {
+          "label": "Cable A-B",
+          "status": "connected",
+          "type": "cat6",
+          "a_terminations": [
+            { "object_interface": {
+                "name": "GigabitEthernet0/1",
+                "type": "1000base-t",
+                "device": {
+                  "name": "Cable Device A",
+                  "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" },
+                  "site": { "name": "Site 1" }
+                }
+            } }
+          ],
+          "b_terminations": [
+            { "object_interface": {
+                "name": "GigabitEthernet0/2",
+                "type": "1000base-t",
+                "device": {
+                  "name": "Cable Device B",
+                  "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" },
+                  "site": { "name": "Site 1" }
+                }
+            } }
+          ]
+        }
+      },
+      "update": {
+        "cable": {
+          "label": "Cable A-B",
+          "status": "connected",
+          "type": "cat6a",
+          "a_terminations": [
+            { "object_interface": {
+                "name": "GigabitEthernet0/2",
+                "type": "1000base-t",
+                "device": {
+                  "name": "Cable Device B",
+                  "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" },
+                  "site": { "name": "Site 1" }
+                }
+            } }
+          ],
+          "b_terminations": [
+            { "object_interface": {
+                "name": "GigabitEthernet0/1",
+                "type": "1000base-t",
+                "device": {
+                  "name": "Cable Device A",
+                  "role": { "name": "Device Role 1" },
+                  "device_type": { "manufacturer": { "name": "Cisco" }, "model": "C2960S" },
+                  "site": { "name": "Site 1" }
+                }
+            } }
+          ],
+          "length": 5.0,
+          "length_unit": "m"
+        }
+      },
+      "update_expect": {
+        "type": "cat6a",
+        "length": 5.0,
+        "length_unit": "m"
+      }
     }
 ]

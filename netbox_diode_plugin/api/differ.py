@@ -98,6 +98,26 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         else:
             prechange_data[field_name] = value
 
+    # Cable.a_terminations / b_terminations are model *properties* (backed by
+    # the reverse `terminations` relation), not real Django model fields, so
+    # they never appear in `fields.items()` above and are silently omitted
+    # from prechange_data. Without this, every re-diff of an already-applied
+    # cable spuriously reports an update (postchange always carries the
+    # resolved terminations; prechange never does), breaking idempotency.
+    # Mirror the {object_type, object_id} shape the transformer produces so
+    # shallow_compare_dict's `!=` sees them as equal when nothing changed.
+    for term_field in ("a_terminations", "b_terminations"):
+        if term_field not in diode_fields or not hasattr(instance, term_field):
+            continue
+        terminations = getattr(instance, term_field)
+        prechange_data[term_field] = [
+            {
+                "object_type": f"{term.__class__._meta.app_label}.{term.__class__._meta.model_name}",
+                "object_id": term.pk,
+            }
+            for term in (terminations or [])
+        ]
+
     if hasattr(instance, "get_custom_fields"):
         # NetBox's instance.get_custom_fields() calls CustomField.objects.get_for_model
         # which uses a request-scoped query_cache - one DB hit per unique model per

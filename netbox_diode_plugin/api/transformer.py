@@ -675,13 +675,13 @@ def cleanup_unresolved_references(data: dict) -> list[str]:  # noqa: C901
             data[k] = str(v)
         elif isinstance(v, list | tuple):
             items = []
-            for item in v:
+            for i, item in enumerate(v):
                 if isinstance(item, UnresolvedReference):
                     unresolved.add(k)
                     items.append(str(item))
                 elif isinstance(item, dict):
                     for uu in cleanup_unresolved_references(item):
-                        unresolved.add(f"{k}.{uu}")
+                        unresolved.add(f"{k}.{i}.{uu}")
                     items.append(item)
                 else:
                     items.append(item)
