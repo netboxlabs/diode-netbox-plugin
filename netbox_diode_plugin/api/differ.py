@@ -106,17 +106,23 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
     # resolved terminations; prechange never does), breaking idempotency.
     # Mirror the {object_type, object_id} shape the transformer produces so
     # shallow_compare_dict's `!=` sees them as equal when nothing changed.
+    # Sort by (object_type, object_id) rather than relying on the reverse
+    # relation's incidental ordering: for multi-termination cables NetBox
+    # gives no ordering guarantee on `terminations`, and postchange data
+    # (transformer/apply-resolved) is not guaranteed to line up positionally
+    # with whatever order the DB happens to return. A stable sort on both
+    # sides keeps list equality in shallow_compare_dict meaningful.
     for term_field in ("a_terminations", "b_terminations"):
         if term_field not in diode_fields or not hasattr(instance, term_field):
             continue
         terminations = getattr(instance, term_field)
-        prechange_data[term_field] = [
+        prechange_data[term_field] = _sorted_termination_refs([
             {
                 "object_type": f"{term.__class__._meta.app_label}.{term.__class__._meta.model_name}",
                 "object_id": term.pk,
             }
             for term in (terminations or [])
-        ]
+        ])
 
     if hasattr(instance, "get_custom_fields"):
         # NetBox's instance.get_custom_fields() calls CustomField.objects.get_for_model
@@ -303,6 +309,15 @@ def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> d
         # currently we only merge tags, but this could be extended to other reference lists?
         if key == "tags":
             result[key] = _merge_reference_list(prechange_data.get(key, []), value)
+        elif key in ("a_terminations", "b_terminations") and isinstance(value, list):
+            # Cable termination lists carry no meaningful order (they are a set
+            # of endpoints, not a sequence), but shallow_compare_dict does a
+            # positional list comparison. prechange_data_from_instance() sorts
+            # its side by (object_type, object_id); sort postchange the same
+            # way here so idempotent re-diffs don't spuriously report a change
+            # when the DB's reverse `terminations` relation and the submitted
+            # payload happen to order multi-termination endpoints differently.
+            result[key] = _sorted_termination_refs(value)
         else:
             result[key] = value
 
@@ -314,6 +329,21 @@ def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> d
                 result["custom_fields"][key] = value
         set_custom_field_defaults(result, instance)
     return result
+
+def _sorted_termination_refs(refs: list) -> list:
+    """Sort a list of {object_type, object_id} termination refs for stable comparison.
+
+    object_id may be an int (resolved) or a string (still-unresolved
+    `new_object:...` reference after cleanup_unresolved_references), so the
+    sort key coerces it to str to avoid cross-type comparison errors.
+    """
+    return sorted(
+        refs,
+        key=lambda t: (t.get("object_type", ""), str(t.get("object_id", "")))
+        if isinstance(t, dict)
+        else (str(t),),
+    )
+
 
 def _merge_reference_list(prechange_list: list, postchange_list: list) -> list:
     """Merge reference lists rather than replacing the full value."""
