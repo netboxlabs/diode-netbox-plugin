@@ -171,6 +171,8 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
     def is_supported(field_name, ref_info):
         if ref_info is None:
             return field_name in supported_fields
+        if ref_info.is_generic_object:
+            return ref_info.field_name in legal_fields(object_type)
         if ref_info.object_type not in supported_models:
             return False
         if ref_info.is_generic:
