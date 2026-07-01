@@ -212,13 +212,13 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
                         continue
                     variant_key = next(iter(item))
                     concrete_type = get_generic_object_variant(variant_key)
-                    if concrete_type is None:
+                    if concrete_type is None or concrete_type not in supported_models:
                         node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
                             f"Skipping unknown generic-object variant key: {variant_key!r}"
                         ]
                         continue
                     item_payload = item[variant_key]
-                    nested = _transform_proto_json_1(item_payload, concrete_type, supported_models, nested_context)
+                    nested = _transform_proto_json_1(item_payload, concrete_type, supported_models)
                     nodes += nested
                     ref_uuid = nested[0]['_uuid']
                     ref_value.append({
