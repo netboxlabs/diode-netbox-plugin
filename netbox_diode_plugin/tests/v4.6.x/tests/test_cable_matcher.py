@@ -5,6 +5,7 @@
 from dcim.models import Cable, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 from django.test import TestCase
 
+from netbox_diode_plugin.api.common import UnresolvedReference
 from netbox_diode_plugin.api.matcher import (
     CableTerminationSetMatcher,
     _find_obj_cache_key,
@@ -172,3 +173,83 @@ class FindExistingObjectCableDbTestCase(TestCase):
     def test_no_match_for_nonexistent_termination_set(self):
         result = find_existing_object(self._data(self.if1, self.if3), "dcim.cable")
         self.assertIsNone(result)
+
+
+class CableTerminationSetMatcherQuerysetTestCase(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        site = Site.objects.create(name="S1", slug="s1")
+        mfr = Manufacturer.objects.create(name="M1", slug="m1")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="DT1", slug="dt1")
+        role = DeviceRole.objects.create(name="R1", slug="r1")
+        dev = Device.objects.create(name="D1", site=site, device_type=dt, role=role)
+        cls.if1 = Interface.objects.create(device=dev, name="eth0", type="1000base-t")
+        cls.if2 = Interface.objects.create(device=dev, name="eth1", type="1000base-t")
+        cls.if3 = Interface.objects.create(device=dev, name="eth2", type="1000base-t")
+        cls.cable = Cable(a_terminations=[cls.if1], b_terminations=[cls.if2])
+        cls.cable.save()
+        cls.matcher = CableTerminationSetMatcher(
+            model_class=get_object_type_model("dcim.cable"),
+            name="logical_cable_termination_set",
+        )
+
+    def _data(self, *pairs):
+        terms = [{"object_type": t, "object_id": i} for t, i in pairs]
+        return {"a_terminations": terms[:1], "b_terminations": terms[1:]}
+
+    def test_exact_set_matches(self):
+        data = self._data(("dcim.interface", self.if1.pk), ("dcim.interface", self.if2.pk))
+        qs = self.matcher.build_queryset(data)
+        self.assertIsNotNone(qs)
+        self.assertEqual(list(qs.values_list("pk", flat=True)), [self.cable.pk])
+
+    def test_exact_set_matches_under_ab_swap(self):
+        data = {
+            "a_terminations": [{"object_type": "dcim.interface", "object_id": self.if2.pk}],
+            "b_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
+        }
+        self.assertEqual(
+            list(self.matcher.build_queryset(data).values_list("pk", flat=True)),
+            [self.cable.pk],
+        )
+
+    def test_empty_end_returns_none(self):
+        qs = self.matcher.build_queryset(
+            {"a_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
+             "b_terminations": []}
+        )
+        self.assertIsNone(qs)  # has_required_fields False for empty b
+
+    def test_superset_rejected(self):
+        data = {
+            "a_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
+            "b_terminations": [
+                {"object_type": "dcim.interface", "object_id": self.if2.pk},
+                {"object_type": "dcim.interface", "object_id": self.if3.pk},
+            ],
+        }
+        self.assertEqual(list(self.matcher.build_queryset(data)), [])
+
+    def test_partial_overlap_rejected(self):
+        data = {
+            "a_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
+            "b_terminations": [{"object_type": "dcim.interface", "object_id": self.if3.pk}],
+        }
+        self.assertEqual(list(self.matcher.build_queryset(data)), [])
+
+    def test_unresolved_returns_none(self):
+        data = {
+            "a_terminations": [{"object_type": "dcim.interface",
+                                "object_id": UnresolvedReference("dcim.interface", "u-1")}],
+            "b_terminations": [{"object_type": "dcim.interface", "object_id": self.if2.pk}],
+        }
+        self.assertIsNone(self.matcher.build_queryset(data))
+
+    def test_find_existing_object_matches_via_matcher(self):
+        data = {
+            "a_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
+            "b_terminations": [{"object_type": "dcim.interface", "object_id": self.if2.pk}],
+        }
+        found = find_existing_object(data, "dcim.cable")
+        self.assertIsNotNone(found)
+        self.assertEqual(found.pk, self.cable.pk)
