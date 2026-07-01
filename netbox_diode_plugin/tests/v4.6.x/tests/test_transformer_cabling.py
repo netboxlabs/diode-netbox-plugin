@@ -225,3 +225,40 @@ class Obs1080AndMultiTerminationTestCase(TestCase):
         for end in ("a_terminations", "b_terminations"):
             for t in cable[end]:
                 hash(t["object_id"])  # must not raise
+
+
+class SameTerminationObjectBothEndsTestCase(TestCase):
+    """Regression: the same logical object referenced by two termination slots
+    in one batch must dedupe to a single surviving ref, with NO dangling ref.
+
+    Before the fix, _update_dict_refs did not recurse into dict items of
+    termination lists, so when the two identical interfaces deduped to one
+    surviving uuid, the second termination kept a stale uuid that was never
+    created -- and _pre_apply's created[stale_uuid] raised an uncaught
+    KeyError (HTTP 500), the OBS-1080 failure class. Runs the FULL pipeline
+    (transform_proto_json) because the rewrite happens in the dedup stage.
+    """
+
+    def test_same_interface_both_ends_no_dangling_ref(self):
+        """Same interface on both ends -> both refs point to the survivor."""
+        supported = extract_supported_models()
+        iface = {"name": "eth0", "device": {"name": "router1"}}
+        entity = {
+            "a_terminations": [{"object_interface": dict(iface)}],
+            "b_terminations": [{"object_interface": dict(iface)}],
+        }
+        entities = transformer.transform_proto_json(entity, "dcim.cable", supported)
+        cable = next(e for e in entities if e["_object_type"] == "dcim.cable")
+        iface_uuids = {
+            e["_uuid"] for e in entities if e["_object_type"] == "dcim.interface"
+        }
+        # the two identical interfaces dedupe to exactly one surviving node
+        self.assertEqual(len(iface_uuids), 1)
+        a_ref = cable["a_terminations"][0]["object_id"]
+        b_ref = cable["b_terminations"][0]["object_id"]
+        self.assertIsInstance(a_ref, UnresolvedReference)
+        self.assertIsInstance(b_ref, UnresolvedReference)
+        # BOTH terminations reference the surviving interface (no dangling uuid)
+        self.assertIn(a_ref.uuid, iface_uuids)
+        self.assertIn(b_ref.uuid, iface_uuids)
+        self.assertEqual(a_ref.uuid, b_ref.uuid)

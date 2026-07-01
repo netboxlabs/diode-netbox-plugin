@@ -53,6 +53,13 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         except IntegrityError as e:
             logger.error(f"Integrity error {object_type}: {e} {data}")
             raise _err(f"created a conflict with an existing {object_type}", object_type, "__all__")
+        except KeyError as e:
+            # A new_refs path referenced an object that was never created
+            # (e.g. a dangling or rewritten termination reference). Surface a
+            # clean per-entity deviation instead of an uncaught 500 -- the
+            # OBS-1080 failure class this feature set out to eliminate.
+            logger.error(f"unresolved reference applying {object_type}: {e}")
+            raise _err(f"unresolved reference applying {object_type}", object_type, "__all__")
 
     return ChangeSetResult(
         id=change_set.id,
@@ -187,6 +194,12 @@ def _pre_apply(model_class: models.Model, change: Change, created: dict):
                     ref_list.append(ref)
             _set_path(data, ref_field, ref_list)
         else:
+            if isinstance(v, int):
+                # `v` is already a resolved pk. This happens when a termination
+                # list is re-sorted (differ) after new_refs paths were computed,
+                # moving an already-resolved entry into an index that new_refs
+                # still lists. Nothing to resolve.
+                continue
             _set_path(data, ref_field, created[v].pk)
 
     # ignore? fields that are not in the data model (error?)

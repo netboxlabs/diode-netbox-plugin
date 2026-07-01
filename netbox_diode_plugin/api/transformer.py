@@ -587,6 +587,13 @@ def _update_dict_refs(data, new_refs):
             for item in v:
                 if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
                     item.uuid = new_refs[item.uuid]
+                elif isinstance(item, dict):
+                    # Refs nested in a list of dicts (e.g. cable
+                    # a_terminations/b_terminations = [{object_type,
+                    # object_id: UnresolvedReference}]) must be rewritten too
+                    # when the referenced entity dedupes to a surviving uuid;
+                    # otherwise a stale ref survives and later fails to resolve.
+                    _update_dict_refs(item, new_refs)
         elif isinstance(v, dict):
             _update_dict_refs(v, new_refs)
 
