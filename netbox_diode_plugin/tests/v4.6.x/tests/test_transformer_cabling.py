@@ -168,3 +168,49 @@ class UnsupportedVariantTestCase(TestCase):
         self.assertIn("b_terminations", cable["_warnings"])
         self.assertTrue(any("object_not_a_real_variant" in w for w in cable["_warnings"]["a_terminations"]))
         self.assertTrue(any("object_cable_termination" in w for w in cable["_warnings"]["b_terminations"]))
+
+
+class Obs1080AndMultiTerminationTestCase(TestCase):
+    """OBS-1080 payload transforms cleanly; multi-object-per-end is supported."""
+
+    def test_obs_1080_payload_extracts_both_interfaces(self):
+        supported = extract_supported_models()
+        entity = {
+            "a_terminations": [{"object_interface": {"name": "eth0", "device": {"name": "A"}}}],
+            "b_terminations": [{"object_interface": {"name": "eth1", "device": {"name": "B"}}}],
+        }
+        nodes = transformer._transform_proto_json_1(entity, "dcim.cable", supported)
+        cable = nodes[0]
+        self.assertEqual(cable["a_terminations"][0]["object_type"], "dcim.interface")
+        self.assertEqual(cable["b_terminations"][0]["object_type"], "dcim.interface")
+        ifaces = [n for n in nodes[1:] if n["_object_type"] == "dcim.interface"]
+        self.assertEqual(len(ifaces), 2)
+        a_uuid = cable["a_terminations"][0]["object_id"].uuid
+        b_uuid = cable["b_terminations"][0]["object_id"].uuid
+        self.assertIn(a_uuid, cable["_refs"])
+        self.assertIn(b_uuid, cable["_refs"])
+
+    def test_multi_object_per_end(self):
+        supported = extract_supported_models()
+        entity = {
+            "a_terminations": [
+                {"object_interface": {"name": "eth0", "device": {"name": "A"}}},
+                {"object_interface": {"name": "eth1", "device": {"name": "A"}}},
+            ],
+            "b_terminations": [
+                {"object_front_port": {"name": "fp0", "device": {"name": "B"}}},
+                {"object_front_port": {"name": "fp1", "device": {"name": "B"}}},
+            ],
+        }
+        nodes = transformer._transform_proto_json_1(entity, "dcim.cable", supported)
+        cable = nodes[0]
+        self.assertEqual(len(cable["a_terminations"]), 2)
+        self.assertEqual(len(cable["b_terminations"]), 2)
+        self.assertEqual({t["object_type"] for t in cable["a_terminations"]}, {"dcim.interface"})
+        self.assertEqual({t["object_type"] for t in cable["b_terminations"]}, {"dcim.frontport"})
+        for end in ("a_terminations", "b_terminations"):
+            for t in cable[end]:
+                self.assertIn(t["object_id"].uuid, cable["_refs"])
+        for end in ("a_terminations", "b_terminations"):
+            for t in cable[end]:
+                hash(t["object_id"])  # must not raise
