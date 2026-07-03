@@ -307,6 +307,97 @@ class CableEndSwapNoopTestCase(TestCase):
         self.assertEqual(cable.label, "Stale Cable Relabeled")
 
 
+class CablePartitionTestCase(TestCase):
+    """
+    Pre-save-match strip is A/B-grouping aware, not a blanket drop.
+
+    The set matcher finds a cable by its A/B-insensitive termination set, so a
+    stale CREATE for the same set matches it. Stripping terminations is correct
+    only when the submitted grouping equals the existing one up to a whole-end
+    swap; a genuine repartition (same set, different grouping) must be applied,
+    consistent with the differ UPDATE path — not silently dropped.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        """Seed a device with three interfaces for multi-termination cables."""
+        mfr = Manufacturer.objects.create(name="MFR-Part", slug="mfr-part")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="DT-Part", slug="dt-part")
+        role = DeviceRole.objects.create(name="Role-Part", slug="role-part")
+        site = Site.objects.create(name="Site-Part", slug="site-part")
+        cls.dev_a = Device.objects.create(name="Part Device A", device_type=dt, role=role, site=site)
+        cls.dev_b = Device.objects.create(name="Part Device B", device_type=dt, role=role, site=site)
+        cls.if1 = Interface.objects.create(device=cls.dev_a, name="p-eth0", type="1000base-t")
+        cls.if2 = Interface.objects.create(device=cls.dev_a, name="p-eth1", type="1000base-t")
+        cls.if3 = Interface.objects.create(device=cls.dev_b, name="p-eth2", type="1000base-t")
+
+    def _terms(self, *ifaces):
+        return [{"object_type": "dcim.interface", "object_id": i.pk} for i in ifaces]
+
+    def _seed(self, label, a_ifaces, b_ifaces):
+        cable = Cable(a_terminations=list(a_ifaces), b_terminations=list(b_ifaces))
+        cable.label = label
+        cable.status = "connected"
+        cable.save()
+        return cable
+
+    def _apply_create(self, cs_id, label, a_ifaces, b_ifaces):
+        cs = ChangeSet(
+            id=cs_id,
+            changes=[
+                Change(
+                    change_type=ChangeType.CREATE,
+                    object_type="dcim.cable",
+                    ref_id=f"new_object:dcim.cable:{cs_id}",
+                    data={
+                        "status": "connected",
+                        "label": label,
+                        "a_terminations": self._terms(*a_ifaces),
+                        "b_terminations": self._terms(*b_ifaces),
+                    },
+                    new_refs=[],
+                )
+            ],
+        )
+        apply_changeset(cs, request=None)
+
+    def _grouping(self, cable):
+        cable.refresh_from_db()
+        return {(t.termination_id, t.cable_end) for t in CableTermination.objects.filter(cable=cable)}
+
+    def test_genuine_repartition_is_applied(self):
+        """A:[if1,if2]/B:[if3] re-fed as A:[if1]/B:[if2,if3] moves if2 A->B."""
+        cable = self._seed("Repart", [self.if1, self.if2], [self.if3])
+        self.assertEqual(
+            self._grouping(cable),
+            {(self.if1.pk, "A"), (self.if2.pk, "A"), (self.if3.pk, "B")},
+        )
+        # stale CREATE with the same set but if2 moved to end B (+ relabel)
+        self._apply_create("cs-repart", "Repart-Relabeled", [self.if1], [self.if2, self.if3])
+        self.assertEqual(Cable.objects.filter(label__startswith="Repart").count(), 1)
+        self.assertEqual(
+            self._grouping(cable),
+            {(self.if1.pk, "A"), (self.if2.pk, "B"), (self.if3.pk, "B")},
+        )
+        cable.refresh_from_db()
+        self.assertEqual(cable.label, "Repart-Relabeled")
+
+    def test_whole_end_swap_stays_noop(self):
+        """A whole-end swap of a multi-termination cable does not toggle cable_end."""
+        cable = self._seed("Swap", [self.if1, self.if2], [self.if3])
+        before = self._grouping(cable)
+        # swap ends: A<->B (same grouping, opposite labels)
+        self._apply_create("cs-swap", "Swap", [self.if3], [self.if1, self.if2])
+        self.assertEqual(self._grouping(cable), before)
+
+    def test_within_end_reorder_stays_noop(self):
+        """Reordering terminations within an end changes nothing (same grouping)."""
+        cable = self._seed("Reorder", [self.if1, self.if2], [self.if3])
+        before = self._grouping(cable)
+        self._apply_create("cs-reorder", "Reorder", [self.if2, self.if1], [self.if3])
+        self.assertEqual(self._grouping(cable), before)
+
+
 class ApplierKeyErrorScopeTestCase(TestCase):
     """Only missing new_object references become clean per-entity errors."""
 

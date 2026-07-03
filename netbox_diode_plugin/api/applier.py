@@ -90,7 +90,7 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
         instance = find_existing_object(data, object_type)
         if instance:
             snapshot_for_apply(instance)
-            update_data = _strip_matched_cable_terminations(data, object_type)
+            update_data = _strip_matched_cable_terminations(data, object_type, instance)
             serializer = serializer_class(instance, data=update_data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             result = serializer.save()
@@ -101,21 +101,43 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
     return None
 
 
-def _strip_matched_cable_terminations(data: dict, object_type: str) -> dict:
+def _strip_matched_cable_terminations(data: dict, object_type: str, instance) -> dict:
     """
     Drop termination fields from a pre-save-matched cable's update.
 
     The cable matcher finds an existing cable by its A/B-insensitive
-    termination SET, so the set is identical by construction. Re-saving the
-    submitted terminations could only change the A/B/ordering assignment,
-    needlessly rewriting CableTermination.cable_end (and letting a stale,
-    end-swapped CREATE toggle it). Update attributes only; leave the existing
-    terminations intact. The differ's _align_cable_ends covers the plan-time
-    UPDATE path; this covers the applier pre-save-match path.
+    termination SET, so the set is identical by construction. Strip the
+    terminations ONLY when the submitted A/B grouping equals the existing one
+    up to a whole-end swap (identical, within-end reorder, or a pure swap) --
+    re-saving those would only churn CableTermination.cable_end (and let a
+    stale, end-swapped CREATE toggle it). A genuine repartition (same set,
+    different grouping) is passed through so the serializer applies it, keeping
+    this path consistent with the differ UPDATE path (which applies it too).
     """
     if object_type != "dcim.cable":
         return data
-    return {k: v for k, v in data.items() if k not in ("a_terminations", "b_terminations")}
+    if _cable_partition_matches(instance, data):
+        return {k: v for k, v in data.items() if k not in ("a_terminations", "b_terminations")}
+    return data
+
+
+def _cable_partition_matches(instance, data: dict) -> bool:
+    """True if data's A/B grouping equals the instance's, up to a whole-end swap."""
+    def _submitted(field):
+        return frozenset(
+            (t["object_type"], t["object_id"])
+            for t in data.get(field, [])
+            if isinstance(t, dict) and isinstance(t.get("object_id"), int)
+        )
+
+    def _existing(objs):
+        return frozenset(
+            (f"{o._meta.app_label}.{o._meta.model_name}", o.pk) for o in objs
+        )
+
+    sub_a, sub_b = _submitted("a_terminations"), _submitted("b_terminations")
+    exist_a, exist_b = _existing(instance.a_terminations), _existing(instance.b_terminations)
+    return (sub_a == exist_a and sub_b == exist_b) or (sub_a == exist_b and sub_b == exist_a)
 
 
 def _create_or_find_instance(data: dict, object_type: str, serializer_class, request):
