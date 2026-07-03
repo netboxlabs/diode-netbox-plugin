@@ -798,6 +798,15 @@ class CableTerminationSetMatcher:
         if not pairs:
             return None
 
+        # A cable cannot terminate the same object twice (CableTermination has
+        # a unique (termination_type, termination_id) constraint). A duplicate
+        # pair would both inflate len(pairs) and be satisfiable by one shared
+        # termination row (each filter is a separate join), letting an invalid
+        # payload like A:[if1] B:[if1] false-match a larger cable containing
+        # if1. Not authoritatively matchable -> let the serializer reject it.
+        if len(set(pairs)) != len(pairs):
+            return None
+
         qs = self.model_class.objects.annotate(
             _term_count=models.Count("terminations")
         ).filter(_term_count=len(pairs))

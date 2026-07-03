@@ -279,6 +279,21 @@ class CableTerminationSetMatcherQuerysetTestCase(TestCase):
         }
         self.assertIsNone(self.matcher.build_queryset(data))
 
+    def test_duplicate_pair_returns_none(self):
+        """
+        A:[if1] B:[if1] must not false-match the if1<->if2 cable.
+
+        The same object on both ends is an invalid cable (unique termination
+        constraint). Without dedup, len(pairs)==2 and both existence filters
+        are satisfied by the single if1 row of cable if1<->if2, matching it.
+        build_queryset must return None so the serializer rejects the payload.
+        """
+        data = {
+            "a_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
+            "b_terminations": [{"object_type": "dcim.interface", "object_id": self.if1.pk}],
+        }
+        self.assertIsNone(self.matcher.build_queryset(data))
+
     def test_multi_termination_per_end_exact_match(self):
         """
         A cable with 2 terminations on one end matches its exact 3-set.
