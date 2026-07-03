@@ -15,7 +15,7 @@ from dcim.models import (
 from django.test import TestCase
 
 from netbox_diode_plugin.api.applier import apply_changeset
-from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeType
+from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeSetException, ChangeType
 from netbox_diode_plugin.api.differ import generate_changeset
 
 
@@ -73,7 +73,7 @@ class CableApplyTestCase(TestCase):
         apply_changeset(cs1, request=None)
 
         cs2 = ChangeSet(id="cs-cable-b", changes=[self._cable_change(self.iface_a.pk, self.iface_c.pk, label="Cable 2")])
-        with self.assertRaises(Exception) as ctx:
+        with self.assertRaises(ChangeSetException) as ctx:
             apply_changeset(cs2, request=None)
         msg = str(ctx.exception).lower()
         self.assertTrue(
@@ -260,7 +260,6 @@ class ApplierKeyErrorScopeTestCase(TestCase):
 
     def test_dangling_new_object_ref_is_clean_error(self):
         """A missing new_object ref surfaces as ChangeSetException, not a 500."""
-        from netbox_diode_plugin.api.common import ChangeSetException
         cs = ChangeSet(
             id="cs-keyerr-1",
             changes=[self._change({"status": "connected", "label": "new_object:dcim.interface:missing"}, ["label"])],
