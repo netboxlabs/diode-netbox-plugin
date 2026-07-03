@@ -2035,6 +2035,57 @@ class GenerateDiffAndApplyTestCase(APITestCase):
             f"Expected no changes on re-diff, but got: {changes}"
         )
 
+    def test_all_digit_name_object_cf_resolves_new_ref(self):
+        """
+        A CF whose name is all digits must resolve a new object ref, not 500.
+
+        NetBox permits all-digit custom field names (validator ^[a-z0-9_]+$).
+        The apply-time new_refs path for such a CF is "custom_fields.<digits>";
+        the ref-resolution path helpers must not coerce that dict key to a list
+        index (which would KeyError on the string-keyed custom_fields dict and,
+        because the KeyError arg is an int, bypass the unresolved-ref handler
+        and surface as a 500).
+        """
+        cf = CustomField.objects.create(
+            name='12345',
+            type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            required=False,
+            related_object_type=ObjectType.objects.get_for_model(Site),
+        )
+        cf.object_types.set([ObjectType.objects.get_for_model(Device)])
+        cf.save()
+
+        payload = {
+            "timestamp": 1,
+            "object_type": "dcim.device",
+            "entity": {
+                "device": {
+                    "name": "DigitCF-Device",
+                    "role": {"name": "DigitCF-Role"},
+                    "site": {"name": "DigitCF-Site-Primary"},
+                    "device_type": {
+                        "model": "DigitCF-Model",
+                        "manufacturer": {"name": "DigitCF-Manufacturer"},
+                    },
+                    # References a site that does not exist yet -> the CF ref is
+                    # unresolved and must be resolved at apply via new_refs.
+                    "custom_fields": {
+                        "12345": {
+                            "multiple_objects": [
+                                {"site": {"name": "DigitCF-Site-New"}},
+                            ],
+                        },
+                    },
+                },
+            },
+        }
+
+        # apply must succeed (diff_and_apply asserts 200 on both calls)
+        self.diff_and_apply(payload)
+        device = Device.objects.get(name="DigitCF-Device")
+        new_site = Site.objects.get(name="DigitCF-Site-New")
+        self.assertEqual(device.custom_field_data['12345'], [new_site.pk])
+
     def diff_and_apply(self, payload):
         """Diff and apply the payload."""
         response1 = self.client.post(

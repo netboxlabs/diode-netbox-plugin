@@ -154,25 +154,24 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             invalidate_find_obj_entry(change.object_type, instance.id)
 
 def _set_path(data, path, value):
-    path = path.split(".")
-    key = path.pop(0)
-    if key.isdigit():
-        key = int(key)
-    while len(path) > 0:
-        data = data[key]
-        key = path.pop(0)
-        if key.isdigit():
-            key = int(key)
-    data[key] = value
+    keys = path.split(".")
+    for key in keys[:-1]:
+        data = data[_path_key(data, key)]
+    data[_path_key(data, keys[-1])] = value
 
 def _get_path(data, path):
-    path = path.split(".")
     v = data
-    for p in path:
-        if p.isdigit():
-            p = int(p)
-        v = v[p]
+    for p in path.split("."):
+        v = v[_path_key(v, p)]
     return v
+
+def _path_key(container, key):
+    # Coerce an all-digit segment to a list index ONLY when the container is a
+    # list (e.g. cable "a_terminations.0.object_id"). Dicts keep string keys so
+    # a custom field whose name is all digits still indexes correctly.
+    if isinstance(container, list | tuple) and key.isdigit():
+        return int(key)
+    return key
 
 def _pre_apply(model_class: models.Model, change: Change, created: dict):
     # deep copy: ref resolution mutates nested list/dict containers
