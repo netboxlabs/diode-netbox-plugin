@@ -174,6 +174,39 @@ class UnsupportedVariantTestCase(TestCase):
         self.assertTrue(any("object_not_a_real_variant" in w for w in cable["_warnings"]["a_terminations"]))
         self.assertTrue(any("object_cable_termination" in w for w in cable["_warnings"]["b_terminations"]))
 
+    def test_non_terminable_variant_skipped_without_creating_child(self):
+        """
+        A supported-but-non-terminable variant (object_device) is rejected up front.
+
+        object_device maps to dcim.device (a supported model) but is not a valid
+        cable endpoint. It must warn + skip WITHOUT recursing to create the
+        device node, so no stray dependency object is planned for a cable that
+        would fail at apply.
+        """
+        supported = extract_supported_models()
+        entity = {
+            "a_terminations": [
+                {"object_device": {"name": "Bogus Device", "site": {"name": "S"}}},
+                {"object_interface": {"name": "eth0", "device": {"name": "Device A"}}},
+            ],
+            "b_terminations": [
+                {"object_interface": {"name": "eth1", "device": {"name": "Device B"}}},
+            ],
+        }
+        nodes = transformer._transform_proto_json_1(entity, "dcim.cable", supported)
+        cable = nodes[0]
+        # only the interface termination survived on end A
+        self.assertEqual(len(cable["a_terminations"]), 1)
+        self.assertEqual(cable["a_terminations"][0]["object_type"], "dcim.interface")
+        self.assertIn("a_terminations", cable["_warnings"])
+        self.assertTrue(
+            any("not a valid cable termination type" in w for w in cable["_warnings"]["a_terminations"])
+        )
+        # the rejected termination's device node was NOT created (the valid
+        # interface still brings its own parent device, "Device A")
+        device_names = {n.get("name") for n in nodes if n["_object_type"] == "dcim.device"}
+        self.assertNotIn("Bogus Device", device_names)
+
 
 class MultiTerminationTransformTestCase(TestCase):
     """Termination payloads transform cleanly; multi-object-per-end is supported."""

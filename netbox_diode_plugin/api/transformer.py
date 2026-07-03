@@ -39,6 +39,21 @@ def _camel_to_snake_case(name):
     name = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
     return re.sub("([a-z0-9])([A-Z])", r"\1_\2", name).lower()
 
+@lru_cache(maxsize=1)
+def _cable_terminable_types() -> frozenset:
+    """
+    Object types valid as a cable termination, per NetBox's own constant.
+
+    Resolved from dcim.constants.CABLE_TERMINATION_MODELS so it tracks NetBox
+    rather than a hand-maintained list. Cached: ContentType rows are stable.
+    """
+    from dcim.constants import CABLE_TERMINATION_MODELS
+    from django.contrib.contenttypes.models import ContentType
+    return frozenset(
+        f"{ct.app_label}.{ct.model}"
+        for ct in ContentType.objects.filter(CABLE_TERMINATION_MODELS)
+    )
+
 # these are implied values pushed down to referenced objects.
 _NESTED_CONTEXT = {
     "dcim.interface": {
@@ -224,6 +239,16 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
                         node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
                             f"Skipping generic-object variant {variant_key!r}: "
                             f"{concrete_type} is not supported in this version."
+                        ]
+                        continue
+                    # The GenericObject variant map spans every content type, but
+                    # only NetBox's cable-terminable models are valid endpoints.
+                    # Reject others up front rather than recursing to create the
+                    # child object before the cable serializer rejects it.
+                    if object_type == "dcim.cable" and concrete_type not in _cable_terminable_types():
+                        node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
+                            f"Skipping generic-object variant {variant_key!r}: "
+                            f"{concrete_type} is not a valid cable termination type."
                         ]
                         continue
                     item_payload = item[raw_variant_key]
