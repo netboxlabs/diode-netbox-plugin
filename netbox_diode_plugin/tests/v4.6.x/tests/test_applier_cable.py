@@ -84,7 +84,8 @@ class CableApplyTestCase(TestCase):
 
 
 class CableMultiObjectUpdateTestCase(TestCase):
-    """UPDATE of a multi-object end with mixed new/existing terminations resolves.
+    """
+    UPDATE of a multi-object end with mixed new/existing terminations resolves.
 
     Regression for the new_refs/resort desync: `_generate_changeset` computed
     index paths (``a_terminations.0.object_id``) via

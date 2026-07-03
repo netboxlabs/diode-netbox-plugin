@@ -228,8 +228,8 @@ class Obs1080AndMultiTerminationTestCase(TestCase):
 
 
 class SameTerminationObjectBothEndsTestCase(TestCase):
-    """Regression: the same logical object referenced by two termination slots
-    in one batch must dedupe to a single surviving ref, with NO dangling ref.
+    """
+    Same logical object in two termination slots dedupes with no dangling ref.
 
     Before the fix, _update_dict_refs did not recurse into dict items of
     termination lists, so when the two identical interfaces deduped to one

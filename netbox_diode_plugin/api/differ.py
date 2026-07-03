@@ -251,21 +251,7 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
     for entity in entities:
         prechange_data = {}
         changed_attrs = []
-        # Canonicalize termination-list order BEFORE cleanup_unresolved_references
-        # computes new_refs index paths (e.g. "a_terminations.0.object_id").
-        # _partially_merge later re-sorts these lists with the same key for
-        # stable prechange/postchange comparison; sorting here first makes that
-        # re-sort a no-op, so the index paths stay aligned with the data the
-        # applier resolves. Without this, an UPDATE (netbox_id-matched) whose
-        # end mixes an already-resolved pk (int) with a new unresolved ref
-        # re-sorts after the paths are computed, and the unresolved ref at its
-        # new index is never resolved. str(UnresolvedReference) equals the
-        # "new_object:..." string cleanup writes, so this sort and the
-        # post-cleanup sort order identically.
-        for term_field in ("a_terminations", "b_terminations"):
-            terms = entity.get(term_field)
-            if isinstance(terms, list) and terms:
-                entity[term_field] = _sorted_termination_refs(terms)
+        _canonicalize_termination_order(entity)
         new_refs = cleanup_unresolved_references(entity)
         object_type = entity.pop("_object_type")
         _ = entity.pop("_uuid")
@@ -345,8 +331,30 @@ def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> d
         set_custom_field_defaults(result, instance)
     return result
 
+def _canonicalize_termination_order(entity: dict) -> None:
+    """
+    Sort termination lists in place before new_refs index paths are computed.
+
+    cleanup_unresolved_references emits index paths (e.g.
+    "a_terminations.0.object_id") and _partially_merge later re-sorts these
+    lists with the same key for stable prechange/postchange comparison;
+    sorting here first makes that re-sort a no-op, so the index paths stay
+    aligned with the data the applier resolves. Without this, an UPDATE
+    (netbox_id-matched) whose end mixes an already-resolved pk (int) with a
+    new unresolved ref re-sorts after the paths are computed, and the
+    unresolved ref at its new index is never resolved.
+    str(UnresolvedReference) equals the "new_object:..." string cleanup
+    writes, so this sort and the post-cleanup sort order identically.
+    """
+    for term_field in ("a_terminations", "b_terminations"):
+        terms = entity.get(term_field)
+        if isinstance(terms, list) and terms:
+            entity[term_field] = _sorted_termination_refs(terms)
+
+
 def _sorted_termination_refs(refs: list) -> list:
-    """Sort a list of {object_type, object_id} termination refs for stable comparison.
+    """
+    Sort a list of {object_type, object_id} termination refs for stable comparison.
 
     object_id may be an int (resolved) or a string (still-unresolved
     `new_object:...` reference after cleanup_unresolved_references), so the
