@@ -179,3 +179,100 @@ class CableMultiObjectUpdateTestCase(TestCase):
         self.assertIn(("A", self.iface_a0.pk), term_ids)
         self.assertIn(("A", new_iface.pk), term_ids)
         self.assertIn(("B", self.iface_b0.pk), term_ids)
+
+
+class CableEndSwapNoopTestCase(TestCase):
+    """
+    Re-ingesting the same cable with A/B ends swapped is a NOOP.
+
+    Cable identity is A/B-insensitive; without end alignment in the differ,
+    alternating feeds that flip endpoint order keep generating UPDATEs that
+    only toggle cable_end instead of converging.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        """Seed a cabled interface pair."""
+        mfr = Manufacturer.objects.create(name="MFR-Swap", slug="mfr-swap")
+        cls.dt = DeviceType.objects.create(manufacturer=mfr, model="DT-Swap", slug="dt-swap")
+        cls.role = DeviceRole.objects.create(name="Role-Swap", slug="role-swap")
+        cls.site = Site.objects.create(name="Site-Swap", slug="site-swap")
+        cls.dev_a = Device.objects.create(name="Swap Device A", device_type=cls.dt, role=cls.role, site=cls.site)
+        cls.dev_b = Device.objects.create(name="Swap Device B", device_type=cls.dt, role=cls.role, site=cls.site)
+        cls.iface_a = Interface.objects.create(device=cls.dev_a, name="sw-eth0", type="1000base-t")
+        cls.iface_b = Interface.objects.create(device=cls.dev_b, name="sw-eth1", type="1000base-t")
+
+    def _iface(self, device, name):
+        return {
+            "object_interface": {
+                "name": name,
+                "type": "1000base-t",
+                "device": {
+                    "name": device.name,
+                    "device_type": {"manufacturer": {"name": "MFR-Swap"}, "model": "DT-Swap"},
+                    "role": {"name": "Role-Swap"},
+                    "site": {"name": "Site-Swap"},
+                },
+            }
+        }
+
+    def test_swapped_ends_rediff_is_noop(self):
+        """Swapped-end re-ingest matches the cable and produces no changes."""
+        cs = ChangeSet(
+            id="cs-swap-seed",
+            changes=[
+                Change(
+                    change_type=ChangeType.CREATE,
+                    object_type="dcim.cable",
+                    ref_id="new_object:dcim.cable:swap",
+                    data={
+                        "status": "connected",
+                        "a_terminations": [{"object_type": "dcim.interface", "object_id": self.iface_a.pk}],
+                        "b_terminations": [{"object_type": "dcim.interface", "object_id": self.iface_b.pk}],
+                    },
+                    new_refs=[],
+                )
+            ],
+        )
+        apply_changeset(cs, request=None)
+
+        # same cable, ends flipped
+        entity = {
+            "status": "connected",
+            "a_terminations": [self._iface(self.dev_b, "sw-eth1")],
+            "b_terminations": [self._iface(self.dev_a, "sw-eth0")],
+        }
+        result = generate_changeset(entity, "dcim.cable")
+        self.assertEqual(result.change_set.changes, [])
+
+
+class ApplierKeyErrorScopeTestCase(TestCase):
+    """Only missing new_object references become clean per-entity errors."""
+
+    def _change(self, data, new_refs):
+        return Change(
+            change_type=ChangeType.CREATE,
+            object_type="dcim.cable",
+            ref_id="new_object:dcim.cable:k1",
+            data=data,
+            new_refs=new_refs,
+        )
+
+    def test_dangling_new_object_ref_is_clean_error(self):
+        """A missing new_object ref surfaces as ChangeSetException, not a 500."""
+        from netbox_diode_plugin.api.common import ChangeSetException
+        cs = ChangeSet(
+            id="cs-keyerr-1",
+            changes=[self._change({"status": "connected", "label": "new_object:dcim.interface:missing"}, ["label"])],
+        )
+        with self.assertRaises(ChangeSetException):
+            apply_changeset(cs, request=None)
+
+    def test_unrelated_keyerror_propagates(self):
+        """A KeyError with a non-reference key is a real bug and propagates."""
+        cs = ChangeSet(
+            id="cs-keyerr-2",
+            changes=[self._change({"status": "connected", "label": "not-a-ref"}, ["label"])],
+        )
+        with self.assertRaises(KeyError):
+            apply_changeset(cs, request=None)

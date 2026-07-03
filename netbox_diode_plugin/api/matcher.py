@@ -699,13 +699,12 @@ class GlobalIPNetworkIPMatcher:
 @dataclass
 class CableTerminationSetMatcher:
     """
-    Match a Cable by its canonical set of terminations (spec 5.3, contract F/G).
+    Match a Cable by its canonical set of terminations.
 
     Cable has no DB unique constraint; identity is the sorted set of
     (object_type, logical-id) termination tuples across BOTH ends, with
-    A/B and within-end order insignificant. ObjectMatchCriteria cannot
-    express a related-row set match (scalar-field-only, matcher.py:463-465),
-    so this dedicated matcher is required.
+    A/B and within-end order insignificant. ObjectMatchCriteria is
+    scalar-field-only and cannot express a related-row set match.
     """
 
     model_class: type[models.Model]
@@ -728,8 +727,8 @@ class CableTerminationSetMatcher:
 
         logical_id is the resolved pk (int) when available; at transform time
         object_id is an UnresolvedReference -> reduce to ("__uuid__", uuid)
-        (best-effort in-batch dedup only, spec 5.3). Returns None if the item
-        is not a dict / lacks the expected keys.
+        (best-effort in-batch dedup only). Returns None if the item is not a
+        dict / lacks the expected keys.
         """
         if not isinstance(term, dict):
             return None
@@ -757,7 +756,7 @@ class CableTerminationSetMatcher:
                 reduced.append(r)
         return reduced
 
-    def fingerprint(self, data: dict) -> str | None:
+    def fingerprint(self, data: dict) -> int | None:
         """
         Order-insensitive hash over the union of A+B reduced tuples.
 

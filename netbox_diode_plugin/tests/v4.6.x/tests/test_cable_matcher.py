@@ -295,7 +295,7 @@ class CableFingerprintsNoCrashTestCase(TestCase):
 
     def test_fingerprints_no_crash_on_termination_dicts(self):
         """Fingerprints no crash on termination dicts."""
-        # Regression for OBS-1080: list-of-dict terminations must not raise
+        # regression: list-of-dict terminations must not raise
         # "unhashable type: 'dict'" in _fingerprint_all.
         from netbox_diode_plugin.api.matcher import fingerprints
         data = {

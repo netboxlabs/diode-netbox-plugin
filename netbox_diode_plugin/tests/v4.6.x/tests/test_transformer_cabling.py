@@ -45,10 +45,10 @@ class IsSupportedGenericObjectTestCase(TestCase):
         the concrete object_type ("dcim.interface") and recurses with that type.
         The termination list item is emitted as
         {'object_type': 'dcim.interface', 'object_id': UnresolvedReference(...)}.
-        OBS-1080 payload with non-empty terminations must not raise ValidationError.
+        A payload with non-empty terminations must not raise ValidationError.
         """
         supported = extract_supported_models()
-        # Minimal OBS-1080-style payload: one interface termination on side A.
+        # minimal payload: one interface termination on side A
         payload = {
             "a_terminations": [
                 {"object_interface": {"name": "eth0", "device": {"name": "router1"}}}
@@ -175,11 +175,11 @@ class UnsupportedVariantTestCase(TestCase):
         self.assertTrue(any("object_cable_termination" in w for w in cable["_warnings"]["b_terminations"]))
 
 
-class Obs1080AndMultiTerminationTestCase(TestCase):
-    """OBS-1080 payload transforms cleanly; multi-object-per-end is supported."""
+class MultiTerminationTransformTestCase(TestCase):
+    """Termination payloads transform cleanly; multi-object-per-end is supported."""
 
-    def test_obs_1080_payload_extracts_both_interfaces(self):
-        """Obs 1080 payload extracts both interfaces."""
+    def test_both_end_payload_extracts_both_interfaces(self):
+        """Both-end termination payload extracts both interfaces."""
         # NOTE: IsSupportedGenericObjectTestCase.test_a_terminations_list_processing_non_empty
         # already covers the single-interface-per-end path.  This test is distinct in that it
         # exercises both a_terminations AND b_terminations simultaneously and asserts the two
@@ -235,7 +235,7 @@ class SameTerminationObjectBothEndsTestCase(TestCase):
     termination lists, so when the two identical interfaces deduped to one
     surviving uuid, the second termination kept a stale uuid that was never
     created -- and _pre_apply's created[stale_uuid] raised an uncaught
-    KeyError (HTTP 500), the OBS-1080 failure class. Runs the FULL pipeline
+    KeyError (HTTP 500). Runs the FULL pipeline
     (transform_proto_json) because the rewrite happens in the dedup stage.
     """
 
@@ -262,3 +262,29 @@ class SameTerminationObjectBothEndsTestCase(TestCase):
         self.assertIn(a_ref.uuid, iface_uuids)
         self.assertIn(b_ref.uuid, iface_uuids)
         self.assertEqual(a_ref.uuid, b_ref.uuid)
+
+
+class CamelCaseTerminationTestCase(TestCase):
+    """
+    camelCase protoJSON terminations resolve like snake_case ones.
+
+    Top-level keys are normalized by _ensure_snake_case, but the nested
+    GenericObject variant key (e.g. "objectInterface") arrives untouched and
+    must be normalized before the variant-map lookup.
+    """
+
+    def test_camel_case_variant_keys_extract(self):
+        """aTerminations/objectInterface payload extracts both terminations."""
+        supported = extract_supported_models()
+        entity = {
+            "aTerminations": [{"objectInterface": {"name": "eth0", "device": {"name": "A"}}}],
+            "bTerminations": [{"objectInterface": {"name": "eth1", "device": {"name": "B"}}}],
+        }
+        nodes = transformer._transform_proto_json_1(entity, "dcim.cable", supported)
+        cable = nodes[0]
+        self.assertNotIn("a_terminations", cable["_warnings"])
+        self.assertNotIn("b_terminations", cable["_warnings"])
+        for end in ("a_terminations", "b_terminations"):
+            self.assertEqual(len(cable[end]), 1)
+            self.assertEqual(cable[end][0]["object_type"], "dcim.interface")
+            self.assertIsInstance(cable[end][0]["object_id"], UnresolvedReference)

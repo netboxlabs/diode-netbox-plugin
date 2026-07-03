@@ -98,20 +98,11 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         else:
             prechange_data[field_name] = value
 
-    # Cable.a_terminations / b_terminations are model *properties* (backed by
-    # the reverse `terminations` relation), not real Django model fields, so
-    # they never appear in `fields.items()` above and are silently omitted
-    # from prechange_data. Without this, every re-diff of an already-applied
-    # cable spuriously reports an update (postchange always carries the
-    # resolved terminations; prechange never does), breaking idempotency.
-    # Mirror the {object_type, object_id} shape the transformer produces so
-    # shallow_compare_dict's `!=` sees them as equal when nothing changed.
-    # Sort by (object_type, object_id) rather than relying on the reverse
-    # relation's incidental ordering: for multi-termination cables NetBox
-    # gives no ordering guarantee on `terminations`, and postchange data
-    # (transformer/apply-resolved) is not guaranteed to line up positionally
-    # with whatever order the DB happens to return. A stable sort on both
-    # sides keeps list equality in shallow_compare_dict meaningful.
+    # Cable terminations are model properties (reverse `terminations`
+    # relation), not Django fields, so the loop above omits them and every
+    # re-diff of an applied cable would spuriously report an update. Capture
+    # them in the transformer's {object_type, object_id} shape, sorted for
+    # stable comparison (the relation has no ordering guarantee).
     for term_field in ("a_terminations", "b_terminations"):
         if term_field not in diode_fields or not hasattr(instance, term_field):
             continue
@@ -269,6 +260,7 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
                 # this is also important for custom fields because they do not appear to
                 # respsect paritial update serialization.
                 entity = _partially_merge(prechange_data, entity, instance)
+                _align_cable_ends(prechange_data, entity)
             changed_data = shallow_compare_dict(
                 prechange_data, entity,
             )
@@ -311,13 +303,8 @@ def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> d
         if key == "tags":
             result[key] = _merge_reference_list(prechange_data.get(key, []), value)
         elif key in ("a_terminations", "b_terminations") and isinstance(value, list):
-            # Cable termination lists carry no meaningful order (they are a set
-            # of endpoints, not a sequence), but shallow_compare_dict does a
-            # positional list comparison. prechange_data_from_instance() sorts
-            # its side by (object_type, object_id); sort postchange the same
-            # way here so idempotent re-diffs don't spuriously report a change
-            # when the DB's reverse `terminations` relation and the submitted
-            # payload happen to order multi-termination endpoints differently.
+            # termination lists are sets of endpoints; sort both sides the
+            # same way so positional list comparison stays meaningful
             result[key] = _sorted_termination_refs(value)
         else:
             result[key] = value
@@ -335,21 +322,37 @@ def _canonicalize_termination_order(entity: dict) -> None:
     """
     Sort termination lists in place before new_refs index paths are computed.
 
-    cleanup_unresolved_references emits index paths (e.g.
-    "a_terminations.0.object_id") and _partially_merge later re-sorts these
-    lists with the same key for stable prechange/postchange comparison;
-    sorting here first makes that re-sort a no-op, so the index paths stay
-    aligned with the data the applier resolves. Without this, an UPDATE
-    (netbox_id-matched) whose end mixes an already-resolved pk (int) with a
-    new unresolved ref re-sorts after the paths are computed, and the
-    unresolved ref at its new index is never resolved.
-    str(UnresolvedReference) equals the "new_object:..." string cleanup
-    writes, so this sort and the post-cleanup sort order identically.
+    _partially_merge later re-sorts these lists with the same key; sorting
+    first makes that a no-op, so index paths like "a_terminations.0.object_id"
+    stay aligned with the data the applier resolves (a later re-sort would
+    strand an unresolved ref at an index no path names).
     """
     for term_field in ("a_terminations", "b_terminations"):
         terms = entity.get(term_field)
         if isinstance(terms, list) and terms:
             entity[term_field] = _sorted_termination_refs(terms)
+
+
+def _align_cable_ends(prechange_data: dict, entity: dict) -> None:
+    """
+    Keep the existing A/B end assignment when the submitted ends are swapped.
+
+    Cable identity is A/B-insensitive, so a feed that reports the same two
+    termination sets with the ends flipped is the same cable; without this,
+    each such re-ingest diffs as an UPDATE that only flips cable_end, and
+    alternating feeds toggle forever instead of converging. Only a pure swap
+    is realigned (both submitted ends exactly equal the opposite existing
+    ends), which also guarantees all refs are resolved pks.
+    """
+    pre_a = prechange_data.get("a_terminations")
+    pre_b = prechange_data.get("b_terminations")
+    post_a = entity.get("a_terminations")
+    post_b = entity.get("b_terminations")
+    if not (pre_a and pre_b and post_a and post_b):
+        return
+    if post_a != pre_a and post_a == pre_b and post_b == pre_a:
+        entity["a_terminations"] = post_b
+        entity["b_terminations"] = post_a
 
 
 def _sorted_termination_refs(refs: list) -> list:

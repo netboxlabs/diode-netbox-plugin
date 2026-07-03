@@ -203,21 +203,24 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
             ref_value = []
             for item in value:
                 if ref_info.is_generic_object:
-                    # Each item is a GenericObject dict, e.g. {"object_interface": {...}}.
-                    # Resolve the concrete object_type from the single variant key.
+                    # Single-key GenericObject wrapper: the key names the
+                    # variant, e.g. {"object_interface": {...}}.
                     if not isinstance(item, dict) or len(item) != 1:
                         node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
                             f"Skipping malformed generic-object item (expected single-key dict): {item!r}"
                         ]
                         continue
-                    variant_key = next(iter(item))
+                    raw_variant_key = next(iter(item))
+                    # camelCase protoJSON is normalized at the top level only;
+                    # the nested variant key needs its own normalization.
+                    variant_key = _camel_to_snake_case(raw_variant_key)
                     concrete_type = get_generic_object_variant(variant_key)
                     if concrete_type is None or concrete_type not in supported_models:
                         node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
                             f"Skipping unknown generic-object variant key: {variant_key!r}"
                         ]
                         continue
-                    item_payload = item[variant_key]
+                    item_payload = item[raw_variant_key]
                     nested = _transform_proto_json_1(item_payload, concrete_type, supported_models)
                     nodes += nested
                     ref_uuid = nested[0]['_uuid']
@@ -588,11 +591,8 @@ def _update_dict_refs(data, new_refs):
                 if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
                     item.uuid = new_refs[item.uuid]
                 elif isinstance(item, dict):
-                    # Refs nested in a list of dicts (e.g. cable
-                    # a_terminations/b_terminations = [{object_type,
-                    # object_id: UnresolvedReference}]) must be rewritten too
-                    # when the referenced entity dedupes to a surviving uuid;
-                    # otherwise a stale ref survives and later fails to resolve.
+                    # rewrite refs nested in list-of-dict items too
+                    # (e.g. cable termination {object_type, object_id})
                     _update_dict_refs(item, new_refs)
         elif isinstance(v, dict):
             _update_dict_refs(v, new_refs)
@@ -672,7 +672,23 @@ def _update_resolved_refs(data, new_refs):
         elif isinstance(v, dict):
             _update_resolved_refs(v, new_refs)
 
-def cleanup_unresolved_references(data: dict) -> list[str]:  # noqa: C901
+def _cleanup_list_refs(key: str, values, unresolved: set) -> list:
+    """Stringify unresolved refs in a list, indexing paths for dict items."""
+    items = []
+    for i, item in enumerate(values):
+        if isinstance(item, UnresolvedReference):
+            unresolved.add(key)
+            items.append(str(item))
+        elif isinstance(item, dict):
+            for uu in cleanup_unresolved_references(item):
+                unresolved.add(f"{key}.{i}.{uu}")
+            items.append(item)
+        else:
+            items.append(item)
+    return items
+
+
+def cleanup_unresolved_references(data: dict) -> list[str]:
     """Find and stringify unresolved references in fields."""
     unresolved = set()
     for k, v in data.items():
@@ -681,18 +697,7 @@ def cleanup_unresolved_references(data: dict) -> list[str]:  # noqa: C901
                 unresolved.add(k)
             data[k] = str(v)
         elif isinstance(v, list | tuple):
-            items = []
-            for i, item in enumerate(v):
-                if isinstance(item, UnresolvedReference):
-                    unresolved.add(k)
-                    items.append(str(item))
-                elif isinstance(item, dict):
-                    for uu in cleanup_unresolved_references(item):
-                        unresolved.add(f"{k}.{i}.{uu}")
-                    items.append(item)
-                else:
-                    items.append(item)
-            data[k] = items
+            data[k] = _cleanup_list_refs(k, v, unresolved)
         elif isinstance(v, dict):
             for uu in cleanup_unresolved_references(v):
                 unresolved.add(f"{k}.{uu}")
