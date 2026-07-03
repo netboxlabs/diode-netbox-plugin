@@ -245,6 +245,67 @@ class CableEndSwapNoopTestCase(TestCase):
         result = generate_changeset(entity, "dcim.cable")
         self.assertEqual(result.change_set.changes, [])
 
+    def test_stale_swapped_create_preserves_cable_ends(self):
+        """
+        A stale CREATE for an existing cable must not toggle cable_end.
+
+        Applying a CREATE change (as if planned before the cable existed) whose
+        ends are swapped relative to the existing cable hits the applier
+        pre-save-match path (dcim.cable in _REQUIRES_PRE_SAVE_MATCH). The match
+        is by A/B-insensitive set, so terminations must be left intact — only
+        attributes update — otherwise cable_end flips and alternating stale
+        creates toggle the physical assignment forever.
+        """
+        seed = ChangeSet(
+            id="cs-stale-seed",
+            changes=[
+                Change(
+                    change_type=ChangeType.CREATE,
+                    object_type="dcim.cable",
+                    ref_id="new_object:dcim.cable:stale-seed",
+                    data={
+                        "status": "connected",
+                        "label": "Stale Cable",
+                        "a_terminations": [{"object_type": "dcim.interface", "object_id": self.iface_a.pk}],
+                        "b_terminations": [{"object_type": "dcim.interface", "object_id": self.iface_b.pk}],
+                    },
+                    new_refs=[],
+                )
+            ],
+        )
+        apply_changeset(seed, request=None)
+        cable = Cable.objects.get(label="Stale Cable")
+        ends_before = {(t.termination_id, t.cable_end) for t in CableTermination.objects.filter(cable=cable)}
+        self.assertEqual(ends_before, {(self.iface_a.pk, "A"), (self.iface_b.pk, "B")})
+
+        # stale CREATE for the SAME cable, ends swapped + a changed attribute
+        stale = ChangeSet(
+            id="cs-stale-swap",
+            changes=[
+                Change(
+                    change_type=ChangeType.CREATE,
+                    object_type="dcim.cable",
+                    ref_id="new_object:dcim.cable:stale-swap",
+                    data={
+                        "status": "connected",
+                        "label": "Stale Cable Relabeled",
+                        "a_terminations": [{"object_type": "dcim.interface", "object_id": self.iface_b.pk}],
+                        "b_terminations": [{"object_type": "dcim.interface", "object_id": self.iface_a.pk}],
+                    },
+                    new_refs=[],
+                )
+            ],
+        )
+        apply_changeset(stale, request=None)
+
+        # still exactly one cable, ends UNCHANGED (no cable_end toggle)
+        self.assertEqual(Cable.objects.filter(label__startswith="Stale Cable").count(), 1)
+        cable.refresh_from_db()
+        ends_after = {(t.termination_id, t.cable_end) for t in CableTermination.objects.filter(cable=cable)}
+        self.assertEqual(ends_after, ends_before)
+        # non-termination attributes still update through the pre-save-match path
+        self.assertEqual(cable.label, "Stale Cable Relabeled")
+
 
 class ApplierKeyErrorScopeTestCase(TestCase):
     """Only missing new_object references become clean per-entity errors."""

@@ -90,7 +90,8 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
         instance = find_existing_object(data, object_type)
         if instance:
             snapshot_for_apply(instance)
-            serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
+            update_data = _strip_matched_cable_terminations(data, object_type)
+            serializer = serializer_class(instance, data=update_data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             result = serializer.save()
             invalidate_find_obj_entry(object_type, instance.id)
@@ -98,6 +99,23 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
     except (ValueError, TypeError) as e:
         logger.debug(f"Could not find existing {object_type}: {e}")
     return None
+
+
+def _strip_matched_cable_terminations(data: dict, object_type: str) -> dict:
+    """
+    Drop termination fields from a pre-save-matched cable's update.
+
+    The cable matcher finds an existing cable by its A/B-insensitive
+    termination SET, so the set is identical by construction. Re-saving the
+    submitted terminations could only change the A/B/ordering assignment,
+    needlessly rewriting CableTermination.cable_end (and letting a stale,
+    end-swapped CREATE toggle it). Update attributes only; leave the existing
+    terminations intact. The differ's _align_cable_ends covers the plan-time
+    UPDATE path; this covers the applier pre-save-match path.
+    """
+    if object_type != "dcim.cable":
+        return data
+    return {k: v for k, v in data.items() if k not in ("a_terminations", "b_terminations")}
 
 
 def _create_or_find_instance(data: dict, object_type: str, serializer_class, request):
