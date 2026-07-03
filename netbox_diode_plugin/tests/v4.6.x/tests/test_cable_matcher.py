@@ -279,6 +279,48 @@ class CableTerminationSetMatcherQuerysetTestCase(TestCase):
         }
         self.assertIsNone(self.matcher.build_queryset(data))
 
+    def test_multi_termination_per_end_exact_match(self):
+        """
+        A cable with 2 terminations on one end matches its exact 3-set.
+
+        Proves successive build_queryset filters create separate joins (one
+        CableTermination row per requested pair), not a single-alias AND that
+        would make multi-termination matching impossible. Uses fresh
+        interfaces: a termination may only belong to one cable.
+        """
+        dev = self.if1.device
+        m1 = Interface.objects.create(device=dev, name="m0", type="1000base-t")
+        m2 = Interface.objects.create(device=dev, name="m1", type="1000base-t")
+        m3 = Interface.objects.create(device=dev, name="m2", type="1000base-t")
+        multi = Cable(a_terminations=[m1, m2], b_terminations=[m3])
+        multi.save()
+        data = {
+            "a_terminations": [
+                {"object_type": "dcim.interface", "object_id": m1.pk},
+                {"object_type": "dcim.interface", "object_id": m2.pk},
+            ],
+            "b_terminations": [{"object_type": "dcim.interface", "object_id": m3.pk}],
+        }
+        qs = self.matcher.build_queryset(data)
+        self.assertEqual(list(qs.values_list("pk", flat=True)), [multi.pk])
+
+    def test_multi_termination_superset_rejected(self):
+        """A 2-per-end request must NOT match a cable missing one of them."""
+        dev = self.if1.device
+        m1 = Interface.objects.create(device=dev, name="n0", type="1000base-t")
+        m2 = Interface.objects.create(device=dev, name="n1", type="1000base-t")
+        m3 = Interface.objects.create(device=dev, name="n2", type="1000base-t")
+        # cable only has {m1, m2}; request adds a third (m3)
+        Cable(a_terminations=[m1], b_terminations=[m2]).save()
+        data = {
+            "a_terminations": [
+                {"object_type": "dcim.interface", "object_id": m1.pk},
+                {"object_type": "dcim.interface", "object_id": m3.pk},
+            ],
+            "b_terminations": [{"object_type": "dcim.interface", "object_id": m2.pk}],
+        }
+        self.assertEqual(list(self.matcher.build_queryset(data)), [])
+
     def test_find_existing_object_matches_via_matcher(self):
         """Find existing object matches via matcher."""
         data = {

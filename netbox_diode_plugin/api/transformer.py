@@ -215,9 +215,15 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
                     # the nested variant key needs its own normalization.
                     variant_key = _camel_to_snake_case(raw_variant_key)
                     concrete_type = get_generic_object_variant(variant_key)
-                    if concrete_type is None or concrete_type not in supported_models:
+                    if concrete_type is None:
                         node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
                             f"Skipping unknown generic-object variant key: {variant_key!r}"
+                        ]
+                        continue
+                    if concrete_type not in supported_models:
+                        node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
+                            f"Skipping generic-object variant {variant_key!r}: "
+                            f"{concrete_type} is not supported in this version."
                         ]
                         continue
                     item_payload = item[raw_variant_key]

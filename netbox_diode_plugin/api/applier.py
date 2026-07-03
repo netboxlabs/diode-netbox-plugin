@@ -61,7 +61,7 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
             if not (isinstance(key, str) and key.startswith("new_object:")):
                 raise
             logger.error(f"unresolved reference applying {object_type}: {e}")
-            raise _err(f"unresolved reference applying {object_type}", object_type, "__all__")
+            raise _err(f"unresolved reference {key} applying {object_type}", object_type, "__all__")
 
     return ChangeSetResult(
         id=change_set.id,
