@@ -122,6 +122,7 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 # replicas - that would require a DB unique constraint or a
 # coordinating lock.
 _REQUIRES_PRE_SAVE_MATCH = frozenset({
+    "dcim.cable",
     "dcim.macaddress",
     "dcim.modulebay",
     "ipam.vlan",
@@ -139,6 +140,12 @@ def requires_pre_save_match(object_type: str) -> bool:
 
 
 _LOGICAL_MATCHERS = {
+    "dcim.cable": lambda: [
+        CableTerminationSetMatcher(
+            model_class=get_object_type_model("dcim.cable"),
+            name="logical_cable_termination_set",
+        )
+    ],
     "dcim.macaddress": lambda: [
         ObjectMatchCriteria(
             fields=("mac_address", "assigned_object_type", "assigned_object_id"),
@@ -688,6 +695,129 @@ class GlobalIPNetworkIPMatcher:
 
         return self.model_class.objects.filter(**filter)
 
+
+@dataclass
+class CableTerminationSetMatcher:
+    """
+    Match a Cable by its canonical set of terminations.
+
+    Cable has no DB unique constraint; identity is the sorted set of
+    (object_type, logical-id) termination tuples across BOTH ends, with
+    A/B and within-end order insignificant. ObjectMatchCriteria is
+    scalar-field-only and cannot express a related-row set match.
+    """
+
+    model_class: type[models.Model]
+    name: str
+    a_field: str = "a_terminations"
+    b_field: str = "b_terminations"
+
+    min_version: str | None = None
+    max_version: str | None = None
+
+    def has_required_fields(self, data: dict) -> bool:
+        """Both termination ends present and non-empty."""
+        a = data.get(self.a_field)
+        b = data.get(self.b_field)
+        return bool(a) and bool(b) and isinstance(a, list) and isinstance(b, list)
+
+    def _reduce(self, term: dict):
+        """
+        Reduce one termination dict to a hashable (object_type, logical_id) tuple.
+
+        logical_id is the resolved pk (int) when available; at transform time
+        object_id is an UnresolvedReference -> reduce to ("__uuid__", uuid)
+        (best-effort in-batch dedup only). Returns None if the item is not a
+        dict / lacks the expected keys.
+        """
+        if not isinstance(term, dict):
+            return None
+        object_type = term.get("object_type")
+        object_id = term.get("object_id")
+        if object_type is None or object_id is None:
+            return None
+        if isinstance(object_id, UnresolvedReference):
+            logical_id = ("__uuid__", object_id.uuid)
+        elif isinstance(object_id, int):
+            logical_id = object_id
+        else:
+            # stringified ref or unexpected type -- fold to a stable string
+            logical_id = ("__str__", str(object_id))
+        return (object_type, logical_id)
+
+    def _reduced_set(self, data: dict):
+        """Union of A+B reduced tuples, or None if any item is unreducible."""
+        reduced = []
+        for field in (self.a_field, self.b_field):
+            for term in data.get(field, []):
+                r = self._reduce(term)
+                if r is None:
+                    return None
+                reduced.append(r)
+        return reduced
+
+    def fingerprint(self, data: dict) -> int | None:
+        """
+        Order-insensitive hash over the union of A+B reduced tuples.
+
+        Best-effort in-batch dedup: may be computed over uuids when terminations
+        are unresolved. Authoritative matching is build_queryset.
+        """
+        if not self.has_required_fields(data):
+            return None
+        reduced = self._reduced_set(data)
+        if reduced is None:
+            return None
+        return hash(
+            (self.model_class.__name__, self.name, tuple(sorted(reduced)))
+        )
+
+    def build_queryset(self, data: dict) -> models.QuerySet | None:
+        """
+        Authoritative exact-set match over real CableTermination rows.
+
+        Annotate the termination count per Cable, require count == requested
+        count, then require every requested (termination_type ct_id,
+        termination_id pk) is present. Rejects subset/superset. Returns None if
+        any object_id is still unresolved (cannot authoritatively match).
+        """
+        if not self.has_required_fields(data):
+            return None
+
+        pairs = []  # (content_type_id, pk)
+        for field in (self.a_field, self.b_field):
+            for term in data.get(field, []):
+                if not isinstance(term, dict):
+                    return None
+                object_id = term.get("object_id")
+                object_type = term.get("object_type")
+                if not isinstance(object_id, int) or object_type is None:
+                    return None  # unresolved -> cannot authoritatively match
+                pairs.append((content_type_id(object_type), object_id))
+
+        if not pairs:
+            return None
+
+        # A cable cannot terminate the same object twice (CableTermination has
+        # a unique (termination_type, termination_id) constraint). A duplicate
+        # pair would both inflate len(pairs) and be satisfiable by one shared
+        # termination row (each filter is a separate join), letting an invalid
+        # payload like A:[if1] B:[if1] false-match a larger cable containing
+        # if1. Not authoritatively matchable -> let the serializer reject it.
+        if len(set(pairs)) != len(pairs):
+            return None
+
+        qs = self.model_class.objects.annotate(
+            _term_count=models.Count("terminations")
+        ).filter(_term_count=len(pairs))
+        for ct_id, pk in pairs:
+            qs = qs.filter(
+                terminations__termination_type_id=ct_id,
+                terminations__termination_id=pk,
+            )
+        return qs.distinct()
+
+
 @dataclass
 class VRFIPNetworkIPMatcher:
     """Matches ip in a vrf, ignores mask."""
@@ -1008,6 +1138,11 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     solely on unresolved references (no scalar fields at all) are not
     cacheable.
     """
+    if object_type == "dcim.cable":
+        # Cable identity lives entirely in list fields skipped by the scalar-only
+        # cache key; always run the authoritative build_queryset matcher loop.
+        return None
+
     items = []
     for k, v in sorted(data.items()):
         if k.startswith("_"):

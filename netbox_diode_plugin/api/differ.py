@@ -98,6 +98,23 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         else:
             prechange_data[field_name] = value
 
+    # Cable terminations are model properties (reverse `terminations`
+    # relation), not Django fields, so the loop above omits them and every
+    # re-diff of an applied cable would spuriously report an update. Capture
+    # them in the transformer's {object_type, object_id} shape, sorted for
+    # stable comparison (the relation has no ordering guarantee).
+    for term_field in ("a_terminations", "b_terminations"):
+        if term_field not in diode_fields or not hasattr(instance, term_field):
+            continue
+        terminations = getattr(instance, term_field)
+        prechange_data[term_field] = _sorted_termination_refs([
+            {
+                "object_type": f"{term.__class__._meta.app_label}.{term.__class__._meta.model_name}",
+                "object_id": term.pk,
+            }
+            for term in (terminations or [])
+        ])
+
     if hasattr(instance, "get_custom_fields"):
         # NetBox's instance.get_custom_fields() calls CustomField.objects.get_for_model
         # which uses a request-scoped query_cache - one DB hit per unique model per
@@ -225,6 +242,7 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
     for entity in entities:
         prechange_data = {}
         changed_attrs = []
+        _canonicalize_termination_order(entity)
         new_refs = cleanup_unresolved_references(entity)
         object_type = entity.pop("_object_type")
         _ = entity.pop("_uuid")
@@ -242,6 +260,7 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
                 # this is also important for custom fields because they do not appear to
                 # respsect paritial update serialization.
                 entity = _partially_merge(prechange_data, entity, instance)
+                _align_cable_ends(prechange_data, entity)
             changed_data = shallow_compare_dict(
                 prechange_data, entity,
             )
@@ -283,6 +302,10 @@ def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> d
         # currently we only merge tags, but this could be extended to other reference lists?
         if key == "tags":
             result[key] = _merge_reference_list(prechange_data.get(key, []), value)
+        elif key in ("a_terminations", "b_terminations") and isinstance(value, list):
+            # termination lists are sets of endpoints; sort both sides the
+            # same way so positional list comparison stays meaningful
+            result[key] = _sorted_termination_refs(value)
         else:
             result[key] = value
 
@@ -294,6 +317,59 @@ def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> d
                 result["custom_fields"][key] = value
         set_custom_field_defaults(result, instance)
     return result
+
+def _canonicalize_termination_order(entity: dict) -> None:
+    """
+    Sort termination lists in place before new_refs index paths are computed.
+
+    _partially_merge later re-sorts these lists with the same key; sorting
+    first makes that a no-op, so index paths like "a_terminations.0.object_id"
+    stay aligned with the data the applier resolves (a later re-sort would
+    strand an unresolved ref at an index no path names).
+    """
+    for term_field in ("a_terminations", "b_terminations"):
+        terms = entity.get(term_field)
+        if isinstance(terms, list) and terms:
+            entity[term_field] = _sorted_termination_refs(terms)
+
+
+def _align_cable_ends(prechange_data: dict, entity: dict) -> None:
+    """
+    Keep the existing A/B end assignment when the submitted ends are swapped.
+
+    Cable identity is A/B-insensitive, so a feed that reports the same two
+    termination sets with the ends flipped is the same cable; without this,
+    each such re-ingest diffs as an UPDATE that only flips cable_end, and
+    alternating feeds toggle forever instead of converging. Only a pure swap
+    is realigned (both submitted ends exactly equal the opposite existing
+    ends), which also guarantees all refs are resolved pks.
+    """
+    pre_a = prechange_data.get("a_terminations")
+    pre_b = prechange_data.get("b_terminations")
+    post_a = entity.get("a_terminations")
+    post_b = entity.get("b_terminations")
+    if not (pre_a and pre_b and post_a and post_b):
+        return
+    if post_a != pre_a and post_a == pre_b and post_b == pre_a:
+        entity["a_terminations"] = post_b
+        entity["b_terminations"] = post_a
+
+
+def _sorted_termination_refs(refs: list) -> list:
+    """
+    Sort a list of {object_type, object_id} termination refs for stable comparison.
+
+    object_id may be an int (resolved) or a string (still-unresolved
+    `new_object:...` reference after cleanup_unresolved_references), so the
+    sort key coerces it to str to avoid cross-type comparison errors.
+    """
+    return sorted(
+        refs,
+        key=lambda t: (t.get("object_type", ""), str(t.get("object_id", "")))
+        if isinstance(t, dict)
+        else (str(t),),
+    )
+
 
 def _merge_reference_list(prechange_list: list, postchange_list: list) -> list:
     """Merge reference lists rather than replacing the full value."""
