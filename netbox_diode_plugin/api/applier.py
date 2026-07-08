@@ -17,6 +17,7 @@ from .matcher import find_existing_object, invalidate_find_obj_entry, requires_p
 from .plugin_utils import get_object_type_model, legal_fields
 from .profile import profiled
 from .supported_models import get_serializer_for_model
+from .transformer import _MATCH_ONLY_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,16 @@ def _create_or_find_instance(data: dict, object_type: str, serializer_class, req
 def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict, request):
     serializer_class = get_serializer_for_model(model_class)
     change_type = change.change_type
+
+    # Match-only types (e.g. users.user) are resolved against existing rows and
+    # never created OR updated via ingest. The transformer guards the plan path;
+    # this guards the direct apply-change-set / bulk-apply path, which bypasses
+    # the transformer, so a client changeset can't create or rename a user.
+    if change.object_type in _MATCH_ONLY_TYPES and change_type in (ChangeType.CREATE, ChangeType.UPDATE):
+        raise _err(
+            f"{change.object_type} is match-only and cannot be created or updated via ingest",
+            change.object_type, "__all__",
+        )
 
     if change_type == ChangeType.CREATE:
         # For component types that may be auto-created from e.g. DeviceType or ModuleType templates,

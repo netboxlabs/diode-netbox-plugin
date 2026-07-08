@@ -107,6 +107,12 @@ _IS_CIRCULAR_REFERENCE = {
 def _is_circular_reference(object_type, field_name):
     return field_name in _IS_CIRCULAR_REFERENCE.get(object_type, frozenset())
 
+# Types resolved against existing rows only; never created (or updated) via
+# ingest. A reference to one that has no match becomes a per-entity deviation,
+# not a CREATE. (users.user is exposed only as a match-only reference target;
+# auto-minting Django auth users from ingest data is a privilege/security risk.)
+_MATCH_ONLY_TYPES = frozenset({"users.user"})
+
 @profiled("transform")
 def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]: # noqa: C901
     """
@@ -667,6 +673,14 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
 
         existing = find_existing_object(data, object_type)
         if existing is not None:
+            if object_type in _MATCH_ONLY_TYPES:
+                # Pure reference target: resolve the parent's reference to the
+                # existing pk and emit NO change for this node. Match-only types
+                # (users.user) are never created or updated via ingest, and a
+                # change for them would fail validation anyway (e.g. NetBox's
+                # User requires a password we never carry).
+                new_refs[data['_uuid']] = existing.id
+                continue
             fp = (object_type, existing.id)
             if fp in seen:
                 logger.warning(f"objects resolved to the same existing id after deduplication: {seen[fp]} and {data}")
@@ -677,6 +691,15 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
             new_refs[data['_uuid']] = existing.id
             resolved.append(data)
         else:
+            if object_type in _MATCH_ONLY_TYPES:
+                primary = get_primary_value(data, object_type)
+                raise ChangeSetException(
+                    f"{object_type} not found for match-only reference",
+                    errors={object_type: {NON_FIELD_ERRORS: [
+                        f"No existing {object_type} matches {primary!r}; this type is "
+                        f"resolved against existing objects only and is not created via ingest."
+                    ]}},
+                )
             data['id'] = UnresolvedReference(object_type, data['_uuid'])
             _update_resolved_refs(data, new_refs)
             resolved.append(data)
