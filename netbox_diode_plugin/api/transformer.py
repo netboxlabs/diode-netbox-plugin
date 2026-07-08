@@ -636,6 +636,44 @@ def _update_dict_refs(data, new_refs):
 
 
 @profiled("resolve_refs")
+def _mark_seen(data, object_type, existing, seen):
+    """Record a resolved (object_type, id) for in-batch dedup, warning on clash."""
+    fp = (object_type, existing.id)
+    if fp in seen:
+        logger.warning(f"objects resolved to the same existing id after deduplication: {seen[fp]} and {data}")
+    else:
+        seen[fp] = data
+
+
+def _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved) -> bool:
+    """
+    Resolve a node via metadata netbox_id (PK lookup).
+
+    Returns True if the node had a netbox_id and was handled (caller should
+    skip further resolution); False if no netbox_id was present. Raises if the
+    netbox_id does not resolve to an existing object.
+    """
+    netbox_id = data.pop('_netbox_id', None)
+    if netbox_id is None:
+        return False
+    model_class = get_object_type_model(object_type)
+    existing = model_class.objects.filter(pk=netbox_id).first()
+    if existing is None:
+        raise ChangeSetException(
+            f"Object not found for {object_type} with netbox_id={netbox_id}",
+            errors={NON_FIELD_ERRORS: [f"No {object_type} found with id {netbox_id}"]}
+        )
+    new_refs[data['_uuid']] = existing.id
+    if object_type in _MATCH_ONLY_TYPES:
+        # pure reference target: resolved to the existing pk, no change emitted
+        return True
+    _mark_seen(data, object_type, existing, seen)
+    data['id'] = existing.id
+    data['_instance'] = existing
+    resolved.append(data)
+    return True
+
+
 def _resolve_existing_references(entities: list[dict]) -> list[dict]:
     seen = {}
     new_refs = {}
@@ -650,56 +688,33 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
             resolved.append(data)
             continue
 
-        # PK-based lookup: if metadata provided a netbox_id, use it directly
-        netbox_id = data.pop('_netbox_id', None)
-        if netbox_id is not None:
-            model_class = get_object_type_model(object_type)
-            existing = model_class.objects.filter(pk=netbox_id).first()
-            if existing is not None:
-                fp = (object_type, existing.id)
-                if fp in seen:
-                    logger.warning(f"objects resolved to the same existing id after deduplication: {seen[fp]} and {data}")
-                else:
-                    seen[fp] = data
-                data['id'] = existing.id
-                data['_instance'] = existing
-                new_refs[data['_uuid']] = existing.id
-                resolved.append(data)
-                continue
-            raise ChangeSetException(
-                f"Object not found for {object_type} with netbox_id={netbox_id}",
-                errors={NON_FIELD_ERRORS: [f"No {object_type} found with id {netbox_id}"]}
-            )
+        if _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved):
+            continue
 
         existing = find_existing_object(data, object_type)
         if existing is not None:
+            new_refs[data['_uuid']] = existing.id
             if object_type in _MATCH_ONLY_TYPES:
                 # Pure reference target: resolve the parent's reference to the
                 # existing pk and emit NO change for this node. Match-only types
                 # (users.user) are never created or updated via ingest, and a
                 # change for them would fail validation anyway (e.g. NetBox's
                 # User requires a password we never carry).
-                new_refs[data['_uuid']] = existing.id
                 continue
-            fp = (object_type, existing.id)
-            if fp in seen:
-                logger.warning(f"objects resolved to the same existing id after deduplication: {seen[fp]} and {data}")
-            else:
-                seen[fp] = data
+            _mark_seen(data, object_type, existing, seen)
             data['id'] = existing.id
             data['_instance'] = existing
-            new_refs[data['_uuid']] = existing.id
             resolved.append(data)
+        elif object_type in _MATCH_ONLY_TYPES:
+            primary = get_primary_value(data, object_type)
+            raise ChangeSetException(
+                f"{object_type} not found for match-only reference",
+                errors={object_type: {NON_FIELD_ERRORS: [
+                    f"No existing {object_type} matches {primary!r}; this type is "
+                    f"resolved against existing objects only and is not created via ingest."
+                ]}},
+            )
         else:
-            if object_type in _MATCH_ONLY_TYPES:
-                primary = get_primary_value(data, object_type)
-                raise ChangeSetException(
-                    f"{object_type} not found for match-only reference",
-                    errors={object_type: {NON_FIELD_ERRORS: [
-                        f"No existing {object_type} matches {primary!r}; this type is "
-                        f"resolved against existing objects only and is not created via ingest."
-                    ]}},
-                )
             data['id'] = UnresolvedReference(object_type, data['_uuid'])
             _update_resolved_refs(data, new_refs)
             resolved.append(data)

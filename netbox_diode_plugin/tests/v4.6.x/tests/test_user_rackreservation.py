@@ -28,12 +28,16 @@ class MatchOnlyUserApplyTestCase(TestCase):
     """The direct-apply path (applier) rejects create/update of users.user."""
 
     def test_direct_create_user_changeset_rejected(self):
-        """A CREATE changeset for users.user is rejected; no user row is created."""
+        """A CREATE changeset for users.user is rejected by the match-only guard."""
+        # Serializer-valid payload (password present) so the assertion detects
+        # the guard specifically, not incidental UserSerializer validation.
         cs = ChangeSet(id="cs-u-create", changes=[Change(
             change_type=ChangeType.CREATE, object_type="users.user",
-            ref_id="new_object:users.user:x", data={"username": "should-not-create"}, new_refs=[])])
-        with self.assertRaises(ChangeSetException):
+            ref_id="new_object:users.user:x",
+            data={"username": "should-not-create", "password": "Str0ng-P@ssw0rd!"}, new_refs=[])])
+        with self.assertRaises(ChangeSetException) as cm:
             apply_changeset(cs, request=None)
+        self.assertIn("match-only", str(cm.exception))
         self.assertFalse(User.objects.filter(username="should-not-create").exists())
 
     def test_direct_update_user_changeset_rejected_username_unchanged(self):
@@ -70,6 +74,8 @@ class RackReservationApplyTestCase(TestCase):
     def test_reservation_with_existing_user_applies(self):
         """A reservation referencing an existing user resolves that user + applies."""
         r = generate_changeset(self._entity("rr-owner"), "dcim.rackreservation")
+        # match-only: the matched user is a pure reference — NO users.user change
+        self.assertFalse(any(c.object_type == "users.user" for c in r.change_set.changes))
         apply_changeset(r.change_set, request=None)
         self.assertEqual(RackReservation.objects.count(), 1)
         rr = RackReservation.objects.first()
@@ -90,6 +96,8 @@ class RackReservationApplyTestCase(TestCase):
         """Username matching is exact/case-sensitive: a case variant deviates."""
         with self.assertRaises(ChangeSetException):
             generate_changeset(self._entity("RR-OWNER"), "dcim.rackreservation")
+        self.assertFalse(User.objects.filter(username="RR-OWNER").exists())
+        self.assertEqual(RackReservation.objects.count(), 0)
 
     def test_reservation_missing_user_deviates(self):
         """RackReservation.user is required; omitting it -> deviation, no row created."""
@@ -101,10 +109,21 @@ class RackReservationApplyTestCase(TestCase):
         self.assertEqual(RackReservation.objects.count(), 0)
 
     def test_existing_user_resolution_is_idempotent(self):
-        """Re-ingesting resolves the same existing user each time; never mints one."""
+        """
+        Re-ingesting resolves the same existing user each time; never mints one.
+
+        Scoped to the USER guarantee: the match-only user is resolved (never
+        duplicated or created) and the reservation's user never changes across
+        re-ingests. NOTE: a full-changeset NOOP is NOT asserted here because
+        dcim.rackreservation is keyless AND its nested dcim.rack has no reliable
+        natural-key match when location is null (a re-diff re-creates the rack
+        and re-points the reservation) — both pre-existing behaviors unrelated
+        to this feature. The user, correctly, is the one node that stays matched.
+        """
         for _ in range(2):
             r = generate_changeset(self._entity("rr-owner"), "dcim.rackreservation")
+            # user is always a pure reference — never a change node
+            self.assertFalse(any(c.object_type == "users.user" for c in r.change_set.changes))
             apply_changeset(r.change_set, request=None)
-        # the match-only user is resolved, never duplicated/created
         self.assertEqual(User.objects.filter(username="rr-owner").count(), 1)
         self.assertTrue(all(rr.user_id == self.user.pk for rr in RackReservation.objects.all()))
