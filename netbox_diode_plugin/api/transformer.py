@@ -23,6 +23,7 @@ from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
     apply_format_transformations,
+    get_generic_object_variant,
     get_json_ref_info,
     get_object_type_model,
     get_primary_value,
@@ -37,6 +38,21 @@ def _camel_to_snake_case(name):
     """Convert camelCase string to snake_case."""
     name = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
     return re.sub("([a-z0-9])([A-Z])", r"\1_\2", name).lower()
+
+@lru_cache(maxsize=1)
+def _cable_terminable_types() -> frozenset:
+    """
+    Object types valid as a cable termination, per NetBox's own constant.
+
+    Resolved from dcim.constants.CABLE_TERMINATION_MODELS so it tracks NetBox
+    rather than a hand-maintained list. Cached: ContentType rows are stable.
+    """
+    from dcim.constants import CABLE_TERMINATION_MODELS
+    from django.contrib.contenttypes.models import ContentType
+    return frozenset(
+        f"{ct.app_label}.{ct.model}"
+        for ct in ContentType.objects.filter(CABLE_TERMINATION_MODELS)
+    )
 
 # these are implied values pushed down to referenced objects.
 _NESTED_CONTEXT = {
@@ -170,6 +186,8 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
     def is_supported(field_name, ref_info):
         if ref_info is None:
             return field_name in supported_fields
+        if ref_info.is_generic_object:
+            return ref_info.field_name in legal_fields(object_type)
         if ref_info.object_type not in supported_models:
             return False
         if ref_info.is_generic:
@@ -194,19 +212,83 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
             node[field_name + "_type"] = ref_info.object_type
             field_name = field_name + "_id"
 
+        # Explicitly null reference — means "clear this FK".
+        # An empty dict {} comes from protojson when the SDK sets a message field
+        # to an empty message (e.g. Tenant{}) to signal "clear this field".
+        if value is None or (isinstance(value, dict) and len(value) == 0):
+            if ref_info.is_generic:
+                node[ref_info.field_name + "_type"] = None
+            if is_circular:
+                if post_create is None:
+                    post_create = {
+                        "_uuid": str(uuid4()),
+                        "_object_type": object_type,
+                        "_refs": set(),
+                        "_instance": node['_uuid'],
+                        "_is_post_create": True,
+                    }
+                post_create[field_name] = None
+            else:
+                node[field_name] = None
+            continue
+
         refs = []
         ref_value = None
         if isinstance(value, list):
             ref_value = []
             for item in value:
-                nested = _transform_proto_json_1(item, ref_info.object_type, supported_models, nested_context)
-                nodes += nested
-                ref_uuid = nested[0]['_uuid']
-                ref_value.append(UnresolvedReference(
-                    object_type=ref_info.object_type,
-                    uuid=ref_uuid,
-                ))
-                refs.append(ref_uuid)
+                if ref_info.is_generic_object:
+                    # Single-key GenericObject wrapper: the key names the
+                    # variant, e.g. {"object_interface": {...}}.
+                    if not isinstance(item, dict) or len(item) != 1:
+                        node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
+                            f"Skipping malformed generic-object item (expected single-key dict): {item!r}"
+                        ]
+                        continue
+                    raw_variant_key = next(iter(item))
+                    # camelCase protoJSON is normalized at the top level only;
+                    # the nested variant key needs its own normalization.
+                    variant_key = _camel_to_snake_case(raw_variant_key)
+                    concrete_type = get_generic_object_variant(variant_key)
+                    if concrete_type is None:
+                        node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
+                            f"Skipping unknown generic-object variant key: {variant_key!r}"
+                        ]
+                        continue
+                    if concrete_type not in supported_models:
+                        node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
+                            f"Skipping generic-object variant {variant_key!r}: "
+                            f"{concrete_type} is not supported in this version."
+                        ]
+                        continue
+                    # The GenericObject variant map spans every content type, but
+                    # only NetBox's cable-terminable models are valid endpoints.
+                    # Reject others up front rather than recursing to create the
+                    # child object before the cable serializer rejects it.
+                    if object_type == "dcim.cable" and concrete_type not in _cable_terminable_types():
+                        node['_warnings'][field_name] = node['_warnings'].get(field_name, []) + [
+                            f"Skipping generic-object variant {variant_key!r}: "
+                            f"{concrete_type} is not a valid cable termination type."
+                        ]
+                        continue
+                    item_payload = item[raw_variant_key]
+                    nested = _transform_proto_json_1(item_payload, concrete_type, supported_models)
+                    nodes += nested
+                    ref_uuid = nested[0]['_uuid']
+                    ref_value.append({
+                        'object_type': concrete_type,
+                        'object_id': UnresolvedReference(object_type=concrete_type, uuid=ref_uuid),
+                    })
+                    refs.append(ref_uuid)
+                else:
+                    nested = _transform_proto_json_1(item, ref_info.object_type, supported_models, nested_context)
+                    nodes += nested
+                    ref_uuid = nested[0]['_uuid']
+                    ref_value.append(UnresolvedReference(
+                        object_type=ref_info.object_type,
+                        uuid=ref_uuid,
+                    ))
+                    refs.append(ref_uuid)
         else:
             nested = _transform_proto_json_1(value, ref_info.object_type, supported_models, nested_context)
             nodes += nested
@@ -559,6 +641,10 @@ def _update_dict_refs(data, new_refs):
             for item in v:
                 if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
                     item.uuid = new_refs[item.uuid]
+                elif isinstance(item, dict):
+                    # rewrite refs nested in list-of-dict items too
+                    # (e.g. cable termination {object_type, object_id})
+                    _update_dict_refs(item, new_refs)
         elif isinstance(v, dict):
             _update_dict_refs(v, new_refs)
 
@@ -627,12 +713,31 @@ def _update_resolved_refs(data, new_refs):
                 if isinstance(item, UnresolvedReference) and item.uuid in new_refs:
                     new_items.append(new_refs[item.uuid])
                     has_refs = True
+                elif isinstance(item, dict):
+                    _update_resolved_refs(item, new_refs)
+                    new_items.append(item)
                 else:
                     new_items.append(item)
             if has_refs:
                 data[k] = sort_ints_first(new_items)
         elif isinstance(v, dict):
             _update_resolved_refs(v, new_refs)
+
+def _cleanup_list_refs(key: str, values, unresolved: set) -> list:
+    """Stringify unresolved refs in a list, indexing paths for dict items."""
+    items = []
+    for i, item in enumerate(values):
+        if isinstance(item, UnresolvedReference):
+            unresolved.add(key)
+            items.append(str(item))
+        elif isinstance(item, dict):
+            for uu in cleanup_unresolved_references(item):
+                unresolved.add(f"{key}.{i}.{uu}")
+            items.append(item)
+        else:
+            items.append(item)
+    return items
+
 
 def cleanup_unresolved_references(data: dict) -> list[str]:
     """Find and stringify unresolved references in fields."""
@@ -643,14 +748,7 @@ def cleanup_unresolved_references(data: dict) -> list[str]:
                 unresolved.add(k)
             data[k] = str(v)
         elif isinstance(v, list | tuple):
-            items = []
-            for item in v:
-                if isinstance(item, UnresolvedReference):
-                    unresolved.add(k)
-                    items.append(str(item))
-                else:
-                    items.append(item)
-            data[k] = items
+            data[k] = _cleanup_list_refs(k, v, unresolved)
         elif isinstance(v, dict):
             for uu in cleanup_unresolved_references(v):
                 unresolved.add(f"{k}.{uu}")

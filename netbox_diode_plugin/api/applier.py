@@ -3,6 +3,7 @@
 """Diode NetBox Plugin - API - Applier."""
 
 
+import copy
 import logging
 
 from django.core.exceptions import ObjectDoesNotExist
@@ -52,6 +53,15 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         except IntegrityError as e:
             logger.error(f"Integrity error {object_type}: {e} {data}")
             raise _err(f"created a conflict with an existing {object_type}", object_type, "__all__")
+        except KeyError as e:
+            # Only intercept a missing "new_object:..." reference lookup
+            # (a dangling ref that was never created); surface it as a clean
+            # per-entity error. Any other KeyError is a real bug — re-raise.
+            key = e.args[0] if e.args else None
+            if not (isinstance(key, str) and key.startswith("new_object:")):
+                raise
+            logger.error(f"unresolved reference applying {object_type}: {e}")
+            raise _err(f"unresolved reference {key} applying {object_type}", object_type, "__all__")
 
     return ChangeSetResult(
         id=change_set.id,
@@ -80,7 +90,8 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
         instance = find_existing_object(data, object_type)
         if instance:
             snapshot_for_apply(instance)
-            serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
+            update_data = _strip_matched_cable_terminations(data, object_type, instance)
+            serializer = serializer_class(instance, data=update_data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             result = serializer.save()
             invalidate_find_obj_entry(object_type, instance.id)
@@ -88,6 +99,45 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
     except (ValueError, TypeError) as e:
         logger.debug(f"Could not find existing {object_type}: {e}")
     return None
+
+
+def _strip_matched_cable_terminations(data: dict, object_type: str, instance) -> dict:
+    """
+    Drop termination fields from a pre-save-matched cable's update.
+
+    The cable matcher finds an existing cable by its A/B-insensitive
+    termination SET, so the set is identical by construction. Strip the
+    terminations ONLY when the submitted A/B grouping equals the existing one
+    up to a whole-end swap (identical, within-end reorder, or a pure swap) --
+    re-saving those would only churn CableTermination.cable_end (and let a
+    stale, end-swapped CREATE toggle it). A genuine repartition (same set,
+    different grouping) is passed through so the serializer applies it, keeping
+    this path consistent with the differ UPDATE path (which applies it too).
+    """
+    if object_type != "dcim.cable":
+        return data
+    if _cable_partition_matches(instance, data):
+        return {k: v for k, v in data.items() if k not in ("a_terminations", "b_terminations")}
+    return data
+
+
+def _cable_partition_matches(instance, data: dict) -> bool:
+    """True if data's A/B grouping equals the instance's, up to a whole-end swap."""
+    def _submitted(field):
+        return frozenset(
+            (t["object_type"], t["object_id"])
+            for t in data.get(field, [])
+            if isinstance(t, dict) and isinstance(t.get("object_id"), int)
+        )
+
+    def _existing(objs):
+        return frozenset(
+            (f"{o._meta.app_label}.{o._meta.model_name}", o.pk) for o in objs
+        )
+
+    sub_a, sub_b = _submitted("a_terminations"), _submitted("b_terminations")
+    exist_a, exist_b = _existing(instance.a_terminations), _existing(instance.b_terminations)
+    return (sub_a == exist_a and sub_b == exist_b) or (sub_a == exist_b and sub_b == exist_a)
 
 
 def _create_or_find_instance(data: dict, object_type: str, serializer_class, request):
@@ -144,22 +194,30 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             invalidate_find_obj_entry(change.object_type, instance.id)
 
 def _set_path(data, path, value):
-    path = path.split(".")
-    key = path.pop(0)
-    while len(path) > 0:
-        data = data[key]
-        key = path.pop(0)
-    data[key] = value
+    keys = path.split(".")
+    for key in keys[:-1]:
+        data = data[_path_key(data, key)]
+    data[_path_key(data, keys[-1])] = value
 
 def _get_path(data, path):
-    path = path.split(".")
     v = data
-    for p in path:
-        v = v[p]
+    for p in path.split("."):
+        v = v[_path_key(v, p)]
     return v
 
+def _path_key(container, key):
+    # Coerce an all-digit segment to a list index ONLY when the container is a
+    # list (e.g. cable "a_terminations.0.object_id"). Dicts keep string keys so
+    # a custom field whose name is all digits still indexes correctly.
+    if isinstance(container, list | tuple) and key.isdigit():
+        return int(key)
+    return key
+
 def _pre_apply(model_class: models.Model, change: Change, created: dict):
-    data = change.data.copy()
+    # deep copy: ref resolution mutates nested list/dict containers
+    # (e.g. "a_terminations.0.object_id"); a shallow copy would corrupt
+    # change.data for retries of this same change.
+    data = copy.deepcopy(change.data)
 
     # resolve foreign key references to new objects
     for ref_field in change.new_refs:
@@ -173,6 +231,9 @@ def _pre_apply(model_class: models.Model, change: Change, created: dict):
                     ref_list.append(ref)
             _set_path(data, ref_field, ref_list)
         else:
+            if isinstance(v, int):
+                # already a resolved pk; nothing to resolve
+                continue
             _set_path(data, ref_field, created[v].pk)
 
     # ignore? fields that are not in the data model (error?)

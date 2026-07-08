@@ -2,7 +2,7 @@
 
 # Generated code. DO NOT EDIT.
 # Source: NetBox v4.6.0
-# Timestamp: 2026-05-14 20:30:15Z
+# Timestamp: 2026-07-01 02:51:21Z
 
 from dataclasses import dataclass
 import datetime
@@ -51,6 +51,7 @@ class RefInfo:
     field_name: str
     is_generic: bool = False
     is_many: bool = False
+    is_generic_object: bool = False
 
 
 CUSTOM_FIELD_OBJECT_REFERENCE_TYPE = "diode.custom_field_object_reference"
@@ -461,6 +462,18 @@ _JSON_REF_INFO = {
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.cable": {
+        "a_terminations": RefInfo(
+            object_type="",
+            field_name="a_terminations",
+            is_many=True,
+            is_generic_object=True,
+        ),
+        "b_terminations": RefInfo(
+            object_type="",
+            field_name="b_terminations",
+            is_many=True,
+            is_generic_object=True,
+        ),
         "bundle": RefInfo(object_type="dcim.cablebundle", field_name="bundle"),
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
@@ -2962,6 +2975,112 @@ def get_json_ref_info(
     if not isinstance(object_type, str):
         object_type = get_object_type(object_type)
     return _JSON_REF_INFO.get(object_type, {}).get(json_field_name)
+
+
+_GENERIC_OBJECT_VARIANTS: dict[str, str] = {
+    "object_aggregate": "ipam.aggregate",
+    "object_asn": "ipam.asn",
+    "object_asn_range": "ipam.asnrange",
+    "object_cable": "dcim.cable",
+    "object_cable_bundle": "dcim.cablebundle",
+    "object_cable_path": "dcim.cablepath",
+    "object_circuit": "circuits.circuit",
+    "object_circuit_group": "circuits.circuitgroup",
+    "object_circuit_group_assignment": "circuits.circuitgroupassignment",
+    "object_circuit_termination": "circuits.circuittermination",
+    "object_circuit_type": "circuits.circuittype",
+    "object_cluster": "virtualization.cluster",
+    "object_cluster_group": "virtualization.clustergroup",
+    "object_cluster_type": "virtualization.clustertype",
+    "object_console_port": "dcim.consoleport",
+    "object_console_server_port": "dcim.consoleserverport",
+    "object_contact": "tenancy.contact",
+    "object_contact_assignment": "tenancy.contactassignment",
+    "object_contact_group": "tenancy.contactgroup",
+    "object_contact_role": "tenancy.contactrole",
+    "object_custom_field": "extras.customfield",
+    "object_custom_field_choice_set": "extras.customfieldchoiceset",
+    "object_custom_link": "extras.customlink",
+    "object_device": "dcim.device",
+    "object_device_bay": "dcim.devicebay",
+    "object_device_role": "dcim.devicerole",
+    "object_device_type": "dcim.devicetype",
+    "object_fhrp_group": "ipam.fhrpgroup",
+    "object_fhrp_group_assignment": "ipam.fhrpgroupassignment",
+    "object_front_port": "dcim.frontport",
+    "object_ike_policy": "vpn.ikepolicy",
+    "object_ike_proposal": "vpn.ikeproposal",
+    "object_interface": "dcim.interface",
+    "object_inventory_item": "dcim.inventoryitem",
+    "object_inventory_item_role": "dcim.inventoryitemrole",
+    "object_ip_address": "ipam.ipaddress",
+    "object_ip_range": "ipam.iprange",
+    "object_ip_sec_policy": "vpn.ipsecpolicy",
+    "object_ip_sec_profile": "vpn.ipsecprofile",
+    "object_ip_sec_proposal": "vpn.ipsecproposal",
+    "object_journal_entry": "extras.journalentry",
+    "object_l2vpn": "vpn.l2vpn",
+    "object_l2vpn_termination": "vpn.l2vpntermination",
+    "object_location": "dcim.location",
+    "object_mac_address": "dcim.macaddress",
+    "object_manufacturer": "dcim.manufacturer",
+    "object_module": "dcim.module",
+    "object_module_bay": "dcim.modulebay",
+    "object_module_type": "dcim.moduletype",
+    "object_module_type_profile": "dcim.moduletypeprofile",
+    "object_owner": "users.owner",
+    "object_owner_group": "users.ownergroup",
+    "object_platform": "dcim.platform",
+    "object_power_feed": "dcim.powerfeed",
+    "object_power_outlet": "dcim.poweroutlet",
+    "object_power_panel": "dcim.powerpanel",
+    "object_power_port": "dcim.powerport",
+    "object_prefix": "ipam.prefix",
+    "object_provider": "circuits.provider",
+    "object_provider_account": "circuits.provideraccount",
+    "object_provider_network": "circuits.providernetwork",
+    "object_rack": "dcim.rack",
+    "object_rack_group": "dcim.rackgroup",
+    "object_rack_reservation": "dcim.rackreservation",
+    "object_rack_role": "dcim.rackrole",
+    "object_rack_type": "dcim.racktype",
+    "object_rear_port": "dcim.rearport",
+    "object_region": "dcim.region",
+    "object_rir": "ipam.rir",
+    "object_role": "ipam.role",
+    "object_route_target": "ipam.routetarget",
+    "object_script_module": "core.managedfile",
+    "object_service": "ipam.service",
+    "object_site": "dcim.site",
+    "object_site_group": "dcim.sitegroup",
+    "object_tag": "extras.tag",
+    "object_tenant": "tenancy.tenant",
+    "object_tenant_group": "tenancy.tenantgroup",
+    "object_tunnel": "vpn.tunnel",
+    "object_tunnel_group": "vpn.tunnelgroup",
+    "object_tunnel_termination": "vpn.tunneltermination",
+    "object_virtual_chassis": "dcim.virtualchassis",
+    "object_virtual_circuit": "circuits.virtualcircuit",
+    "object_virtual_circuit_termination": "circuits.virtualcircuittermination",
+    "object_virtual_circuit_type": "circuits.virtualcircuittype",
+    "object_virtual_device_context": "dcim.virtualdevicecontext",
+    "object_virtual_disk": "virtualization.virtualdisk",
+    "object_virtual_machine": "virtualization.virtualmachine",
+    "object_virtual_machine_type": "virtualization.virtualmachinetype",
+    "object_vlan": "ipam.vlan",
+    "object_vlan_group": "ipam.vlangroup",
+    "object_vlan_translation_policy": "ipam.vlantranslationpolicy",
+    "object_vlan_translation_rule": "ipam.vlantranslationrule",
+    "object_vm_interface": "virtualization.vminterface",
+    "object_vrf": "ipam.vrf",
+    "object_wireless_lan": "wireless.wirelesslan",
+    "object_wireless_lan_group": "wireless.wirelesslangroup",
+    "object_wireless_link": "wireless.wirelesslink",
+}
+
+
+def get_generic_object_variant(key: str) -> str | None:
+    return _GENERIC_OBJECT_VARIANTS.get(key)
 
 
 _LEGAL_FIELDS = {
