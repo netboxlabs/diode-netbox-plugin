@@ -191,6 +191,11 @@ def diff_to_change(
     if prior_id is None:
         ref_id = postchange_data.pop("id", None)
 
+    # For updates, preserve explicitly-provided empty values (empty strings, None)
+    # so that the apply changeset endpoint can clear fields the user intended to reset.
+    # For creates, strip empty values to avoid sending noise — the serializer handles defaults.
+    preserve_empty = change_type == ChangeType.UPDATE
+
     change = Change(
         change_type=change_type,
         before=_tidy(prechange_data),
@@ -203,12 +208,12 @@ def diff_to_change(
     )
 
     if change_type != ChangeType.NOOP:
-        change.data = _tidy(postchange_data)
+        change.data = _tidy(postchange_data, exclude_empty_values=not preserve_empty)
 
     return change
 
-def _tidy(data: dict) -> dict:
-    return sort_dict_recursively(clean_diff_data(data))
+def _tidy(data: dict, exclude_empty_values: bool = True) -> dict:
+    return sort_dict_recursively(clean_diff_data(data, exclude_empty_values=exclude_empty_values))
 
 def sort_dict_recursively(d):
     """Recursively sorts a dictionary by keys."""
