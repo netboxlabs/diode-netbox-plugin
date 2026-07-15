@@ -13,7 +13,7 @@ from uuid import uuid4
 import netaddr
 from circuits.models import Circuit, Provider
 from core.models import ObjectType
-from dcim.models import Device, FrontPort, Interface, ModuleBay, RearPort, Site
+from dcim.models import Device, DeviceRole, DeviceType, FrontPort, Interface, Manufacturer, ModuleBay, RearPort, Site
 from extras.models import CustomField
 from extras.models.customfields import CustomFieldChoiceSet, CustomFieldChoiceSetBaseChoices, CustomFieldTypeChoices
 from ipam.models import ASN, VRF, IPAddress, VLANGroup, VLANTranslationPolicy
@@ -486,6 +486,88 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         self.assertEqual(new_ipaddress.assigned_object.name, f"Interface {interface_uuid}")
         device = Device.objects.get(name=f"Device {device_uuid}")
         self.assertEqual(device.primary_ip4.pk, new_ipaddress.pk)
+
+    def _create_device_with_interface(self, suffix, address=None):
+        """Create a site/role/type/device/interface graph, optionally with an IP."""
+        site = Site.objects.create(name=f"Site {suffix}", slug=f"site-{suffix}")
+        manufacturer = Manufacturer.objects.create(
+            name=f"Manufacturer {suffix}", slug=f"manufacturer-{suffix}"
+        )
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model=f"Device Type {suffix}",
+            slug=f"device-type-{suffix}",
+        )
+        role = DeviceRole.objects.create(
+            name=f"Role {suffix}", slug=f"role-{suffix}", color="ff0000"
+        )
+        device = Device.objects.create(
+            name=f"Device {suffix}", device_type=device_type, role=role, site=site
+        )
+        interface = Interface.objects.create(
+            device=device, name="GigabitEthernet1", type="1000base-t"
+        )
+        ip = IPAddress.objects.create(address=address) if address else None
+        return device, interface, ip
+
+    def _device_primary_ip4_payload(self, device, interface, address):
+        """Device-discovery style payload: IP assigned to an interface of a device whose primary_ip4 is that IP."""
+        return {
+            "timestamp": 1,
+            "object_type": "ipam.ipaddress",
+            "entity": {
+                "ip_address": {
+                    "address": address,
+                    "assigned_object_interface": {
+                        "name": interface.name,
+                        "type": interface.type,
+                        "device": {
+                            "name": device.name,
+                            "role": {"name": device.role.name},
+                            "site": {"name": device.site.name},
+                            "device_type": {
+                                "manufacturer": {
+                                    "name": device.device_type.manufacturer.name
+                                },
+                                "model": device.device_type.model,
+                            },
+                            "primary_ip4": {"address": address},
+                        },
+                    },
+                },
+            },
+        }
+
+    def test_apply_device_primary_ip4_with_preexisting_unassigned_ip(self):
+        """Apply primary_ip4 when the IP exists unassigned and is only assigned to an interface later in the change set."""
+        addr = "10.0.1.123/24"
+        # poisoned state: a prior network-discovery ingest created the IP
+        # without an interface assignment; the device and interface exist too
+        device, interface, ip = self._create_device_with_interface(str(uuid4()), address=addr)
+
+        payload = self._device_primary_ip4_payload(device, interface, addr)
+        self.diff_and_apply(payload)
+
+        ip.refresh_from_db()
+        device.refresh_from_db()
+        self.assertEqual(ip.assigned_object, interface)
+        self.assertEqual(device.primary_ip4_id, ip.pk)
+
+    def test_rediff_converged_device_primary_ip4_is_noop(self):
+        """A converged device with primary_ip4 re-diffs to an empty change set."""
+        addr = "10.0.2.45/24"
+        device, interface, ip = self._create_device_with_interface(str(uuid4()), address=addr)
+        ip.assigned_object = interface
+        ip.save()
+        device.primary_ip4 = ip
+        device.save()
+
+        payload = self._device_primary_ip4_payload(device, interface, addr)
+        response = self.client.post(
+            self.diff_url, data=payload, format="json", **self.authorization_header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json().get("change_set", {}).get("changes", []), [])
 
     def test_generate_diff_and_apply_create_device_with_primary_ip6(self):
         """Test generate diff and apply create device with primary ip6."""
@@ -2096,5 +2178,5 @@ class GenerateDiffAndApplyTestCase(APITestCase):
         response2 = self.client.post(
             self.apply_url, data=diff, format="json", **self.authorization_header
         )
-        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        self.assertEqual(response2.status_code, status.HTTP_200_OK, response2.content)
         return (response1, response2)
