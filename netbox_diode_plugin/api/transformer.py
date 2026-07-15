@@ -767,18 +767,28 @@ def _handle_post_creates(entities: list[dict]) -> list[str]:
         instance = entity.get('_instance')
         prior_index, prior_entity = by_uuid[instance]
 
-        # a post create can be merged whenever the entities it relies on
-        # already exist (were resolved) or there are no dependencies between
-        # the object being updated and the post-create.
+        # A post-create can only be merged into its object's main change when
+        # nothing it references is ordered after that object in the change
+        # set. That the referenced objects already exist is not enough: an
+        # existing object may itself be updated later in the same change set
+        # (e.g. an IP address that only gets assigned to an interface further
+        # down), and a merged reference would be applied before that update.
         can_merge = all(
-            by_uuid[r][1].get('_instance') is not None
+            by_uuid[r][0] <= prior_index
             for r in entity['_refs']
-        ) or sorted(by_uuid[r][0] for r in entity['_refs'])[-1] == prior_index
+        )
 
         if can_merge:
             prior_entity.update([x for x in entity.items() if not x[0].startswith('_')])
         else:
             entity['id'] = prior_entity['id']
+            # When the object already exists, diff the deferred step against
+            # its real state rather than the submitted node data (which never
+            # carries the deferred fields), so an already-converged reference
+            # NOOPs instead of re-diffing as an update on every ingest.
+            prior_instance = prior_entity.get('_instance')
+            if prior_instance is not None:
+                entity['_instance'] = prior_instance
             out.append(entity)
 
     return out
