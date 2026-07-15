@@ -33,9 +33,9 @@ jobs:
         netbox: [ "v4.6.0", "v4.5.5", "v4.4.10" ]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
@@ -62,7 +62,7 @@ jobs:
             exit 1
           fi
       - name: Coverage comment
-        uses: orgoro/coverage@3f13a558c5af7376496aa4848bf0224aead366ac # v3.2
+        uses: orgoro/coverage@53d6a49e69e38cf1606ea91ee3f4e64e2754fabb # v3.3.1
         if: github.event.pull_request.head.repo.full_name == github.repository && matrix.netbox == env.DEFAULT_NETBOX_VERSION
         with:
           coverageFile: ./docker/coverage/report.xml
