@@ -6,6 +6,12 @@ import utilities.json
 from django.db import migrations, models
 from netbox.plugins import get_plugin_config
 
+# Setting is not branch-aware: its queries always route to the main schema,
+# and per-branch settings live there via the branch_id column. Branch schemas
+# must not get a copy of this table; netbox-branching (>= 1.0.1) honors this
+# flag and skips the migration when migrating a branch.
+fake_on_branch = True
+
 
 def create_settings_entity(apps, schema_editor):
     """Create a Setting entity."""
@@ -16,7 +22,14 @@ def create_settings_entity(apps, schema_editor):
         "netbox_diode_plugin", "diode_target_override", default_diode_target
     )
 
-    Setting.objects.create(diode_target=diode_target)
+    # Pin the insert to the connection running this migration. The default
+    # connection points at the main schema, whose table may already be
+    # migrated past 0007 (no created/last_updated columns) when this
+    # migration is replayed on a branch by an older netbox-branching that
+    # ignores fake_on_branch.
+    Setting.objects.using(schema_editor.connection.alias).create(
+        diode_target=diode_target
+    )
 
 
 class Migration(migrations.Migration):
