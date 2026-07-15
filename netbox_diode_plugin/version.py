@@ -17,5 +17,3 @@ def version_display():
 def version_semver():
     """Semantic version."""
     return __version__
-
-# temp: trigger CI for workflow changes — revert before merge
