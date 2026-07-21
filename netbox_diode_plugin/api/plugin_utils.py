@@ -2,7 +2,7 @@
 
 # Generated code. DO NOT EDIT.
 # Source: NetBox v4.6.0
-# Timestamp: 2026-07-01 02:51:21Z
+# Timestamp: 2026-07-08 14:57:56Z
 
 from dataclasses import dataclass
 import datetime
@@ -364,6 +364,7 @@ _JSON_REF_INFO = {
             field_name="object",
             is_generic=True,
         ),
+        "user": RefInfo(object_type="users.user", field_name="object", is_generic=True),
     },
     "circuits.circuit": {
         "assignments": RefInfo(
@@ -712,6 +713,7 @@ _JSON_REF_INFO = {
         "rack": RefInfo(object_type="dcim.rack", field_name="rack"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
+        "user": RefInfo(object_type="users.user", field_name="user"),
     },
     "dcim.rackrole": {
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
@@ -1168,6 +1170,10 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
+        "assigned_object_user": RefInfo(
+            object_type="users.user", field_name="assigned_object", is_generic=True
+        ),
+        "created_by": RefInfo(object_type="users.user", field_name="created_by"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "ipam.aggregate": {
@@ -1537,6 +1543,9 @@ _JSON_REF_INFO = {
             object_type="virtualization.virtualmachinetype",
             field_name="interface",
             is_generic=True,
+        ),
+        "interface_user": RefInfo(
+            object_type="users.user", field_name="interface", is_generic=True
         ),
     },
     "ipam.ipaddress": {
@@ -2012,6 +2021,9 @@ _JSON_REF_INFO = {
             field_name="object",
             is_generic=True,
         ),
+        "object_user": RefInfo(
+            object_type="users.user", field_name="object", is_generic=True
+        ),
         "role": RefInfo(object_type="tenancy.contactrole", field_name="role"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -2036,6 +2048,7 @@ _JSON_REF_INFO = {
     },
     "users.owner": {
         "group": RefInfo(object_type="users.ownergroup", field_name="group"),
+        "users": RefInfo(object_type="users.user", field_name="users", is_many=True),
     },
     "virtualization.cluster": {
         "group": RefInfo(object_type="virtualization.clustergroup", field_name="group"),
@@ -2556,6 +2569,9 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
+        "assigned_object_user": RefInfo(
+            object_type="users.user", field_name="assigned_object", is_generic=True
+        ),
         "l2vpn": RefInfo(object_type="vpn.l2vpn", field_name="l2vpn"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -2933,6 +2949,9 @@ _JSON_REF_INFO = {
             field_name="termination",
             is_generic=True,
         ),
+        "termination_user": RefInfo(
+            object_type="users.user", field_name="termination", is_generic=True
+        ),
         "tunnel": RefInfo(object_type="vpn.tunnel", field_name="tunnel"),
     },
     "wireless.wirelesslan": {
@@ -3059,6 +3078,7 @@ _GENERIC_OBJECT_VARIANTS: dict[str, str] = {
     "object_tunnel": "vpn.tunnel",
     "object_tunnel_group": "vpn.tunnelgroup",
     "object_tunnel_termination": "vpn.tunneltermination",
+    "object_user": "users.user",
     "object_virtual_chassis": "dcim.virtualchassis",
     "object_virtual_circuit": "circuits.virtualcircuit",
     "object_virtual_circuit_termination": "circuits.virtualcircuittermination",
@@ -3651,6 +3671,7 @@ _LEGAL_FIELDS = {
             "tags",
             "tenant",
             "units",
+            "user",
         ]
     ),
     "dcim.rackrole": frozenset(
@@ -3838,6 +3859,7 @@ _LEGAL_FIELDS = {
             "assigned_object_id",
             "assigned_object_type",
             "comments",
+            "created_by",
             "custom_fields",
             "kind",
             "tags",
@@ -4124,8 +4146,9 @@ _LEGAL_FIELDS = {
             "tags",
         ]
     ),
-    "users.owner": frozenset(["description", "group", "name"]),
+    "users.owner": frozenset(["description", "group", "name", "users"]),
     "users.ownergroup": frozenset(["description", "name"]),
+    "users.user": frozenset(["username"]),
     "virtualization.cluster": frozenset(
         [
             "comments",
@@ -4409,6 +4432,7 @@ _OBJECT_TYPE_PRIMARY_VALUE_FIELD_MAP = {
     "dcim.moduletype": "model",
     "ipam.prefix": "prefix",
     "dcim.racktype": "model",
+    "users.user": "username",
     "circuits.virtualcircuit": "cid",
     "wireless.wirelesslan": "ssid",
 }

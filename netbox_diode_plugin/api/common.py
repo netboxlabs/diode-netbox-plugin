@@ -28,6 +28,14 @@ logger = logging.getLogger("netbox.diode_data")
 
 NON_FIELD_ERRORS = "__all__"
 
+# Types resolved against existing rows only; never created (or updated) via
+# ingest. A reference to one that has no match becomes a per-entity deviation,
+# not a CREATE. (users.user is exposed only as a match-only reference target;
+# auto-minting Django auth users from ingest data is a privilege/security risk.)
+# Shared contract between the transformer (plan path) and applier (direct-apply
+# path); lives here so neither layer owns the other's constant.
+MATCH_ONLY_TYPES = frozenset({"users.user"})
+
 
 @lru_cache(maxsize=256)
 def _get_custom_fields_for_model(model) -> tuple:
