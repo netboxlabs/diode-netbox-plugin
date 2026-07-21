@@ -12,12 +12,20 @@ from django.db.utils import IntegrityError
 from rest_framework.exceptions import ValidationError as ValidationError
 
 from .change_log_buffer import snapshot_for_apply
-from .common import NON_FIELD_ERRORS, Change, ChangeSet, ChangeSetException, ChangeSetResult, ChangeType, error_from_validation_error
+from .common import (
+    MATCH_ONLY_TYPES,
+    NON_FIELD_ERRORS,
+    Change,
+    ChangeSet,
+    ChangeSetException,
+    ChangeSetResult,
+    ChangeType,
+    error_from_validation_error,
+)
 from .matcher import find_existing_object, invalidate_find_obj_entry, requires_pre_save_match
 from .plugin_utils import get_object_type_model, legal_fields
 from .profile import profiled
 from .supported_models import get_serializer_for_model
-from .transformer import _MATCH_ONLY_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +171,7 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
     # never created OR updated via ingest. The transformer guards the plan path;
     # this guards the direct apply-change-set / bulk-apply path, which bypasses
     # the transformer, so a client changeset can't create or rename a user.
-    if change.object_type in _MATCH_ONLY_TYPES and change_type in (ChangeType.CREATE, ChangeType.UPDATE):
+    if change.object_type in MATCH_ONLY_TYPES and change_type in (ChangeType.CREATE, ChangeType.UPDATE):
         raise _err(
             f"{change.object_type} is match-only and cannot be created or updated via ingest",
             change.object_type, "__all__",

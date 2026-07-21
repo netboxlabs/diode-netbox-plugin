@@ -17,7 +17,15 @@ from django.utils.text import slugify
 from extras.models.customfields import CustomField
 from rest_framework import serializers
 
-from .common import NON_FIELD_ERRORS, AutoSlug, ChangeSetException, UnresolvedReference, harmonize_formats, sort_ints_first
+from .common import (
+    MATCH_ONLY_TYPES,
+    NON_FIELD_ERRORS,
+    AutoSlug,
+    ChangeSetException,
+    UnresolvedReference,
+    harmonize_formats,
+    sort_ints_first,
+)
 from .compat import apply_entity_migrations
 from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
@@ -106,12 +114,6 @@ _IS_CIRCULAR_REFERENCE = {
 
 def _is_circular_reference(object_type, field_name):
     return field_name in _IS_CIRCULAR_REFERENCE.get(object_type, frozenset())
-
-# Types resolved against existing rows only; never created (or updated) via
-# ingest. A reference to one that has no match becomes a per-entity deviation,
-# not a CREATE. (users.user is exposed only as a match-only reference target;
-# auto-minting Django auth users from ingest data is a privilege/security risk.)
-_MATCH_ONLY_TYPES = frozenset({"users.user"})
 
 @profiled("transform")
 def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]: # noqa: C901
@@ -664,7 +666,7 @@ def _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved) -> bool:
             errors={NON_FIELD_ERRORS: [f"No {object_type} found with id {netbox_id}"]}
         )
     new_refs[data['_uuid']] = existing.id
-    if object_type in _MATCH_ONLY_TYPES:
+    if object_type in MATCH_ONLY_TYPES:
         # pure reference target: resolved to the existing pk, no change emitted
         return True
     _mark_seen(data, object_type, existing, seen)
@@ -694,7 +696,7 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
         existing = find_existing_object(data, object_type)
         if existing is not None:
             new_refs[data['_uuid']] = existing.id
-            if object_type in _MATCH_ONLY_TYPES:
+            if object_type in MATCH_ONLY_TYPES:
                 # Pure reference target: resolve the parent's reference to the
                 # existing pk and emit NO change for this node. Match-only types
                 # (users.user) are never created or updated via ingest, and a
@@ -705,7 +707,7 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
             data['id'] = existing.id
             data['_instance'] = existing
             resolved.append(data)
-        elif object_type in _MATCH_ONLY_TYPES:
+        elif object_type in MATCH_ONLY_TYPES:
             primary = get_primary_value(data, object_type)
             raise ChangeSetException(
                 f"{object_type} not found for match-only reference",
