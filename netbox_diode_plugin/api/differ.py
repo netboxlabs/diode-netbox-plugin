@@ -25,12 +25,57 @@ from .common import (
     sort_ints_first,
 )
 from .matcher import _get_active_branch_schema
-from .plugin_utils import get_primary_value, legal_fields
+from .plugin_utils import get_json_ref_info, get_primary_value, legal_fields
 from .profile import profiled
 from .supported_models import extract_supported_models
 from .transformer import _get_custom_fields_for_model, cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
 
 logger = logging.getLogger(__name__)
+
+
+# --- Changeset normalization ------------------------------------------------
+# Mirror NetBox model save()-time normalization that the DRF serializer validates
+# against: when a driver field takes a value that forbids a dependent field, the
+# stale dependent value must be cleared so the merged partial-update state is legal.
+#
+# object_type -> driver_field -> { driver_value : [dependent fields to clear] }
+# Values verified against NetBox InterfaceSerializer.validate() (v4.4 / v4.5.5 / v4.6.0).
+_INTERFACE_MODE_VLAN_RULES = {
+    "": ["untagged_vlan", "tagged_vlans", "qinq_svlan"],  # routed / no 802.1Q
+    "access": ["tagged_vlans", "qinq_svlan"],
+    "tagged": ["qinq_svlan"],
+    "tagged-all": ["tagged_vlans", "qinq_svlan"],
+    "q-in-q": [],
+}
+
+_CHANGESET_NORMALIZERS = {
+    "dcim.interface": {"mode": _INTERFACE_MODE_VLAN_RULES},
+    "virtualization.vminterface": {"mode": _INTERFACE_MODE_VLAN_RULES},
+}
+
+
+def normalize_changeset(object_type: str, prechange: dict, entity: dict) -> None:
+    """
+    Clear stale dependent fields the effective driver value forbids.
+
+    Mutates ``entity`` in place. No-op unless ``object_type`` is registered and an
+    existing row (non-empty ``prechange``) is present. A dependent field is cleared
+    only when it is NOT explicitly present in ``entity`` (respect producer intent)
+    and its existing value is non-empty (idempotency). Clearing uses ``[]`` for
+    many-valued refs and ``None`` for single refs.
+    """
+    rules_by_driver = _CHANGESET_NORMALIZERS.get(object_type)
+    if not rules_by_driver or not prechange:
+        return
+    for driver_field, value_map in rules_by_driver.items():
+        effective = entity.get(driver_field, prechange.get(driver_field))
+        for dependent in value_map.get(effective or "", ()):
+            if dependent in entity:
+                continue
+            if prechange.get(dependent):
+                ref = get_json_ref_info(object_type, dependent)
+                entity[dependent] = [] if (ref and ref.is_many) else None
+
 
 _prechange_cache = contextvars.ContextVar("diode_prechange_cache", default=None)
 
@@ -269,6 +314,7 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
                 entity = _partially_merge(prechange_data, entity, instance)
                 _align_cable_ends(prechange_data, entity)
                 _apply_merge_semantics(object_type, prechange_data, entity)
+                normalize_changeset(object_type, prechange_data, entity)
             changed_data = shallow_compare_dict(
                 prechange_data, entity,
             )
