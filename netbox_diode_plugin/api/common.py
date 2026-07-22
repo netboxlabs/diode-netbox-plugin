@@ -24,6 +24,8 @@ from extras.models import CustomField
 from netaddr.eui import EUI
 from rest_framework import status
 
+from .supported_models import extract_supported_models
+
 logger = logging.getLogger("netbox.diode_data")
 
 NON_FIELD_ERRORS = "__all__"
@@ -175,6 +177,15 @@ class ChangeSet:
             if change.before:
                 change_data.update(change.before)
 
+            # Serializer-aliased wire names (e.g. a field exposed with
+            # source=<model attr>) are not settable model attributes; rename
+            # them to the backing model field before instantiating.
+            supported = extract_supported_models().get(change.object_type, {})
+            for wire_name, info in supported.get("fields", {}).items():
+                source = info.get("source", wire_name)
+                if source != wire_name and wire_name in change_data:
+                    change_data[source] = change_data.pop(wire_name)
+
             excluded_relation_fields, rel_errors = self._validate_relations(change_data, model)
             if rel_errors:
                 errors[change.object_type] = rel_errors
@@ -188,6 +199,10 @@ class ChangeSet:
                 instance.clean_fields(exclude=excluded_relation_fields)
             except ValidationError as e:
                 errors[change.object_type].update(_error_dict(e))
+            except (TypeError, AttributeError) as e:
+                # a key with no settable model attribute reached the
+                # constructor — report it instead of crashing the plan path
+                errors[change.object_type].update({NON_FIELD_ERRORS: [str(e)]})
 
         return errors or None
 
