@@ -92,6 +92,45 @@ class NormalizeChangesetTests(SimpleTestCase):
         out = self._run("dcim.interface", prechange, entity)
         self.assertNotIn("tagged_vlans", out)  # unknown mode -> clear nothing
 
+    def test_qinq_to_tagged_clears_qinq_svlan_keeps_tagged(self):
+        """Mode 'tagged' forbids only qinq_svlan; tagged_vlans are allowed and kept."""
+        out = self._run(
+            "dcim.interface",
+            {"mode": "q-in-q", "qinq_svlan": 5, "tagged_vlans": [101]},
+            {"mode": "tagged"},
+        )
+        self.assertIsNone(out["qinq_svlan"])
+        self.assertNotIn("tagged_vlans", out)
+
+    def test_vlan_svlan_role_clears_stale_qinq_svlan(self):
+        """qinq_role svlan (not customer) forbids qinq_svlan -> stale value cleared."""
+        out = self._run("ipam.vlan", {"qinq_role": "cvlan", "qinq_svlan": 7}, {"qinq_role": "svlan"})
+        self.assertIsNone(out["qinq_svlan"])
+
+    def test_vlan_empty_role_clears_qinq_svlan(self):
+        """No qinq role forbids qinq_svlan -> cleared."""
+        out = self._run("ipam.vlan", {"qinq_role": "cvlan", "qinq_svlan": 7}, {"qinq_role": ""})
+        self.assertIsNone(out["qinq_svlan"])
+
+    def test_vlan_customer_role_keeps_qinq_svlan(self):
+        """Customer (cvlan) role permits qinq_svlan -> not cleared."""
+        out = self._run("ipam.vlan", {"qinq_role": "cvlan", "qinq_svlan": 7}, {"qinq_role": "cvlan", "name": "x"})
+        self.assertNotIn("qinq_svlan", out)
+
+    def test_interface_nonwireless_type_clears_rf_fields(self):
+        """A non-wireless interface type forbids rf_channel/frequency/width -> cleared."""
+        prechange = {"type": "ieee802.11ac", "rf_channel": "ch", "rf_channel_frequency": 2412, "rf_channel_width": 22}
+        out = self._run("dcim.interface", prechange, {"type": "1000base-t"})
+        self.assertIsNone(out["rf_channel"])
+        self.assertIsNone(out["rf_channel_frequency"])
+        self.assertIsNone(out["rf_channel_width"])
+
+    def test_interface_wireless_type_keeps_rf_fields(self):
+        """A wireless interface type permits rf fields -> not cleared."""
+        prechange = {"type": "ieee802.11ac", "rf_channel": "ch"}
+        out = self._run("dcim.interface", prechange, {"description": "x"})  # type unchanged (wireless)
+        self.assertNotIn("rf_channel", out)
+
 
 class InterfaceModeClearE2ETests(APITestCase):
     """End-to-end: seed an existing interface, ingest a mode change, assert clear."""
@@ -318,3 +357,48 @@ class InterfaceModeClearE2ETests(APITestCase):
             any(c.get("data", {}).get("tagged_vlans") == [] for c in vm_updates),
             "hook must emit tagged_vlans:[] for vminterface (DB-only assertion is vacuous here)",
         )
+
+    def test_interface_wireless_to_ethernet_clears_rf(self):
+        """Type change wireless->ethernet clears stale rf_channel (ORM-seed; save() never clears it)."""
+        from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+        site = Site.objects.create(name="rf-site", slug="rf-site")
+        mfr = Manufacturer.objects.create(name="rf-mfr", slug="rf-mfr")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="rf-model", slug="rf-model")
+        role = DeviceRole.objects.create(name="rf-role", slug="rf-role")
+        dev = Device.objects.create(name="rf-dev", device_type=dt, role=role, site=site)
+        iface = Interface.objects.create(device=dev, name="Wl0", type="ieee802.11ac")
+        # Set a stale rf_channel via queryset.update() to bypass save()'s frequency/width
+        # derivation. Use a valid WirelessChannelChoices value so the plugin's field-level
+        # validation accepts it; the forbidding rule keys on rf_channel presence.
+        Interface.objects.filter(pk=iface.pk).update(rf_channel="2.4g-1-2412-22")
+        update = {
+            "name": "Wl0", "type": "1000base-t",
+            "device": {"name": "rf-dev", "role": {"name": "rf-role"},
+                       "device_type": {"manufacturer": {"name": "rf-mfr"}, "model": "rf-model"},
+                       "site": {"name": "rf-site"}},
+        }
+        _, apply = self._diff_apply(update)
+        self.assertEqual(apply.status_code, 200)
+        self.assertIsNone(apply.json().get("errors"))
+        iface.refresh_from_db()
+        self.assertEqual(iface.type, "1000base-t")
+        self.assertFalse(iface.rf_channel)  # stale rf_channel cleared
+
+    def test_vlan_qinq_role_change_clears_qinq_svlan(self):
+        """qinq_role customer->service clears the stale qinq_svlan (ORM-seed + netbox_id match)."""
+        from ipam.models import VLAN
+        svlan = VLAN.objects.create(vid=990, name="qinq-svc")
+        cvlan = VLAN.objects.create(vid=991, name="qinq-cust", qinq_role="cvlan", qinq_svlan=svlan)
+        update = {
+            "vid": 991, "name": "qinq-cust", "qinq_role": "svlan",
+            "metadata": {"source_match": {"netbox_id": cvlan.pk}},
+        }
+        payload = {"timestamp": 1, "object_type": "ipam.vlan", "entity": {"vlan": update}}
+        r1 = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r1.status_code, 200)
+        r2 = self.client.post(self.apply_url, data=r1.json().get("change_set", {}), format="json", **self.auth)
+        self.assertEqual(r2.status_code, 200)
+        self.assertIsNone(r2.json().get("errors"))
+        cvlan.refresh_from_db()
+        self.assertEqual(cvlan.qinq_role, "svlan")
+        self.assertIsNone(cvlan.qinq_svlan)

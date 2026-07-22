@@ -8,6 +8,8 @@ import datetime
 import logging
 from collections import defaultdict
 
+from dcim.choices import InterfaceTypeChoices
+from dcim.constants import WIRELESS_IFACE_TYPES
 from django.contrib.contenttypes.models import ContentType
 from extras.choices import CustomFieldTypeChoices
 from rest_framework import serializers
@@ -39,7 +41,7 @@ logger = logging.getLogger(__name__)
 # stale dependent value must be cleared so the merged partial-update state is legal.
 #
 # object_type -> driver_field -> { driver_value : [dependent fields to clear] }
-# Values verified against NetBox InterfaceSerializer.validate() (v4.4 / v4.5.5 / v4.6.0).
+# Values verified against NetBox model clean() / serializer validate() (v4.4 / v4.5.5 / v4.6.0).
 _INTERFACE_MODE_VLAN_RULES = {
     "": ["untagged_vlan", "tagged_vlans", "qinq_svlan"],  # routed / no 802.1Q
     "access": ["tagged_vlans", "qinq_svlan"],
@@ -48,9 +50,28 @@ _INTERFACE_MODE_VLAN_RULES = {
     "q-in-q": [],
 }
 
+# rf_channel / rf_channel_frequency / rf_channel_width may be set only on wireless
+# interface types (Interface.clean(); is_wireless == type in WIRELESS_IFACE_TYPES).
+# Keyed on every non-wireless type (complement of the wireless allow-set) so a type
+# change away from wireless clears the stale rf fields. All three are null=True -> None.
+_RF_FIELDS = ["rf_channel", "rf_channel_frequency", "rf_channel_width"]
+_INTERFACE_TYPE_RF_RULES = {
+    t: _RF_FIELDS for t in InterfaceTypeChoices.values() if t not in WIRELESS_IFACE_TYPES
+}
+
+# ipam.vlan: qinq_svlan may be set only on a Q-in-Q customer VLAN (qinq_role == 'cvlan');
+# VLAN.clean() rejects a stale qinq_svlan for any other role. (The reciprocal
+# "customer VLAN requires an svlan" is a presence rule, not ours -> 'cvlan' maps to [].)
+_VLAN_QINQ_RULES = {
+    "": ["qinq_svlan"],
+    "svlan": ["qinq_svlan"],
+    "cvlan": [],
+}
+
 _CHANGESET_NORMALIZERS = {
-    "dcim.interface": {"mode": _INTERFACE_MODE_VLAN_RULES},
+    "dcim.interface": {"mode": _INTERFACE_MODE_VLAN_RULES, "type": _INTERFACE_TYPE_RF_RULES},
     "virtualization.vminterface": {"mode": _INTERFACE_MODE_VLAN_RULES},
+    "ipam.vlan": {"qinq_role": _VLAN_QINQ_RULES},
 }
 
 
