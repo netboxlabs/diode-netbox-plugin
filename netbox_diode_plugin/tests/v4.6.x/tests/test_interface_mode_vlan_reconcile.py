@@ -118,12 +118,14 @@ class NormalizeChangesetTests(SimpleTestCase):
         self.assertNotIn("qinq_svlan", out)
 
     def test_interface_nonwireless_type_clears_rf_fields(self):
-        """A non-wireless interface type forbids rf_channel/frequency/width -> cleared."""
-        prechange = {"type": "ieee802.11ac", "rf_channel": "ch", "rf_channel_frequency": 2412, "rf_channel_width": 22}
+        """A non-wireless interface type forbids rf_channel/frequency/width/role -> cleared."""
+        prechange = {"type": "ieee802.11ac", "rf_channel": "ch", "rf_channel_frequency": 2412,
+                     "rf_channel_width": 22, "rf_role": "ap"}
         out = self._run("dcim.interface", prechange, {"type": "1000base-t"})
         self.assertIsNone(out["rf_channel"])
         self.assertIsNone(out["rf_channel_frequency"])
         self.assertIsNone(out["rf_channel_width"])
+        self.assertIsNone(out["rf_role"])
 
     def test_interface_wireless_type_keeps_rf_fields(self):
         """A wireless interface type permits rf fields -> not cleared."""
@@ -359,7 +361,7 @@ class InterfaceModeClearE2ETests(APITestCase):
         )
 
     def test_interface_wireless_to_ethernet_clears_rf(self):
-        """Type change wireless->ethernet clears stale rf_channel (ORM-seed; save() never clears it)."""
+        """Type change wireless->ethernet clears stale rf_channel and rf_role."""
         from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
         site = Site.objects.create(name="rf-site", slug="rf-site")
         mfr = Manufacturer.objects.create(name="rf-mfr", slug="rf-mfr")
@@ -367,10 +369,11 @@ class InterfaceModeClearE2ETests(APITestCase):
         role = DeviceRole.objects.create(name="rf-role", slug="rf-role")
         dev = Device.objects.create(name="rf-dev", device_type=dt, role=role, site=site)
         iface = Interface.objects.create(device=dev, name="Wl0", type="ieee802.11ac")
-        # Set a stale rf_channel via queryset.update() to bypass save()'s frequency/width
-        # derivation. Use a valid WirelessChannelChoices value so the plugin's field-level
-        # validation accepts it; the forbidding rule keys on rf_channel presence.
-        Interface.objects.filter(pk=iface.pk).update(rf_channel="2.4g-1-2412-22")
+        # Seed stale wireless fields via queryset.update() to bypass save()'s frequency/width
+        # derivation. Use a valid WirelessChannelChoices value so field-level validation
+        # accepts it; the forbidding rule keys on presence. rf_role is load-bearing: without
+        # clearing it, Interface.clean() rejects the non-wireless interface with a wireless role.
+        Interface.objects.filter(pk=iface.pk).update(rf_channel="2.4g-1-2412-22", rf_role="ap")
         update = {
             "name": "Wl0", "type": "1000base-t",
             "device": {"name": "rf-dev", "role": {"name": "rf-role"},
@@ -383,6 +386,7 @@ class InterfaceModeClearE2ETests(APITestCase):
         iface.refresh_from_db()
         self.assertEqual(iface.type, "1000base-t")
         self.assertFalse(iface.rf_channel)  # stale rf_channel cleared
+        self.assertFalse(iface.rf_role)     # stale rf_role cleared (Codex P2)
 
     def test_vlan_qinq_role_change_clears_qinq_svlan(self):
         """qinq_role customer->service clears the stale qinq_svlan (ORM-seed + netbox_id match)."""

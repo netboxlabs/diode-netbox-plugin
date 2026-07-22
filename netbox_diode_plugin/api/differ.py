@@ -50,11 +50,11 @@ _INTERFACE_MODE_VLAN_RULES = {
     "q-in-q": [],
 }
 
-# rf_channel / rf_channel_frequency / rf_channel_width may be set only on wireless
-# interface types (Interface.clean(); is_wireless == type in WIRELESS_IFACE_TYPES).
+# rf_channel / rf_channel_frequency / rf_channel_width / rf_role may be set only on
+# wireless interface types (Interface.clean(); is_wireless == type in WIRELESS_IFACE_TYPES).
 # Keyed on every non-wireless type (complement of the wireless allow-set) so a type
-# change away from wireless clears the stale rf fields. All three are null=True -> None.
-_RF_FIELDS = ["rf_channel", "rf_channel_frequency", "rf_channel_width"]
+# change away from wireless clears the stale rf fields. All four are null=True -> None.
+_RF_FIELDS = ["rf_channel", "rf_channel_frequency", "rf_channel_width", "rf_role"]
 _INTERFACE_TYPE_RF_RULES = {
     t: _RF_FIELDS for t in InterfaceTypeChoices.values() if t not in WIRELESS_IFACE_TYPES
 }
