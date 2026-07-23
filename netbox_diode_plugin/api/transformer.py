@@ -41,6 +41,14 @@ from .profile import profiled
 
 logger = logging.getLogger("netbox.diode_data")
 
+# A field the running NetBox serializer accepts for write but that has no
+# backing model field (create-time option, nested write helper). It cannot
+# be ingested as object state, so it is dropped with a specific notice.
+SERIALIZER_ONLY_FIELD_WARNING = (
+    "Ignored field: accepted by the NetBox API but not supported by Diode "
+    "ingestion (no corresponding model field)."
+)
+
 @lru_cache(maxsize=128)
 def _camel_to_snake_case(name):
     """Convert camelCase string to snake_case."""
@@ -202,10 +210,15 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
             return ref_info.field_name + "_type" in supported_fields
         return ref_info.field_name in supported_fields
 
+    serializer_only = supported_models.get(object_type, {}).get("serializer_only_fields", set())
     for key, value in proto_json.items():
         ref_info = get_json_ref_info(object_type, key)
         if not is_supported(key, ref_info):
-            node['_warnings'][key] = ["Ignored unsupported field."]
+            warning_key = ref_info.field_name if ref_info else key
+            if warning_key in serializer_only:
+                node['_warnings'][key] = [SERIALIZER_ONLY_FIELD_WARNING]
+            else:
+                node['_warnings'][key] = ["Ignored unsupported field."]
             continue
 
         if ref_info is None:
