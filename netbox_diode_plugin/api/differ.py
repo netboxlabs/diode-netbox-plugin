@@ -83,10 +83,12 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         if field_name not in diode_fields and field_name != "id":
             continue
 
-        if not hasattr(instance, field_name):
+        # aliased wire fields read through their backing model attribute
+        source = field_info.get("source", field_name)
+        if not hasattr(instance, source):
             continue
 
-        value = getattr(instance, field_name)
+        value = getattr(instance, source)
         if hasattr(value, "all"):  # Handle many-to-many and many-to-one relationships
             # For any relationship that has an 'all' method, get all related objects' primary keys
             prechange_data[field_name] = (
