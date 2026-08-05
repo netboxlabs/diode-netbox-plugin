@@ -317,6 +317,36 @@ def error_from_validation_error(e, object_name):
             }
     return ChangeSetException("validation error", errors=errors)
 
+def _numeric_range_to_inclusive_pair(data):
+    """
+    Convert a NumericRange to an inclusive ``[lower, upper]`` pair.
+
+    The bounds must be honoured rather than assumed. A range read back from
+    Postgres is canonicalized to half-open ``[lower, upper)``, but a range
+    constructed in Python keeps whatever bounds it was given, and NetBox's own
+    model defaults use inclusive ones -- ``ipam.models.vlans.default_vid_ranges``
+    returns ``NumericRange(1, 4094, bounds="[]")``. Treating that as half-open
+    silently drops the top of the range, so a VLAN group created through Diode
+    ended up permitting only 1-4093 and rejected VID 4094 for the lifetime of
+    the group.
+
+    Mirrors the same normalization in NetBox's ``VLANGroup.clean()``.
+
+    Only discrete integer bounds can be shifted by one. ``NumericRange`` is an
+    alias of psycopg's generic ``Range``, so date, datetime and decimal ranges
+    match this branch too; those have no meaningful integer step, so their
+    bounds are passed through untouched rather than raising on ``date - 1``.
+    ``vid_ranges`` is currently NetBox's only range field, so nothing else
+    reaches this. A date or datetime range field would need real date
+    arithmetic here, and its exclusive bounds would be reported one step wide.
+    """
+    lower, upper = data.lower, data.upper
+    if isinstance(lower, int) and not data.lower_inc:
+        lower += 1
+    if isinstance(upper, int) and not data.upper_inc:
+        upper -= 1
+    return [lower, upper]
+
 def harmonize_formats(data):
     """Puts all data in a format that can be serialized and compared."""
     match data:
@@ -333,7 +363,7 @@ def harmonize_formats(data):
         case datetime.date():
             return data.strftime("%Y-%m-%d")
         case NumericRange():
-            return [data.lower, data.upper-1]
+            return _numeric_range_to_inclusive_pair(data)
         case netaddr.IPNetwork() | EUI() | ZoneInfo():
             return str(data)
         case _:
