@@ -80,3 +80,44 @@ class ModuleTypeAttributesE2ETests(APITestCase):
         changes = [c for c in r3.json().get("change_set", {}).get("changes", [])
                    if c["object_type"] == "dcim.moduletype"]
         self.assertTrue(all(c["change_type"] == "noop" for c in changes), changes)
+
+    def test_subset_update_merges_and_converges(self):
+        """A payload omitting stored keys merges on apply and re-diffs as NOOP."""
+        # AttributesField merges non-empty update payloads into the stored
+        # value, so the planned postchange must predict that merge.
+        ModuleTypeProfile.objects.filter(pk=self.mt.profile_id).update(
+            schema={"properties": {
+                "ram": {"type": "integer", "title": "RAM (GB)"},
+                "cpus": {"type": "integer", "title": "CPU count"},
+            }},
+        )
+        ModuleType.objects.filter(pk=self.mt.pk).update(
+            attribute_data={"ram": 32, "cpus": 8},
+        )
+
+        r1 = self.client.post(
+            self.diff_url, data=self._payload({"ram": 64}), format="json", **self.auth
+        )
+        self.assertEqual(r1.status_code, 200)
+        cs = r1.json().get("change_set", {})
+        updates = [c for c in cs.get("changes", [])
+                   if c["object_type"] == "dcim.moduletype" and c["change_type"] == "update"]
+        self.assertTrue(
+            any(c.get("data", {}).get("attributes") == {"ram": 64, "cpus": 8} for c in updates),
+            updates,
+        )
+
+        r2 = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r2.status_code, 200)
+        self.assertIsNone(r2.json().get("errors"))
+        self.mt.refresh_from_db()
+        self.assertEqual(self.mt.attribute_data, {"ram": 64, "cpus": 8})  # omitted key preserved
+
+        # a converged subset payload must re-diff as NOOP, not the same UPDATE forever
+        r3 = self.client.post(
+            self.diff_url, data=self._payload({"ram": 64}), format="json", **self.auth
+        )
+        self.assertEqual(r3.status_code, 200)
+        changes = [c for c in r3.json().get("change_set", {}).get("changes", [])
+                   if c["object_type"] == "dcim.moduletype"]
+        self.assertTrue(all(c["change_type"] == "noop" for c in changes), changes)
