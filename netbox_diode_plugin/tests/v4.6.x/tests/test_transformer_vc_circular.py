@@ -2,6 +2,7 @@
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
 from django.test import TestCase
 
+from netbox_diode_plugin.api import transformer
 from netbox_diode_plugin.api.common import ChangeType
 from netbox_diode_plugin.api.differ import generate_changeset
 
@@ -82,3 +83,45 @@ class VcCircularTransformTests(TestCase):
         entity = _device_entity("vctf-sw4", {"primary_ip4": {}})
         result = generate_changeset(entity, "dcim.device")
         self.assertIsNone(result.errors)
+
+
+class FingerprintDedupePostCreateIsolationTests(TestCase):
+    """A post-create node must never register fingerprints in `_fingerprint_dedupe`."""
+
+    def test_post_create_node_does_not_corrupt_site_dedupe(self):
+        """A post-create node sandwiched between duplicate sites must not steal their fingerprint slot."""
+        site_a = {
+            "_uuid": "site-a-uuid",
+            "_object_type": "dcim.site",
+            "_refs": set(),
+            "name": "vctf-dedupe-site",
+        }
+        device_post_create = {
+            "_uuid": "device-pc-uuid",
+            "_object_type": "dcim.device",
+            "_refs": set(),
+            "_is_post_create": True,
+            "_instance": "device-instance-uuid",
+            "vc_position": 2,
+        }
+        site_b_dup = {
+            "_uuid": "site-b-uuid",
+            "_object_type": "dcim.site",
+            "_refs": set(),
+            "name": "vctf-dedupe-site",
+        }
+
+        result = transformer._fingerprint_dedupe([site_a, device_post_create, site_b_dup])
+        self.assertEqual(len(result), 3)
+
+        # (a) the duplicate site must dedupe onto the FIRST site entity.
+        self.assertEqual(result[0]["_uuid"], "site-a-uuid")
+        self.assertEqual(result[2]["_uuid"], "site-a-uuid")
+        self.assertIs(result[0], result[2])
+
+        # (b) the post-create node must keep ONLY its own fields: it must not
+        # absorb the site's fields (e.g. 'name') nor its fingerprints.
+        device_result = result[1]
+        self.assertEqual(device_result["_uuid"], "device-pc-uuid")
+        self.assertNotIn("name", device_result)
+        self.assertEqual(device_result["vc_position"], 2)
