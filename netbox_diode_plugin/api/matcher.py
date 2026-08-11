@@ -110,6 +110,8 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 #     ENFORCE_GLOBAL_UNIQUE or the VRF's enforce_unique flag, and the
 #     applier saves through DRF serializers without calling full_clean(),
 #     so that check never runs either.
+#   - dcim.virtualchassis: matched by name when the payload has no master;
+#     NetBox has no uniqueness on VC name at all.
 #   - ipam.vlan: NetBox's (group, vid) constraint does not enforce
 #     uniqueness when group is NULL.
 #   - ipam.vlangroup: NetBox does not enforce uniqueness of name when
@@ -138,6 +140,7 @@ _REQUIRES_PRE_SAVE_MATCH = frozenset({
     "dcim.macaddress",
     "dcim.module",
     "dcim.modulebay",
+    "dcim.virtualchassis",
     "ipam.prefix",
     "ipam.vlan",
     "ipam.vlangroup",
@@ -307,6 +310,12 @@ _LOGICAL_MATCHERS = {
             model_class=get_object_type_model("virtualization.virtualmachine"),
             condition=Q(cluster__isnull=True),
         ),
+    ],
+    "dcim.virtualchassis": lambda: [
+        VirtualChassisNameMatcher(
+            model_class=get_object_type_model("dcim.virtualchassis"),
+            name="logical_vc_name_no_master",
+        )
     ],
     "ipam.service": lambda: [
         ObjectMatchCriteria(
@@ -727,6 +736,50 @@ class GlobalIPNetworkIPMatcher:
             filter[f'{field}__net_host'] = value
 
         return self.model_class.objects.filter(**filter)
+
+
+@dataclass
+class VirtualChassisNameMatcher:
+    """
+    Best-effort VirtualChassis matcher: by name, only when the payload has no master.
+
+    VirtualChassis has no unique constraint besides master (names may
+    legitimately duplicate), so this is a fallback: a payload that carries a
+    master keeps resolving through the auto-derived unique_master matcher.
+    The DB row's own master is deliberately NOT filtered on — a masterless
+    payload must bind a mastered row. Ties resolve to the oldest row via the
+    framework's order_by('pk').first().
+    """
+
+    model_class: type[models.Model]
+    name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
+
+    def has_required_fields(self, data: dict) -> bool:
+        """True when the payload carries a usable name and no master."""
+        name = data.get("name")
+        return isinstance(name, str) and bool(name) and data.get("master") is None
+
+    def fingerprint(self, data: dict) -> int | None:
+        """
+        Name-keyed fingerprint, deliberately NOT gated on master.
+
+        Within one transform batch the members' name-only VC node and the
+        master-bearing VC node must dedupe-merge into a single create; gating
+        this on master absence would leave two nodes and a split chassis.
+        """
+        name = data.get("name")
+        if not isinstance(name, str) or not name:
+            return None
+        return hash((self.model_class.__name__, self.name, name))
+
+    def build_queryset(self, data: dict) -> models.QuerySet | None:
+        """Queryset over all VCs with this name, mastered or not."""
+        if not self.has_required_fields(data):
+            return None
+        return self.model_class.objects.filter(name=data["name"])
 
 
 @dataclass
