@@ -3,7 +3,6 @@ from dcim.models import (
     Device,
     DeviceRole,
     DeviceType,
-    Location,
     MACAddress,
     Manufacturer,
     Module,
@@ -18,11 +17,30 @@ from django.test import TestCase
 from netbox_diode_plugin.api.matcher import find_existing_object, fingerprints, get_model_matchers
 
 
-def _matcher(model_class, name):
-    for m in get_model_matchers(model_class):
-        if getattr(m, "name", None) == name:
-            return m
-    raise AssertionError(f"matcher {name} not found")
+def _matcher(model_class, name, predicate=None):
+    """
+    Return the matcher registered under the given name.
+
+    Some object types register more than one matcher under the same
+    name (e.g. dcim.macaddress's parented vs. isnull variants both use
+    "logical_mac_address_within_parent"). Pass a predicate to select
+    among same-named matches; otherwise the first match wins.
+    """
+    matches = [m for m in get_model_matchers(model_class) if getattr(m, "name", None) == name]
+    if predicate is not None:
+        matches = [m for m in matches if predicate(m)]
+    if not matches:
+        raise AssertionError(f"matcher {name} not found")
+    return matches[0]
+
+
+def _is_isnull_true_variant(m):
+    """True if the matcher's condition is a single field__isnull=True check."""
+    condition = getattr(m, "condition", None)
+    children = getattr(condition, "children", None)
+    if not children:
+        return False
+    return any(str(k).endswith("__isnull") and v is True for k, v in children)
 
 
 class AllNoneGuardTests(TestCase):
@@ -99,3 +117,22 @@ class AllNoneGuardTests(TestCase):
         b = {"device": self.dev.pk, "module_bay": 2, "module_type": self.mt.pk, "asset_tag": None}
         shared = set(fingerprints(a, "dcim.module")) & set(fingerprints(b, "dcim.module"))
         self.assertEqual(shared, set(), shared)
+
+    def test_partial_null_fingerprint_preserved(self):
+        """A partial-null fingerprint must survive (all-None, not any-None, skips)."""
+        m = _matcher(
+            MACAddress,
+            "logical_mac_address_within_parent",
+            predicate=_is_isnull_true_variant,
+        )
+        fp = m.fingerprint({
+            "mac_address": "00:11:22:33:44:66",
+            "assigned_object_type": None,
+            "assigned_object_id": None,
+        })
+        self.assertIsNotNone(fp)
+
+    def test_insensitive_ref_none_fingerprint_does_not_raise(self):
+        """A None value in a case-insensitive ref must not crash fingerprinting."""
+        fps = fingerprints({"name": None, "site": self.site.pk, "tenant": None}, "dcim.device")
+        self.assertIsInstance(fps, list)

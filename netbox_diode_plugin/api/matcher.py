@@ -470,7 +470,7 @@ class ObjectMatchCriteria:
             if isinstance(value, dict):
                 logger.warning(f"unexpected value type for fingerprinting: {value}")
                 return None
-            if field in insensitive:
+            if field in insensitive and value is not None:
                 value = value.lower()
             values.append(value)
 
@@ -556,14 +556,13 @@ class ObjectMatchCriteria:
 
     def _build_expressions_queryset(self, data) -> models.QuerySet:
         """Builds a queryset for the constraint with the given data."""
-        data = self._prepare_data(data)
-
-        ref_names = set()
-        for expr in self.expressions:
-            e = expr.get_expression_for_validation() if hasattr(expr, "get_expression_for_validation") else expr
-            ref_names |= _get_refs(e)
-        if ref_names and all(data.get(r) is None for r in ref_names):
+        # Same all-None skip as the fields path, using the cached ref set;
+        # raw data is checked so both guards read identical inputs.
+        refs = self._get_refs()
+        if refs and all(data.get(r) is None for r in refs):
             return None
+
+        data = self._prepare_data(data)
 
         replacements = {
             F(field): Value(value) if isinstance(value, str | int | float | bool) else value
