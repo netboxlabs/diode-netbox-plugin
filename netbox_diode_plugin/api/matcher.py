@@ -474,6 +474,9 @@ class ObjectMatchCriteria:
                 value = value.lower()
             values.append(value)
 
+        if values and all(v is None for v in values):
+            return None
+
         return hash((self.model_class.__name__, self.name, tuple(values)))
 
     def _check_condition(self, data) -> bool:
@@ -526,6 +529,13 @@ class ObjectMatchCriteria:
         if not self._check_condition(data):
             return None
 
+        # A lookup whose referenced values are ALL null can only "match" via
+        # IS NULL on every field, binding an arbitrary row (e.g. a null
+        # asset_tag adopting an unrelated module). Partial nulls keep the
+        # long-standing clear-FK dedupe: Django renders =None as IS NULL.
+        if all(data.get(field_name) is None for field_name in self.fields):
+            return None
+
         data = self._prepare_data(data)
         lookup_kwargs = {}
         for field_name in self.fields:
@@ -547,6 +557,14 @@ class ObjectMatchCriteria:
     def _build_expressions_queryset(self, data) -> models.QuerySet:
         """Builds a queryset for the constraint with the given data."""
         data = self._prepare_data(data)
+
+        ref_names = set()
+        for expr in self.expressions:
+            e = expr.get_expression_for_validation() if hasattr(expr, "get_expression_for_validation") else expr
+            ref_names |= _get_refs(e)
+        if ref_names and all(data.get(r) is None for r in ref_names):
+            return None
+
         replacements = {
             F(field): Value(value) if isinstance(value, str | int | float | bool) else value
             for field, value in data.items()
@@ -582,9 +600,11 @@ class ObjectMatchCriteria:
                 if field.is_relation and hasattr(field, "related_model") and field.related_model == ContentType:
                     # Handle ManyToMany fields (list of object types) and ForeignKey fields (single object type)
                     if isinstance(value, list):
-                        prepared[field_name] = [content_type_id(v) for v in value]
+                        prepared[field_name] = [
+                            content_type_id(v) if v is not None else None for v in value
+                        ]
                     else:
-                        prepared[field_name] = content_type_id(value)
+                        prepared[field_name] = content_type_id(value) if value is not None else None
                 else:
                     prepared[field_name] = value
 
