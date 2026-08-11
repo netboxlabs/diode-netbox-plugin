@@ -214,7 +214,7 @@ class VirtualChassisIngestE2ETests(APITestCase):
         """
         virtual_chassis: {} detaches a member; a master detach is a deviation.
 
-        Empirically probed (see task-4-report.md): generate-diff happily
+        Empirically probed: generate-diff happily
         plans the master's virtual_chassis: null UPDATE -- NetBox's
         Device.clean() master-detach guard only runs at save() time, so
         the rejection surfaces as a per-entity APPLY error, not at plan.
@@ -252,7 +252,7 @@ class VirtualChassisIngestE2ETests(APITestCase):
 
         Plan-time validate runs clean_fields only; Device.clean's
         position-required rule fires in the serializer during apply.
-        Empirically confirmed at APPLY, see task-4-report.md.
+        Empirically confirmed at APPLY.
         """
         self._seed_stack()
         cs = self._diff(self._device_payload("vce-sw3", {"virtual_chassis": {"name": "vce-stack"}}))

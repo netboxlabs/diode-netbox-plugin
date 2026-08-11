@@ -104,14 +104,14 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 #     (mac_address, assigned_object_type, assigned_object_id).
 #   - dcim.modulebay: matched by (name, device); NetBox's parent-aware
 #     constraint does not catch unscoped duplicates the matcher dedupes.
+#   - dcim.virtualchassis: matched by name when the payload has no master;
+#     NetBox has no uniqueness on VC name at all.
 #   - ipam.prefix: NetBox has no unique constraint on prefix, nor on
 #     (prefix, vrf) - Prefix.Meta carries only ordering and indexes.
 #     Duplicate detection lives solely in Prefix.clean(), behind
 #     ENFORCE_GLOBAL_UNIQUE or the VRF's enforce_unique flag, and the
 #     applier saves through DRF serializers without calling full_clean(),
 #     so that check never runs either.
-#   - dcim.virtualchassis: matched by name when the payload has no master;
-#     NetBox has no uniqueness on VC name at all.
 #   - ipam.vlan: NetBox's (group, vid) constraint does not enforce
 #     uniqueness when group is NULL.
 #   - ipam.vlangroup: NetBox does not enforce uniqueness of name when
