@@ -120,7 +120,7 @@ def _nested_context(object_type, uuid, field_name):
 _IS_CIRCULAR_REFERENCE = {
     "dcim.interface": frozenset(["primary_mac_address"]),
     "virtualization.vminterface": frozenset(["primary_mac_address"]),
-    "dcim.device": frozenset(["primary_ip4", "primary_ip6", "oob_ip"]),
+    "dcim.device": frozenset(["primary_ip4", "primary_ip6", "oob_ip", "virtual_chassis"]),
     "dcim.virtualdevicecontext": frozenset(["primary_ip4", "primary_ip6"]),
     "virtualization.virtualmachine": frozenset(["primary_ip4", "primary_ip6"]),
     "circuits.provider": frozenset(["accounts"]),
@@ -129,6 +129,24 @@ _IS_CIRCULAR_REFERENCE = {
 
 def _is_circular_reference(object_type, field_name):
     return field_name in _IS_CIRCULAR_REFERENCE.get(object_type, frozenset())
+
+# Scalar fields that must ride along when their companion ref is deferred.
+# NetBox's assign_virtualchassis_master signal forces an inline master's
+# vc_position to 1 when a VirtualChassis is created, so the deferred
+# device update must re-assert the submitted position/priority after it.
+_POST_CREATE_COMPANIONS = {
+    ("dcim.device", "virtual_chassis"): ("vc_position", "vc_priority"),
+}
+
+
+def _copy_deferred_companions(object_type, node, post_create):
+    """Copy companion scalars onto a deferred post-create node."""
+    for (companion_type, ref_field), scalar_fields in _POST_CREATE_COMPANIONS.items():
+        if companion_type != object_type or ref_field not in post_create:
+            continue
+        for scalar_field in scalar_fields:
+            if scalar_field in node:
+                post_create[scalar_field] = copy.deepcopy(node[scalar_field])
 
 @profiled("transform")
 def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]: # noqa: C901
@@ -270,6 +288,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
                         "_is_post_create": True,
                     }
                 post_create[field_name] = None
+                post_create['_refs'].add(node['_uuid'])
             else:
                 node[field_name] = None
             continue
@@ -359,6 +378,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
         node['_refs'].update(refs)
 
     if post_create:
+        _copy_deferred_companions(object_type, node, post_create)
         nodes.append(post_create)
 
     return nodes
@@ -612,7 +632,10 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
 
     for entity in entities:
         if entity.get('_is_post_create'):
-            fp = entity['_uuid']
+            # Post-create nodes are never dedupe candidates and must not
+            # register fingerprints: reusing the previous entity's fps here
+            # (or leaving fps unbound on the first entity) corrupts by_fp.
+            fps = []
             existing_uuid = None
         else:
             _update_unresolved_refs(entity, new_refs)
