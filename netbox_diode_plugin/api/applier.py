@@ -112,11 +112,13 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
 
 def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_class, request):
     """
-    Adopt the oldest same-named masterless VirtualChassis for a master-bearing CREATE.
+    Adopt a same-named masterless VirtualChassis for a master-bearing CREATE.
 
     A member-first ingest ordering (or a replaced master) can leave a VC whose
     master is unset; a later master-bearing CREATE must bind that row rather
-    than create a same-named duplicate. NetBox allows setting VC.master only
+    than create a same-named duplicate. When several same-named masterless
+    rows exist, the one the master device already belongs to is preferred;
+    otherwise the oldest is adopted. NetBox allows setting VC.master only
     when the device is already a member, so the master field is dropped from
     the adoption update until a later ingest finds the device attached.
     """
@@ -124,16 +126,13 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     master = data.get("master")
     if not isinstance(name, str) or not name or master is None:
         return None
-    existing = (
-        model_class.objects.filter(name=name, master__isnull=True)
-        .order_by("pk")
-        .first()
-    )
+    master_pk = getattr(master, "pk", master)
+    candidates = model_class.objects.filter(name=name, master__isnull=True).order_by("pk")
+    existing = candidates.filter(members__pk=master_pk).first() or candidates.first()
     if existing is None:
         return None
     update_data = dict(data)
-    master_pk = master if isinstance(master, int) else getattr(master, "pk", None)
-    if master_pk is None or not existing.members.filter(pk=master_pk).exists():
+    if not existing.members.filter(pk=master_pk).exists():
         update_data.pop("master", None)
     snapshot_for_apply(existing)
     serializer = serializer_class(existing, data=update_data, partial=True, context={"request": request})

@@ -130,3 +130,50 @@ class VirtualChassisAdoptionTests(TestCase):
         self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
         self.vc.refresh_from_db()
         self.assertEqual(self.vc.master_id, self.master.pk)
+
+    def test_unique_master_match_leaves_masterless_decoy_untouched(self):
+        """A same-named masterless decoy must not divert a CREATE from the row it already masters."""
+        mastered = VirtualChassis.objects.create(name="vca-mastered", master=self.master)
+        Device.objects.filter(pk=self.master.pk).update(
+            virtual_chassis=mastered, vc_position=1
+        )
+        decoy = VirtualChassis.objects.create(name="vca-mastered")  # masterless, same name
+        self._apply_create({
+            "name": "vca-mastered",
+            "master": self.master.pk,
+            "description": "adopted-update",
+        })
+        self.assertEqual(VirtualChassis.objects.filter(name="vca-mastered").count(), 2)
+        mastered.refresh_from_db()
+        self.assertEqual(mastered.description, "adopted-update")
+        decoy.refresh_from_db()
+        self.assertEqual(decoy.description, "")
+        self.assertIsNone(decoy.master)
+
+    def test_two_pass_convergence_sets_master(self):
+        """A second, identical CREATE apply after the device becomes a member finally sets master."""
+        self._apply_create({"name": "vca-stack", "master": self.master.pk})
+        self.vc.refresh_from_db()
+        self.assertIsNone(self.vc.master)  # first pass: adopted, master deferred
+
+        Device.objects.filter(pk=self.master.pk).update(
+            virtual_chassis=self.vc, vc_position=1
+        )
+        self._apply_create({"name": "vca-stack", "master": self.master.pk})
+        self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
+        self.vc.refresh_from_db()
+        self.assertEqual(self.vc.master_id, self.master.pk)  # second pass converges
+
+    def test_adoption_prefers_row_with_membership_over_oldest(self):
+        """Among several same-named masterless rows, adopt the one the master already belongs to."""
+        older = self.vc  # from setUpTestData: masterless, empty, lowest pk
+        newer = VirtualChassis.objects.create(name="vca-stack")  # masterless, higher pk
+        Device.objects.filter(pk=self.master.pk).update(
+            virtual_chassis=newer, vc_position=1
+        )
+        self._apply_create({"name": "vca-stack", "master": self.master.pk})
+        self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 2)
+        newer.refresh_from_db()
+        self.assertEqual(newer.master_id, self.master.pk)
+        older.refresh_from_db()
+        self.assertIsNone(older.master)
