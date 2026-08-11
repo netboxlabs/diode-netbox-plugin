@@ -110,6 +110,39 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
     return None
 
 
+def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_class, request):
+    """
+    Adopt the oldest same-named masterless VirtualChassis for a master-bearing CREATE.
+
+    A member-first ingest ordering (or a replaced master) can leave a VC whose
+    master is unset; a later master-bearing CREATE must bind that row rather
+    than create a same-named duplicate. NetBox allows setting VC.master only
+    when the device is already a member, so the master field is dropped from
+    the adoption update until a later ingest finds the device attached.
+    """
+    name = data.get("name")
+    master = data.get("master")
+    if not isinstance(name, str) or not name or master is None:
+        return None
+    existing = (
+        model_class.objects.filter(name=name, master__isnull=True)
+        .order_by("pk")
+        .first()
+    )
+    if existing is None:
+        return None
+    update_data = dict(data)
+    master_pk = master if isinstance(master, int) else getattr(master, "pk", None)
+    if master_pk is None or not existing.members.filter(pk=master_pk).exists():
+        update_data.pop("master", None)
+    snapshot_for_apply(existing)
+    serializer = serializer_class(existing, data=update_data, partial=True, context={"request": request})
+    serializer.is_valid(raise_exception=True)
+    result = serializer.save()
+    invalidate_find_obj_entry("dcim.virtualchassis", existing.id)
+    return result
+
+
 def _strip_matched_cable_terminations(data: dict, object_type: str, instance) -> dict:
     """
     Drop termination fields from a pre-save-matched cable's update.
@@ -189,6 +222,9 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         instance = None
         if _is_auto_created_component(change.object_type) or requires_pre_save_match(change.object_type):
             instance = _try_find_and_update_existing_instance(data, change.object_type, serializer_class, request)
+
+        if not instance and change.object_type == "dcim.virtualchassis":
+            instance = _try_adopt_masterless_virtualchassis(data, model_class, serializer_class, request)
 
         if not instance:
             instance = _create_or_find_instance(data, change.object_type, serializer_class, request)

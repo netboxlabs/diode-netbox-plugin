@@ -82,3 +82,51 @@ class VirtualChassisNameMatcherTests(TestCase):
     def test_requires_pre_save_match(self):
         """VC creates must find-first at apply time (no DB name constraint)."""
         self.assertTrue(requires_pre_save_match("dcim.virtualchassis"))
+
+
+class VirtualChassisAdoptionTests(TestCase):
+    """Master-bearing VC creates must adopt same-named masterless VCs."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Seed a masterless VC (bulk member-first aftermath) and its master-to-be."""
+        site = Site.objects.create(name="vca-site", slug="vca-site")
+        mfr = Manufacturer.objects.create(name="vca-mfr", slug="vca-mfr")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="vca-dt", slug="vca-dt")
+        role = DeviceRole.objects.create(name="vca-role", slug="vca-role")
+        cls.vc = VirtualChassis.objects.create(name="vca-stack")
+        cls.master = Device.objects.create(
+            name="vca-sw1", site=site, device_type=dt, role=role
+        )
+
+    def _apply_create(self, data):
+        from types import SimpleNamespace
+
+        from netbox_diode_plugin.api.applier import apply_changeset
+        from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeType
+
+        cs = ChangeSet(changes=[Change(
+            change_type=ChangeType.CREATE,
+            object_type="dcim.virtualchassis",
+            ref_id="vc1",
+            data=data,
+        )])
+        request = SimpleNamespace(user=None)
+        return apply_changeset(cs, request)
+
+    def test_master_bearing_create_adopts_masterless_vc(self):
+        """No duplicate VC; master dropped until the device is a member."""
+        self._apply_create({"name": "vca-stack", "master": self.master.pk})
+        self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
+        self.vc.refresh_from_db()
+        self.assertIsNone(self.vc.master)  # not a member yet -> master deferred
+
+    def test_adoption_sets_master_once_member(self):
+        """When the master device already belongs to the VC, adoption sets master."""
+        Device.objects.filter(pk=self.master.pk).update(
+            virtual_chassis=self.vc, vc_position=1
+        )
+        self._apply_create({"name": "vca-stack", "master": self.master.pk})
+        self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
+        self.vc.refresh_from_db()
+        self.assertEqual(self.vc.master_id, self.master.pk)
