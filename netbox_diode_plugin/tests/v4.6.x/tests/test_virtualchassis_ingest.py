@@ -60,9 +60,9 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(r.status_code, 200, r.content)
         return r.json().get("change_set", {})
 
-    def _diff_apply(self, payload):
+    def _diff_apply(self, payload, allow_empty=False):
         cs = self._diff(payload)
-        if not cs.get("changes"):
+        if allow_empty and not cs.get("changes"):
             # Already fully converged: generate-diff legitimately returns an
             # empty changes list (this codebase's established idempotency
             # signal, see test_updates.py's post-create re-diff assertion),
@@ -70,6 +70,7 @@ class VirtualChassisIngestE2ETests(APITestCase):
             # (applier._validate_change_set: "Changes are required"). A real
             # reconciler client would not call apply here either -- skip it.
             return cs
+        self.assertTrue(cs.get("changes"), cs)
         r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
         self.assertEqual(r.status_code, 200, r.content)
         self.assertIsNone(r.json().get("errors"))
@@ -87,6 +88,8 @@ class VirtualChassisIngestE2ETests(APITestCase):
         if master_name is not None:
             self.assertIsNotNone(vc.master, "master not set")
             self.assertEqual(vc.master.name, master_name)
+        if members:
+            self.assertEqual(vc.members.count(), len(members), members)
         for member_name, position in (members or {}).items():
             d = Device.objects.get(name=member_name)
             self.assertEqual(d.virtual_chassis_id, vc.pk, member_name)
@@ -125,7 +128,8 @@ class VirtualChassisIngestE2ETests(APITestCase):
                 "master": {"name": "vce-sw1", "site": {"name": "vce-site"}},
             },
         })
-        self._diff_apply(payload)
+        cs = self._diff_apply(payload, allow_empty=True)
+        self.assertEqual(cs.get("changes"), [], cs)
         self._assert_single_vc("vce-stack", master_name="vce-sw1", members={"vce-sw1": 1})
         self._assert_noop_rediff(payload)
 
@@ -253,8 +257,10 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self._seed_stack()
         cs = self._diff(self._device_payload("vce-sw3", {"virtual_chassis": {"name": "vce-stack"}}))
         r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
         body = str(r.json())
         self.assertIn("position", body.lower(), body)
+        self.assertFalse(Device.objects.filter(name="vce-sw3").exists())
 
     def test_fresh_stack_two_requests_both_orders_converge(self):
         """
@@ -285,8 +291,10 @@ class VirtualChassisIngestE2ETests(APITestCase):
             self._diff_apply(first)
             self._diff_apply(second)
             # member-first defers VC.master one ingest (adoption drops it until
-            # the master device is a member); a converging re-ingest sets it
-            self._diff_apply(master_payload)
+            # the master device is a member); a converging re-ingest sets it.
+            # master_first: this pass legitimately plans empty (already
+            # converged); member_first: this pass applies the deferred master.
+            self._diff_apply(master_payload, allow_empty=True)
             self._assert_single_vc(vc_name, master_name=m, members={m: 1, s2: 2})
             self._assert_noop_rediff(master_payload)
             self._assert_noop_rediff(member_payload)
@@ -329,6 +337,13 @@ class VirtualChassisIngestE2ETests(APITestCase):
         # plan created; exactly one VC row exists after the bulk request.
         self.assertEqual(VirtualChassis.objects.filter(name=vc_name).count(), 1)
 
+        # Pin the bulk request's own outcome: the member device lands on
+        # that VC before any follow-up re-ingest happens.
+        self.assertEqual(
+            Device.objects.get(name=s2).virtual_chassis_id,
+            VirtualChassis.objects.get(name=vc_name).pk,
+        )
+
         # As in the two-request case, VC.master converges on a later,
         # identical re-ingest of the master payload (deferred-master
         # adoption contract), not necessarily within the bulk request itself.
@@ -348,6 +363,7 @@ class VirtualChassisIngestE2ETests(APITestCase):
                   }}},
             format="json", **self.auth,
         )
+        self.assertEqual(r.status_code, 400, r.content)
         # the standalone device CREATE lacks device_type/role/site
         self.assertIn("required", str(r.json()).lower())
 
