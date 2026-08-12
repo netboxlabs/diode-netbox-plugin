@@ -99,12 +99,6 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 # IntegrityError fallback in _create_or_find_instance cannot catch
 # this because save() does not fail.
 #
-# The list also covers DB-constraint-backed types where find-first replaces
-# a lossy, noisy IntegrityError recovery with a real adopt-update:
-#   - dcim.module: plan-ahead topologies (plan-all-then-apply-all) emit a
-#     second CREATE for an occupied module bay; find-first adopts it and
-#     applies the payload instead of discarding it after a failed INSERT.
-#
 # The specific gaps (see _LOGICAL_MATCHERS below for the criteria):
 #   - dcim.macaddress: NetBox has no unique constraint on
 #     (mac_address, assigned_object_type, assigned_object_id).
@@ -122,6 +116,12 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 #   - virtualization.virtualmachine: NetBox does not enforce uniqueness
 #     of name when cluster is NULL.
 #   - wireless.wirelesslan: NetBox does not enforce ssid uniqueness.
+#
+# The list also covers a DB-constraint-backed type where find-first replaces
+# a lossy, noisy IntegrityError recovery with a real adopt-update:
+#   - dcim.module: plan-ahead topologies (plan-all-then-apply-all) emit a
+#     second CREATE for an occupied module bay; find-first adopts it and
+#     applies the payload instead of discarding it after a failed INSERT.
 #
 # This closes the common race (concurrent plan, sequential apply).
 # It does not close TOCTOU under truly concurrent apply across

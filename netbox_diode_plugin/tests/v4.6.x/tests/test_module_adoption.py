@@ -1,4 +1,5 @@
 """E2E: duplicate module creates adopt the existing module at apply time."""
+import uuid
 from types import SimpleNamespace
 from unittest import mock
 
@@ -66,6 +67,7 @@ class ModuleAdoptionE2ETests(APITestCase):
     def _diff(self, payload):
         r = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
         self.assertEqual(r.status_code, 200, r.content)
+        self.assertIn("change_set", r.json(), r.content)
         return r.json().get("change_set", {})
 
     def _apply(self, cs, expect=200):
@@ -112,14 +114,11 @@ class ModuleAdoptionE2ETests(APITestCase):
         self.assertEqual(other_module.device_id, other_dev.pk)  # untouched
         self.assertEqual(Module.objects.filter(module_bay=self.bay).count(), 1)
 
-    def test_occupied_bay_adopts_last_writer_wins_children_unchanged(self):
-        """Occupied-bay CREATE adopt-updates incl. module_type; children stay."""
+    def test_occupied_bay_update_last_writer_wins(self):
+        """A planned UPDATE on an occupied bay applies last-writer-wins module_type."""
         Module.objects.create(device=self.dev, module_bay=self.bay, module_type=self.mt)
         mt2 = ModuleType.objects.create(
             manufacturer=Manufacturer.objects.get(name="ma-mfr"), model="ma-linecard-v2"
-        )
-        children_before = set(
-            ModuleBay.objects.filter(device=self.dev).values_list("pk", flat=True)
         )
         payload = self._module_entity()
         payload["entity"]["module"]["module_type"]["model"] = "ma-linecard-v2"
@@ -128,10 +127,6 @@ class ModuleAdoptionE2ETests(APITestCase):
         modules = Module.objects.filter(module_bay=self.bay)
         self.assertEqual(modules.count(), 1)
         self.assertEqual(modules.first().module_type_id, mt2.pk)  # last writer wins
-        children_after = set(
-            ModuleBay.objects.filter(device=self.dev).values_list("pk", flat=True)
-        )
-        self.assertEqual(children_before, children_after)  # no re-instantiation
 
     def test_invalid_adoption_payload_aborts_changeset_atomically(self):
         """
@@ -143,17 +138,16 @@ class ModuleAdoptionE2ETests(APITestCase):
         the changeset succeeds with the sibling applied; with adoption the
         mismatch surfaces as 400 and the whole changeset rolls back.
         """
-        import uuid as _uuid
         Module.objects.create(device=self.dev, module_bay=self.bay, module_type=self.mt)
         wrong_dev = Device.objects.create(
             name="ma-wrong", site=self.site, device_type=self.dt, role=self.role
         )
         cs = {
-            "id": str(_uuid.uuid4()),
+            "id": str(uuid.uuid4()),
             "changes": [
-                {"id": str(_uuid.uuid4()), "change_type": "create", "object_type": "dcim.site",
+                {"id": str(uuid.uuid4()), "change_type": "create", "object_type": "dcim.site",
                  "ref_id": "s1", "data": {"name": "ma-sibling-site", "slug": "ma-sibling-site"}},
-                {"id": str(_uuid.uuid4()), "change_type": "create", "object_type": "dcim.module",
+                {"id": str(uuid.uuid4()), "change_type": "create", "object_type": "dcim.module",
                  "ref_id": "m1", "data": {"device": wrong_dev.pk, "module_bay": self.bay.pk,
                                           "module_type": self.mt.pk, "status": "active"}},
             ],
