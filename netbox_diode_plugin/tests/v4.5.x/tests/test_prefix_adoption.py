@@ -10,7 +10,8 @@ from netbox_diode_plugin.plugin_config import get_diode_user
 
 
 class PrefixAdoptionE2ETests(APITestCase):
-    """Concurrently planned duplicate prefix CREATEs must adopt, not duplicate.
+    """
+    Concurrently planned duplicate prefix CREATEs must adopt, not duplicate.
 
     NetBox permits duplicate prefixes: Prefix.Meta declares only ordering and
     indexes, and the duplicate check in Prefix.clean() is gated on
@@ -58,7 +59,8 @@ class PrefixAdoptionE2ETests(APITestCase):
         return r
 
     def test_plan_ahead_duplicate_within_vrf_adopts(self):
-        """Two changesets planned before either apply yield one prefix, not two.
+        """
+        Two changesets planned before either apply yield one prefix, not two.
 
         This is the reported shape: both plans see no existing prefix, so both
         emit CREATE, and without the pre-save match both inserts succeed.
@@ -79,7 +81,8 @@ class PrefixAdoptionE2ETests(APITestCase):
         self.assertEqual(non_noop, [], non_noop)
 
     def test_plan_ahead_duplicate_in_global_table_adopts(self):
-        """The vrf-is-NULL matcher needs the same protection as the VRF one.
+        """
+        The vrf-is-NULL matcher needs the same protection as the VRF one.
 
         ipam.prefix has two logical matchers, split on whether vrf is NULL, so
         a global-table prefix takes a different path and is covered separately.
@@ -95,7 +98,8 @@ class PrefixAdoptionE2ETests(APITestCase):
         )
 
     def test_same_prefix_in_different_vrfs_stays_distinct(self):
-        """The hazard pin: adoption must not collapse genuinely distinct rows.
+        """
+        The hazard pin: adoption must not collapse genuinely distinct rows.
 
         The same network in two different VRFs is two legitimate objects. If
         the pre-save match ignored the VRF it would adopt across them, which
@@ -127,7 +131,8 @@ class PrefixAdoptionE2ETests(APITestCase):
         )
 
     def test_global_and_vrf_prefix_stay_distinct(self):
-        """A prefix in the global table and the same one in a VRF are distinct.
+        """
+        A prefix in the global table and the same one in a VRF are distinct.
 
         The two matchers are conditioned on vrf being NULL or NOT NULL, so this
         pins that the global-table row is not adopted by the VRF-scoped one.
