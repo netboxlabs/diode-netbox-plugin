@@ -117,6 +117,12 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 #     of name when cluster is NULL.
 #   - wireless.wirelesslan: NetBox does not enforce ssid uniqueness.
 #
+# The list also covers a DB-constraint-backed type where find-first replaces
+# a lossy, noisy IntegrityError recovery with a real adopt-update:
+#   - dcim.module: plan-ahead topologies (plan-all-then-apply-all) emit a
+#     second CREATE for an occupied module bay; find-first adopts it and
+#     applies the payload instead of discarding it after a failed INSERT.
+#
 # This closes the common race (concurrent plan, sequential apply).
 # It does not close TOCTOU under truly concurrent apply across
 # replicas - that would require a DB unique constraint or a
@@ -124,6 +130,7 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 _REQUIRES_PRE_SAVE_MATCH = frozenset({
     "dcim.cable",
     "dcim.macaddress",
+    "dcim.module",
     "dcim.modulebay",
     "ipam.vlan",
     "ipam.vlangroup",
@@ -470,9 +477,12 @@ class ObjectMatchCriteria:
             if isinstance(value, dict):
                 logger.warning(f"unexpected value type for fingerprinting: {value}")
                 return None
-            if field in insensitive:
+            if field in insensitive and value is not None:
                 value = value.lower()
             values.append(value)
+
+        if values and all(v is None for v in values):
+            return None
 
         return hash((self.model_class.__name__, self.name, tuple(values)))
 
@@ -526,6 +536,13 @@ class ObjectMatchCriteria:
         if not self._check_condition(data):
             return None
 
+        # A lookup whose referenced values are ALL null can only "match" via
+        # IS NULL on every field, binding an arbitrary row (e.g. a null
+        # asset_tag adopting an unrelated module). Partial nulls keep the
+        # long-standing clear-FK dedupe: Django renders =None as IS NULL.
+        if all(data.get(field_name) is None for field_name in self.fields):
+            return None
+
         data = self._prepare_data(data)
         lookup_kwargs = {}
         for field_name in self.fields:
@@ -546,7 +563,14 @@ class ObjectMatchCriteria:
 
     def _build_expressions_queryset(self, data) -> models.QuerySet:
         """Builds a queryset for the constraint with the given data."""
+        # Same all-None skip as the fields path, using the cached ref set;
+        # raw data is checked so both guards read identical inputs.
+        refs = self._get_refs()
+        if refs and all(data.get(r) is None for r in refs):
+            return None
+
         data = self._prepare_data(data)
+
         replacements = {
             F(field): Value(value) if isinstance(value, str | int | float | bool) else value
             for field, value in data.items()
@@ -582,9 +606,11 @@ class ObjectMatchCriteria:
                 if field.is_relation and hasattr(field, "related_model") and field.related_model == ContentType:
                     # Handle ManyToMany fields (list of object types) and ForeignKey fields (single object type)
                     if isinstance(value, list):
-                        prepared[field_name] = [content_type_id(v) for v in value]
+                        prepared[field_name] = [
+                            content_type_id(v) if v is not None else None for v in value
+                        ]
                     else:
-                        prepared[field_name] = content_type_id(value)
+                        prepared[field_name] = content_type_id(value) if value is not None else None
                 else:
                     prepared[field_name] = value
 
