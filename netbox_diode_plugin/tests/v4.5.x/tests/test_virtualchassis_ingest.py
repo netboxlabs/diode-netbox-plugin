@@ -562,6 +562,86 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(vc.members.count(), 0)
         self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
 
+    def _plan_vc_create_then_delete_master(self, vc_name, master_name):
+        """Plan a master-bearing VC CREATE against an adoptable row, then delete the master."""
+        vc = VirtualChassis.objects.create(name=vc_name)
+        master = Device.objects.create(
+            name=master_name, site=self.site, device_type=self.dt, role=self.role
+        )
+        cs = self._diff(self._vc_payload(vc_name, master_name))
+        master.delete()
+        return vc, cs
+
+    def test_master_deleted_between_plan_and_apply_is_rejected(self):
+        """
+        A planned master pk with no device behind it must fail the apply.
+
+        Plan-then-apply is two round trips, so nothing stops the master
+        resolved at plan time from being deleted before the apply lands. The
+        payload then references an object that is not there, and adoption must
+        not "converge" that by dropping master: the CREATE would be reported as
+        successfully applied, the chassis would be saved masterless, and the
+        dangling reference -- a hard serializer error on every other applied
+        change -- would leave no trace at all.
+        """
+        vc, cs = self._plan_vc_create_then_delete_master("vce-stack", "vce-sw1")
+
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, (cs, r.content))
+        errors = r.json()["errors"]
+        # NetBox's own dangling-reference error, on the field that carried it
+        self.assertIn("dcim.virtualchassis", errors, errors)
+        self.assertIn("master", errors["dcim.virtualchassis"], errors)
+
+        # the rejected apply leaves the adoptable row exactly as it was
+        vc.refresh_from_db()
+        self.assertIsNone(vc.master_id)
+        self.assertEqual(vc.members.count(), 0)
+        self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
+
+    def test_missing_master_and_deferred_master_are_not_the_same_outcome(self):
+        """
+        Adoption's two "cannot attach" cases must not collapse into one branch.
+
+        Both halves run here together because the defect they guard is exactly
+        the two sharing an outcome:
+
+        - the named master belongs to a DIFFERENT chassis: a deliberate defer.
+          The apply succeeds with master dropped, because a VC payload is not
+          authority to relocate a device, and the device's own payload will
+          converge it.
+        - the named master DOES NOT EXIST: a dangling reference. The apply must
+          fail, because nothing later can converge a pk that resolves to
+          nothing.
+
+        Handling them alike sacrifices one property or the other: a shared drop
+        turns a dangling reference into a silent success, a shared raise turns a
+        legitimate defer into a failed ingest.
+        """
+        # deferred: the master is real, but it lives in another chassis
+        other, _ = self._seed_stack(vc_name="vce-other", master="vce-sw9")
+        held = Device.objects.create(
+            name="vce-held", site=self.site, device_type=self.dt, role=self.role
+        )
+        Device.objects.filter(pk=held.pk).update(virtual_chassis=other, vc_position=2)
+        deferred_vc = VirtualChassis.objects.create(name="vce-deferred")
+
+        cs = self._diff(self._vc_payload("vce-deferred", "vce-held"))
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+        deferred_vc.refresh_from_db()
+        self.assertIsNone(deferred_vc.master_id)
+        held.refresh_from_db()
+        self.assertEqual(held.virtual_chassis_id, other.pk)
+
+        # missing: same inability to attach, opposite outcome
+        missing_vc, cs = self._plan_vc_create_then_delete_master("vce-missing", "vce-ghost")
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, (cs, r.content))
+        missing_vc.refresh_from_db()
+        self.assertIsNone(missing_vc.master_id)
+
     def test_name_only_master_stub_yields_required_fields_deviation(self):
         """A VC whose inline master stub lacks matcher keys fails loudly, not silently."""
         r = self.client.post(

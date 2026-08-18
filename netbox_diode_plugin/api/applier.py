@@ -5,6 +5,7 @@
 
 import copy
 import logging
+from enum import Enum
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models, transaction
@@ -110,6 +111,29 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
     return None
 
 
+class _MasterAttach(Enum):
+    """
+    Why an adopted VC's named master is, or is not, a member of it.
+
+    Three outcomes, never two: the reasons NOT to attach are semantically
+    opposite and each caller branch is a different contract.
+
+    - ATTACHED: the membership the payload implies now exists.
+    - IN_OTHER_CHASSIS: the device is real but sits in another chassis. A VC
+      payload is not authority to relocate it, so master is deferred to the
+      device's own payload and the adoption otherwise succeeds.
+    - DEVICE_MISSING: the pk resolves to no device at all (planned against a
+      device deleted before this apply). Nothing later can converge a dangling
+      reference, so it has to surface as a rejected apply, exactly as it did
+      before adoption existed. Collapsing this into IN_OTHER_CHASSIS turns that
+      hard error into a silent success.
+    """
+
+    ATTACHED = "attached"
+    IN_OTHER_CHASSIS = "in_other_chassis"
+    DEVICE_MISSING = "device_missing"
+
+
 def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_class, request):
     """
     Adopt a same-named masterless VirtualChassis for a master-bearing CREATE.
@@ -131,11 +155,12 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     real VC create (dcim.signals.assign_virtualchassis_master), and adoption
     stands in for that create, so both paths end in the same state.
 
-    master is still dropped when membership cannot be established, i.e. the
-    device already belongs to a DIFFERENT chassis. That case keeps the
-    deviation visible instead of silently relocating a device on the strength
-    of a VC payload; the device's own payload owns its membership and a later
-    ingest of THAT does converge it.
+    master is dropped for exactly ONE reason: the device already belongs to a
+    DIFFERENT chassis. That case keeps the deviation visible instead of
+    silently relocating a device on the strength of a VC payload; the device's
+    own payload owns its membership and a later ingest of THAT does converge
+    it. A master pk with no device behind it is a different thing entirely and
+    must not share that handling -- see _MasterAttach.
     """
     name = data.get("name")
     master = data.get("master")
@@ -149,14 +174,26 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     update_data = dict(data)
     snapshot_for_apply(existing)
     if not existing.members.filter(pk=master_pk).exists():
-        if _attach_master_to_virtualchassis(existing, master_pk, request):
-            # The attach bumped VirtualChassis.member_count through a direct
-            # UPDATE (utilities.counters), invisible to this instance. Re-read
-            # before the serializer saves it, or the full save writes the stale
-            # in-memory counter back over the new one.
-            existing.refresh_from_db()
-        else:
-            update_data.pop("master", None)
+        match _attach_master_to_virtualchassis(existing, master_pk, request):
+            case _MasterAttach.ATTACHED:
+                # The attach bumped VirtualChassis.member_count through a direct
+                # UPDATE (utilities.counters), invisible to this instance. Re-read
+                # before the serializer saves it, or the full save writes the stale
+                # in-memory counter back over the new one.
+                existing.refresh_from_db()
+            case _MasterAttach.IN_OTHER_CHASSIS:
+                # Deliberate defer: the device's own payload owns its membership.
+                # Applying the rest of the payload is the intended outcome.
+                update_data.pop("master", None)
+            case _MasterAttach.DEVICE_MISSING:
+                # Deliberately NOT the branch above. master stays in the update
+                # so the VC serializer rejects the dangling pk (NetBox's own
+                # "Related object not found using the provided numeric ID",
+                # reported on field master) and the whole apply rolls back.
+                # Dropping it here would report a reference to an object that
+                # does not exist as a successfully applied CREATE, and leave the
+                # chassis saved-but-masterless with nothing left to re-plan.
+                pass
     serializer = serializer_class(existing, data=update_data, partial=True, context={"request": request})
     serializer.is_valid(raise_exception=True)
     result = serializer.save()
@@ -164,9 +201,9 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     return result
 
 
-def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> bool:
+def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> _MasterAttach:
     """
-    Make an adopted VC's named master a member of it. True when it now is one.
+    Make an adopted VC's named master a member of it. Reports which case this was.
 
     The payload names this device as the chassis master and NetBox's data model
     makes membership a precondition of that, so the membership write is implied
@@ -176,11 +213,15 @@ def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> boo
     masterless row), so it is planned as a CREATE and the adoption is purely an
     apply-time dedupe decision.
 
-    Refuses when the device already belongs to another chassis. Membership is
-    asserted by the DEVICE payload (Device.virtual_chassis); a VC payload
-    naming a master is not authority to pull a device out of a chassis it is
-    already in, and when that device is the other chassis's master NetBox
-    refuses the move outright (Device.clean).
+    Refuses (IN_OTHER_CHASSIS) when the device already belongs to another
+    chassis. Membership is asserted by the DEVICE payload
+    (Device.virtual_chassis); a VC payload naming a master is not authority to
+    pull a device out of a chassis it is already in, and when that device is the
+    other chassis's master NetBox refuses the move outright (Device.clean).
+
+    A pk that matches no device is reported separately (DEVICE_MISSING) rather
+    than as another refusal to attach: it is a dangling reference, not a
+    membership the payload may not assert. See _MasterAttach.
 
     The position is provisional: Device.clean requires a member to have one and
     the payload carries none, so this mirrors the position NetBox picks when it
@@ -189,8 +230,10 @@ def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> boo
     """
     device_model = get_object_type_model("dcim.device")
     device = device_model.objects.filter(pk=master_pk).first()
-    if device is None or device.virtual_chassis_id is not None:
-        return False
+    if device is None:
+        return _MasterAttach.DEVICE_MISSING
+    if device.virtual_chassis_id is not None:
+        return _MasterAttach.IN_OTHER_CHASSIS
     device_serializer_class = get_serializer_for_model(device_model)
     snapshot_for_apply(device)
     serializer = device_serializer_class(
@@ -205,7 +248,7 @@ def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> boo
     serializer.is_valid(raise_exception=True)
     serializer.save()
     invalidate_find_obj_entry("dcim.device", device.pk)
-    return True
+    return _MasterAttach.ATTACHED
 
 
 def _lowest_free_vc_position(virtual_chassis) -> int:
