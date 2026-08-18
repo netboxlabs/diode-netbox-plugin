@@ -194,6 +194,13 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
                 # does not exist as a successfully applied CREATE, and leave the
                 # chassis saved-but-masterless with nothing left to re-plan.
                 pass
+            case unexpected:  # pragma: no cover - exhaustiveness guard
+                # The enum documents three outcomes and the branches above cover
+                # them. A fourth member added without a branch here would fall
+                # straight through this match and silently inherit whatever the
+                # surrounding code does next, which is how the collapsed
+                # `device is None or ...` guard this enum replaced went wrong.
+                raise AssertionError(f"unhandled master-attach outcome: {unexpected}")
     serializer = serializer_class(existing, data=update_data, partial=True, context={"request": request})
     serializer.is_valid(raise_exception=True)
     result = serializer.save()

@@ -593,11 +593,29 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertIn("dcim.virtualchassis", errors, errors)
         self.assertIn("master", errors["dcim.virtualchassis"], errors)
 
-        # the rejected apply leaves the adoptable row exactly as it was
+        # The rejected apply leaves the adoptable row exactly as it was.
+        #
+        # These three alone would ALSO have held under the silent success this
+        # test exists to catch: the adoptable row was already masterless with no
+        # members, and the payload carried nothing but name and master, so
+        # "unchanged" and "wrongly saved without its master" look identical in
+        # those fields. The status assertion above was carrying the whole test.
+        # last_updated is what separates them -- a save would have moved it --
+        # and the absence of an ObjectChange proves the row was never written.
+        before = vc.last_updated
         vc.refresh_from_db()
         self.assertIsNone(vc.master_id)
         self.assertEqual(vc.members.count(), 0)
         self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
+        self.assertEqual(vc.last_updated, before, "the rejected apply saved the chassis anyway")
+        self.assertFalse(
+            ObjectChange.objects.filter(
+                changed_object_type__app_label="dcim",
+                changed_object_type__model="virtualchassis",
+                changed_object_id=vc.pk,
+            ).exists(),
+            "a rolled-back apply must leave no changelog entry for the chassis",
+        )
 
     def test_missing_master_and_deferred_master_are_not_the_same_outcome(self):
         """
