@@ -269,6 +269,23 @@ def _lowest_free_vc_position(virtual_chassis) -> int:
     return position
 
 
+# Types whose CREATE needs an apply-time adoption pass that the matcher cannot
+# express, keyed by object type so this stays a table rather than a branch --
+# the shape _is_auto_created_component and _strip_matched_cable_terminations
+# already use in this file, and _NESTED_CONTEXT / _IS_CIRCULAR_REFERENCE use in
+# the transformer.
+#
+# An adopter runs only after the pre-save match has missed, and only for a
+# CREATE. It exists for the case where the row to bind can only be chosen from
+# live database state -- for dcim.virtualchassis, "the same-named masterless
+# chassis, preferring the one this master already belongs to" is a preference
+# find_existing_object cannot express, since it returns the first matcher hit
+# ordered by pk.
+_CREATE_ADOPTERS = {
+    "dcim.virtualchassis": _try_adopt_masterless_virtualchassis,
+}
+
+
 def _strip_matched_cable_terminations(data: dict, object_type: str, instance) -> dict:
     """
     Drop termination fields from a pre-save-matched cable's update.
@@ -349,8 +366,8 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         if _is_auto_created_component(change.object_type) or requires_pre_save_match(change.object_type):
             instance = _try_find_and_update_existing_instance(data, change.object_type, serializer_class, request)
 
-        if not instance and change.object_type == "dcim.virtualchassis":
-            instance = _try_adopt_masterless_virtualchassis(data, model_class, serializer_class, request)
+        if not instance and (adopt := _CREATE_ADOPTERS.get(change.object_type)):
+            instance = adopt(data, model_class, serializer_class, request)
 
         if not instance:
             instance = _create_or_find_instance(data, change.object_type, serializer_class, request)
