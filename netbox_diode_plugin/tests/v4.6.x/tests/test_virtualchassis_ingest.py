@@ -468,8 +468,11 @@ class VirtualChassisIngestE2ETests(APITestCase):
         # in-memory counter back over it. Asserted as a delta because the
         # queryset .update() seeding above never fires the counter signal.
         self.assertEqual(adopted.member_count, count_before + 1)
-        # ...and the re-read must not cost the changelog its prechange snapshot:
-        # the VC's ObjectChange still records the master it had before adoption.
+        # ...and the re-read must not cost the changelog its prechange snapshot.
+        # member_count is what pins the ORDERING: the attach bumps it, so a
+        # snapshot taken AFTER the attach would record count_before + 1. master
+        # alone proves nothing here, because the attach never touches it -- that
+        # assertion holds whichever side of the attach the snapshot is taken on.
         vc_change = ObjectChange.objects.filter(
             changed_object_type__app_label="dcim",
             changed_object_type__model="virtualchassis",
@@ -477,6 +480,9 @@ class VirtualChassisIngestE2ETests(APITestCase):
         ).latest("time")
         self.assertIsNotNone(vc_change.prechange_data, vc_change)
         self.assertIsNone(vc_change.prechange_data.get("master"), vc_change.prechange_data)
+        self.assertEqual(
+            vc_change.prechange_data.get("member_count"), count_before, vc_change.prechange_data
+        )
         self.assertEqual(vc_change.postchange_data.get("master"), adopted.master_id)
         self._assert_noop_rediff(payload)
 
