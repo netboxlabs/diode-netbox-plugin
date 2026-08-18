@@ -118,9 +118,24 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     master is unset; a later master-bearing CREATE must bind that row rather
     than create a same-named duplicate. When several same-named masterless
     rows exist, the one the master device already belongs to is preferred;
-    otherwise the oldest is adopted. NetBox allows setting VC.master only
-    when the device is already a member, so the master field is dropped from
-    the adoption update until a later ingest finds the device attached.
+    otherwise the oldest is adopted.
+
+    NetBox allows setting VC.master only once that device is a member
+    (VirtualChassis.clean), so adoption establishes the membership itself --
+    see _attach_master_to_virtualchassis. It must NOT be left to "a later
+    ingest": a standalone dcim.virtualchassis payload carries a name and a
+    master and nothing else, so no re-ingest of it would ever attach the
+    device. Dropping master unconditionally left the row masterless forever
+    while every identical re-ingest re-planned the same CREATE -- an ingest
+    that never converges. Attaching is also exactly what NetBox does for a
+    real VC create (dcim.signals.assign_virtualchassis_master), and adoption
+    stands in for that create, so both paths end in the same state.
+
+    master is still dropped when membership cannot be established, i.e. the
+    device already belongs to a DIFFERENT chassis. That case keeps the
+    deviation visible instead of silently relocating a device on the strength
+    of a VC payload; the device's own payload owns its membership and a later
+    ingest of THAT does converge it.
     """
     name = data.get("name")
     master = data.get("master")
@@ -132,14 +147,76 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     if existing is None:
         return None
     update_data = dict(data)
-    if not existing.members.filter(pk=master_pk).exists():
-        update_data.pop("master", None)
     snapshot_for_apply(existing)
+    if not existing.members.filter(pk=master_pk).exists():
+        if _attach_master_to_virtualchassis(existing, master_pk, request):
+            # The attach bumped VirtualChassis.member_count through a direct
+            # UPDATE (utilities.counters), invisible to this instance. Re-read
+            # before the serializer saves it, or the full save writes the stale
+            # in-memory counter back over the new one.
+            existing.refresh_from_db()
+        else:
+            update_data.pop("master", None)
     serializer = serializer_class(existing, data=update_data, partial=True, context={"request": request})
     serializer.is_valid(raise_exception=True)
     result = serializer.save()
     invalidate_find_obj_entry("dcim.virtualchassis", existing.id)
     return result
+
+
+def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> bool:
+    """
+    Make an adopted VC's named master a member of it. True when it now is one.
+
+    The payload names this device as the chassis master and NetBox's data model
+    makes membership a precondition of that, so the membership write is implied
+    by the payload rather than invented here. It cannot be planned by the
+    differ instead: at plan time the master-bearing payload finds no match (the
+    name matcher is gated on master absence, the unique_master matcher misses a
+    masterless row), so it is planned as a CREATE and the adoption is purely an
+    apply-time dedupe decision.
+
+    Refuses when the device already belongs to another chassis. Membership is
+    asserted by the DEVICE payload (Device.virtual_chassis); a VC payload
+    naming a master is not authority to pull a device out of a chassis it is
+    already in, and when that device is the other chassis's master NetBox
+    refuses the move outright (Device.clean).
+
+    The position is provisional: Device.clean requires a member to have one and
+    the payload carries none, so this mirrors the position NetBox picks when it
+    attaches a new chassis's master (1), stepping past positions the adopted
+    row already uses. The device's own payload asserts the real position.
+    """
+    device_model = get_object_type_model("dcim.device")
+    device = device_model.objects.filter(pk=master_pk).first()
+    if device is None or device.virtual_chassis_id is not None:
+        return False
+    device_serializer_class = get_serializer_for_model(device_model)
+    snapshot_for_apply(device)
+    serializer = device_serializer_class(
+        device,
+        data={
+            "virtual_chassis": virtual_chassis.pk,
+            "vc_position": _lowest_free_vc_position(virtual_chassis),
+        },
+        partial=True,
+        context={"request": request},
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    invalidate_find_obj_entry("dcim.device", device.pk)
+    return True
+
+
+def _lowest_free_vc_position(virtual_chassis) -> int:
+    """Lowest vc_position not already used in this chassis, counting from 1."""
+    taken = set(
+        virtual_chassis.members.exclude(vc_position__isnull=True).values_list("vc_position", flat=True)
+    )
+    position = 1
+    while position in taken:
+        position += 1
+    return position
 
 
 def _strip_matched_cable_terminations(data: dict, object_type: str, instance) -> dict:

@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 from unittest import mock
 
+from core.models import ObjectChange
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
 from utilities.testing import APITestCase
 
@@ -163,6 +164,85 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(dev.vc_priority, 255)
         self._assert_noop_rediff(payload)
 
+    def test_chassis_move_into_position_taken_in_the_old_chassis(self):
+        """
+        A legal cross-chassis move whose target position is taken in the OLD chassis.
+
+        vce-sw2 sits at position 2 of vce-stack-a, where position 3 belongs to
+        vce-sw3; the payload promotes it to master of vce-stack-b at position
+        3, which is free there. The position must travel WITH the chassis:
+        asserting vc_position=3 on the device while it is still a member of
+        vce-stack-a trips NetBox's (virtual_chassis, vc_position) uniqueness
+        constraint -- "Device with this Virtual chassis and VC position
+        already exists" -- and rejects a valid move.
+
+        Naming the moving device as the new chassis's master is what makes the
+        reproduction deterministic: it forces the VirtualChassis change to
+        sort after the device change, so _handle_post_creates cannot merge the
+        deferred step back into the device change (which would reunite chassis
+        and position and mask the bug).
+        """
+        vc_a, _ = self._seed_stack(vc_name="vce-stack-a", master="vce-sw1")
+        for name, position in (("vce-sw2", 2), ("vce-sw3", 3)):
+            d = Device.objects.create(
+                name=name, site=self.site, device_type=self.dt, role=self.role
+            )
+            Device.objects.filter(pk=d.pk).update(virtual_chassis=vc_a, vc_position=position)
+
+        payload = self._device_payload("vce-sw2", {
+            "vc_position": 3,
+            "virtual_chassis": {
+                "name": "vce-stack-b",
+                "master": {"name": "vce-sw2", "site": {"name": "vce-site"}},
+            },
+        })
+        self._diff_apply(payload)
+
+        self._assert_single_vc("vce-stack-b", master_name="vce-sw2", members={"vce-sw2": 3})
+        # the old chassis keeps its own occupant of that position
+        stayed = Device.objects.get(name="vce-sw3")
+        self.assertEqual(stayed.virtual_chassis_id, vc_a.pk)
+        self.assertEqual(stayed.vc_position, 3)
+        self._assert_noop_rediff(payload)
+
+    def test_inline_master_position_rides_only_on_the_deferred_update(self):
+        """
+        Pin the split: the main device change carries no position, the deferred one does.
+
+        NetBox's assign_virtualchassis_master signal forces the inline
+        master's vc_position to 1 when the VirtualChassis row is created, so
+        the submitted position can only survive on the deferred update that
+        runs after it. A second copy on the main change buys nothing here (the
+        signal overwrites it) and is exactly what rejects a cross-chassis
+        move, so the position must appear on the deferred change ONLY.
+        """
+        payload = self._device_payload("vce-sw1", {
+            "vc_position": 3, "vc_priority": 128,
+            "virtual_chassis": {
+                "name": "vce-stack",
+                "master": {"name": "vce-sw1", "site": {"name": "vce-site"}},
+            },
+        })
+        cs = self._diff(payload)
+        device_changes = [c for c in cs.get("changes", []) if c["object_type"] == "dcim.device"]
+        creates = [c for c in device_changes if c["change_type"] == "create"]
+        deferred = [c for c in device_changes if c["change_type"] == "update"]
+        self.assertEqual(len(creates), 1, cs)
+        self.assertEqual(len(deferred), 1, cs)
+        self.assertNotIn("vc_position", creates[0]["data"], creates[0])
+        self.assertNotIn("vc_priority", creates[0]["data"], creates[0])
+        self.assertIn("virtual_chassis", deferred[0]["data"], deferred[0])
+        self.assertEqual(deferred[0]["data"]["vc_position"], 3, deferred[0])
+        self.assertEqual(deferred[0]["data"]["vc_priority"], 128, deferred[0])
+
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+        dev = Device.objects.get(name="vce-sw1")
+        self.assertEqual(dev.vc_position, 3)   # NOT the signal's forced 1
+        self.assertEqual(dev.vc_priority, 128)
+        self._assert_noop_rediff(payload)
+
     def test_master_rename_via_asset_tag_natural_shape(self):
         """Master renamed while matched by asset_tag; natural shape must converge."""
         vc, dev = self._seed_stack()
@@ -290,10 +370,10 @@ class VirtualChassisIngestE2ETests(APITestCase):
             )
             self._diff_apply(first)
             self._diff_apply(second)
-            # member-first defers VC.master one ingest (adoption drops it until
-            # the master device is a member); a converging re-ingest sets it.
-            # master_first: this pass legitimately plans empty (already
-            # converged); member_first: this pass applies the deferred master.
+            # Both orders are fully converged by now, so this third pass
+            # legitimately plans empty: member-first no longer defers VC.master
+            # for an ingest, because adoption attaches the chassis-less master
+            # itself. It stays here as a re-ingest safety net.
             self._diff_apply(master_payload, allow_empty=True)
             self._assert_single_vc(vc_name, master_name=m, members={m: 1, s2: 2})
             self._assert_noop_rediff(master_payload)
@@ -344,13 +424,137 @@ class VirtualChassisIngestE2ETests(APITestCase):
             VirtualChassis.objects.get(name=vc_name).pk,
         )
 
-        # As in the two-request case, VC.master converges on a later,
-        # identical re-ingest of the master payload (deferred-master
-        # adoption contract), not necessarily within the bulk request itself.
-        self._diff_apply(master_payload)
+        # VC.master converges within the bulk request itself: adoption
+        # attaches the chassis-less master to the row it adopts, so the
+        # re-ingest below has nothing left to plan.
+        self.assertEqual(VirtualChassis.objects.get(name=vc_name).master.name, m)
+        self._diff_apply(master_payload, allow_empty=True)
         self._assert_single_vc(vc_name, master_name=m, members={m: 1, s2: 2})
         self._assert_noop_rediff(master_payload)
         self._assert_noop_rediff(member_payload)
+
+    def test_standalone_vc_payload_adopts_masterless_row_and_attaches_master(self):
+        """
+        FIRST ingest must converge: adoption has to establish membership itself.
+
+        A member-first ingest leaves a masterless VC; the standalone VC payload
+        that names the master IS the whole payload, so there is no "later
+        ingest" of it that would ever attach the master device. Dropping master
+        here leaves the row masterless forever and re-plans the same CREATE on
+        every pass.
+
+        The master lands at position 1 -- the position NetBox itself assigns
+        when it attaches a new chassis's master (dcim.signals.
+        assign_virtualchassis_master) -- because the payload carries none.
+        """
+        member = Device.objects.create(
+            name="vce-sw2", site=self.site, device_type=self.dt, role=self.role
+        )
+        vc = VirtualChassis.objects.create(name="vce-stack")
+        Device.objects.filter(pk=member.pk).update(virtual_chassis=vc, vc_position=2)
+        Device.objects.create(
+            name="vce-sw1", site=self.site, device_type=self.dt, role=self.role
+        )
+        count_before = VirtualChassis.objects.get(pk=vc.pk).member_count
+
+        payload = self._vc_payload("vce-stack", "vce-sw1")
+        self._diff_apply(payload)
+
+        adopted = self._assert_single_vc("vce-stack", master_name="vce-sw1",
+                                        members={"vce-sw1": 1, "vce-sw2": 2})
+        self.assertEqual(adopted.pk, vc.pk)  # adopted, not duplicated
+        # The attach bumps member_count through a direct UPDATE the adopted
+        # instance cannot see, so the adoption save must not write its stale
+        # in-memory counter back over it. Asserted as a delta because the
+        # queryset .update() seeding above never fires the counter signal.
+        self.assertEqual(adopted.member_count, count_before + 1)
+        # ...and the re-read must not cost the changelog its prechange snapshot:
+        # the VC's ObjectChange still records the master it had before adoption.
+        vc_change = ObjectChange.objects.filter(
+            changed_object_type__app_label="dcim",
+            changed_object_type__model="virtualchassis",
+            changed_object_id=adopted.pk,
+        ).latest("time")
+        self.assertIsNotNone(vc_change.prechange_data, vc_change)
+        self.assertIsNone(vc_change.prechange_data.get("master"), vc_change.prechange_data)
+        self.assertEqual(vc_change.postchange_data.get("master"), adopted.master_id)
+        self._assert_noop_rediff(payload)
+
+    def test_standalone_vc_payload_reingest_is_a_noop(self):
+        """
+        The property the drop-master path violated: identical re-ingest settles.
+
+        Before adoption attached the master, every pass re-planned the same
+        CREATE against a row that stayed masterless -- an ingest pipeline that
+        never converges, which for a reconciler is the sharp end of it.
+        """
+        vc = VirtualChassis.objects.create(name="vce-stack")
+        Device.objects.create(
+            name="vce-sw1", site=self.site, device_type=self.dt, role=self.role
+        )
+        payload = self._vc_payload("vce-stack", "vce-sw1")
+
+        self._diff_apply(payload)
+        first = self._assert_single_vc("vce-stack", master_name="vce-sw1",
+                                      members={"vce-sw1": 1})
+        self.assertEqual(first.pk, vc.pk)
+
+        self._assert_noop_rediff(payload)
+        self._diff_apply(payload, allow_empty=True)
+        again = self._assert_single_vc("vce-stack", master_name="vce-sw1",
+                                      members={"vce-sw1": 1})
+        self.assertEqual(again.pk, vc.pk)
+
+    def test_standalone_vc_adoption_takes_the_lowest_free_position(self):
+        """
+        The provisional position steps past positions the adopted row already uses.
+
+        Positions 1 and 3 are taken, so the master gets 2 -- lowest free, not
+        highest+1. It is provisional either way: the device's own payload
+        asserts the real position, and Device.clean simply refuses a member
+        without one, so adoption has to pick something.
+        """
+        vc = VirtualChassis.objects.create(name="vce-stack")
+        for name, position in (("vce-sw2", 1), ("vce-sw3", 3)):
+            d = Device.objects.create(
+                name=name, site=self.site, device_type=self.dt, role=self.role
+            )
+            Device.objects.filter(pk=d.pk).update(virtual_chassis=vc, vc_position=position)
+        Device.objects.create(
+            name="vce-sw1", site=self.site, device_type=self.dt, role=self.role
+        )
+
+        self._diff_apply(self._vc_payload("vce-stack", "vce-sw1"))
+        self._assert_single_vc("vce-stack", master_name="vce-sw1",
+                              members={"vce-sw1": 2, "vce-sw2": 1, "vce-sw3": 3})
+
+    def test_standalone_vc_payload_will_not_move_master_out_of_another_chassis(self):
+        """
+        Adoption attaches a chassis-less device; it does not relocate one.
+
+        Membership is asserted by the DEVICE payload (Device.virtual_chassis).
+        A VC payload naming a master is not authority to pull that device out
+        of a chassis it already belongs to -- and when the device is the other
+        chassis's master NetBox refuses the move outright. So master stays
+        unset and the deviation stays visible (the CREATE keeps re-planning)
+        rather than being "converged" by a silent relocation.
+        """
+        other, _ = self._seed_stack(vc_name="vce-other", master="vce-sw9")
+        member = Device.objects.create(
+            name="vce-sw1", site=self.site, device_type=self.dt, role=self.role
+        )
+        Device.objects.filter(pk=member.pk).update(virtual_chassis=other, vc_position=2)
+        vc = VirtualChassis.objects.create(name="vce-stack")
+
+        self._diff_apply(self._vc_payload("vce-stack", "vce-sw1"))
+
+        member.refresh_from_db()
+        self.assertEqual(member.virtual_chassis_id, other.pk)  # not relocated
+        self.assertEqual(member.vc_position, 2)
+        vc.refresh_from_db()
+        self.assertIsNone(vc.master_id)
+        self.assertEqual(vc.members.count(), 0)
+        self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
 
     def test_name_only_master_stub_yields_required_fields_deviation(self):
         """A VC whose inline master stub lacks matcher keys fails loudly, not silently."""

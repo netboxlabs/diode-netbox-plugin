@@ -130,23 +130,40 @@ _IS_CIRCULAR_REFERENCE = {
 def _is_circular_reference(object_type, field_name):
     return field_name in _IS_CIRCULAR_REFERENCE.get(object_type, frozenset())
 
-# Scalar fields that must ride along when their companion ref is deferred.
+# Scalar fields that MOVE to the deferred step when their companion ref is
+# deferred: they only mean anything alongside that ref, so they have to be
+# asserted in the same write as it.
+#
 # NetBox's assign_virtualchassis_master signal forces an inline master's
-# vc_position to 1 when a VirtualChassis is created, so the deferred
-# device update must re-assert the submitted position/priority after it.
+# vc_position to 1 when a VirtualChassis is created, so the deferred device
+# update must re-assert the submitted position/priority after that create.
+# Do NOT "fix" this back into a copy that also leaves the scalars on the main
+# node -- that is where they do damage:
+#   - on a device CREATE they are pointless there. The VC row is created after
+#     the device, and the signal overwrites whatever position the device was
+#     created with; only the deferred update can make the submitted position
+#     stick.
+#   - on a device UPDATE they are a bug. The main update runs BEFORE the
+#     chassis change, so a device moving from chassis A to chassis B into a
+#     position that is free in B but taken in A momentarily claims
+#     (A, new_position) and NetBox's (virtual_chassis, vc_position) uniqueness
+#     constraint rejects an otherwise legal move.
+# When _handle_post_creates merges the deferred step back into the main node
+# (it does whenever nothing that step references is ordered later) chassis and
+# position land in one write again, which is equally correct.
 _POST_CREATE_COMPANIONS = {
     ("dcim.device", "virtual_chassis"): ("vc_position", "vc_priority"),
 }
 
 
-def _copy_deferred_companions(object_type, node, post_create):
-    """Copy companion scalars onto a deferred post-create node."""
+def _move_deferred_companions(object_type, node, post_create):
+    """Move companion scalars off the main node onto its deferred post-create node."""
     for (companion_type, ref_field), scalar_fields in _POST_CREATE_COMPANIONS.items():
         if companion_type != object_type or ref_field not in post_create:
             continue
         for scalar_field in scalar_fields:
             if scalar_field in node:
-                post_create[scalar_field] = copy.deepcopy(node[scalar_field])
+                post_create[scalar_field] = node.pop(scalar_field)
 
 @profiled("transform")
 def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]: # noqa: C901
@@ -378,7 +395,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
         node['_refs'].update(refs)
 
     if post_create:
-        _copy_deferred_companions(object_type, node, post_create)
+        _move_deferred_companions(object_type, node, post_create)
         nodes.append(post_create)
 
     return nodes

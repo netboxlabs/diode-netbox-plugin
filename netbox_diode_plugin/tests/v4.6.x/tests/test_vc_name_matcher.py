@@ -115,11 +115,14 @@ class VirtualChassisAdoptionTests(TestCase):
         return apply_changeset(cs, request)
 
     def test_master_bearing_create_adopts_masterless_vc(self):
-        """No duplicate VC; master dropped until the device is a member."""
+        """No duplicate VC; adoption attaches the chassis-less master and sets it."""
         self._apply_create({"name": "vca-stack", "master": self.master.pk})
         self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
         self.vc.refresh_from_db()
-        self.assertIsNone(self.vc.master)  # not a member yet -> master deferred
+        self.assertEqual(self.vc.master_id, self.master.pk)
+        self.master.refresh_from_db()
+        self.assertEqual(self.master.virtual_chassis_id, self.vc.pk)
+        self.assertEqual(self.master.vc_position, 1)  # NetBox's own choice for a VC master
 
     def test_adoption_sets_master_once_member(self):
         """When the master device already belongs to the VC, adoption sets master."""
@@ -150,11 +153,26 @@ class VirtualChassisAdoptionTests(TestCase):
         self.assertEqual(decoy.description, "")
         self.assertIsNone(decoy.master)
 
-    def test_two_pass_convergence_sets_master(self):
-        """A second, identical CREATE apply after the device becomes a member finally sets master."""
+    def test_adoption_defers_master_for_a_device_in_another_chassis(self):
+        """
+        A master already in ANOTHER chassis is not relocated, so master stays unset.
+
+        This is the only case adoption still defers, and the only one where
+        deferring converges: membership is the DEVICE payload's to assert, and
+        once something else makes the device a member an identical re-apply
+        binds master. (A chassis-less master is attached by adoption itself --
+        nothing else would ever do it for a standalone VC payload.)
+        """
+        elsewhere = VirtualChassis.objects.create(name="vca-elsewhere")
+        Device.objects.filter(pk=self.master.pk).update(
+            virtual_chassis=elsewhere, vc_position=2
+        )
         self._apply_create({"name": "vca-stack", "master": self.master.pk})
         self.vc.refresh_from_db()
-        self.assertIsNone(self.vc.master)  # first pass: adopted, master deferred
+        self.assertIsNone(self.vc.master)  # deferred, not forced
+        self.master.refresh_from_db()
+        self.assertEqual(self.master.virtual_chassis_id, elsewhere.pk)  # not relocated
+        self.assertEqual(self.master.vc_position, 2)
 
         Device.objects.filter(pk=self.master.pk).update(
             virtual_chassis=self.vc, vc_position=1
