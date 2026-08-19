@@ -64,12 +64,17 @@ docker-compose-netbox-plugin-test-cover:
 # shell (dash 0.5.11 rejects it, 0.5.12 accepts it -- bullseye vs trixie). The
 # emptiness check alone is not a substitute -- it cannot see a generator that
 # failed AFTER emitting the marker line.
+#
+# chmod before the mv because mktemp creates 0600 and mv carries that mode onto
+# the doc, where the old redirect-onto-the-file form left the existing 644
+# alone. Git only records the exec bit, so this never reached a commit -- it
+# just made the working copy unreadable to anyone but its owner.
 docker-compose-generate-matching-docs:
 	@raw=$$(mktemp) && doc=$$(mktemp) && trap 'rm -f "$$raw" "$$doc"' EXIT && \
 	$(DOCKER_COMPOSE) $(COMPOSE_FILES) -f $(DOCKER_COMMON_PATH)/docker-compose.test.yaml run --rm netbox python manage.py generate_matching_docs > "$$raw" && \
 	awk '/Generating markdown documentation.../{p=1;next} p' "$$raw" > "$$doc" && \
 	if [ ! -s "$$doc" ]; then echo "generate_matching_docs produced no output; doc left unchanged" >&2; exit 1; fi && \
-	mv "$$doc" ./docs/matching-criteria-documentation.md
+	chmod 644 "$$doc" && mv "$$doc" ./docs/matching-criteria-documentation.md
 
 .PHONY: docker-compose-migrate
 docker-compose-migrate:
