@@ -124,7 +124,24 @@ _IS_CIRCULAR_REFERENCE = {
     "dcim.virtualdevicecontext": frozenset(["primary_ip4", "primary_ip6"]),
     "virtualization.virtualmachine": frozenset(["primary_ip4", "primary_ip6"]),
     "circuits.provider": frozenset(["accounts"]),
-    "dcim.modulebay": frozenset(["module"]), # this isn't  allowed to be circular, but gives a better error
+    # dcim.modulebay carries both sides of the module/bay relation, and they are
+    # here for opposite reasons:
+    #   installed_module is the reverse of Module.module_bay. A bay that nests the
+    #     module occupying it is named back by that module (Module.module_bay is a
+    #     required OneToOneField), and the two bay nodes fingerprint-dedupe into
+    #     one, so the cycle only appears at the SECOND _topo_sort -- which is why
+    #     re-ingesting rows the database already agrees with failed as well.
+    #     Deferring the reverse write orders it bay -> module -> bay update. Note
+    #     what that buys: a plannable order, not a write. The module's own
+    #     module_bay FK is what installs it; the deferred update re-asserts the
+    #     same relation through Django's reverse-one-to-one accessor, which only
+    #     mutates the related object in memory (and NetBox's serializer pops
+    #     reverse relations before full_clean), so it persists nothing.
+    #   module is the forward parent FK, and per NetBox's ModuleBay.clean() a bay
+    #     may not be a sub-bay of the module installed in it. It is declared only
+    #     so that payload reaches that model error instead of the opaque
+    #     plan-time cycle error -- it is a better-error path, not a working shape.
+    "dcim.modulebay": frozenset(["module", "installed_module"]),
 }
 
 def _is_circular_reference(object_type, field_name):

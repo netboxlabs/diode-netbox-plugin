@@ -1,4 +1,4 @@
-"""E2E: duplicate module creates adopt the existing module at apply time."""
+"""E2E: module/module-bay ingest shapes — create adoption, and the installed_module reverse side."""
 import uuid
 from types import SimpleNamespace
 from unittest import mock
@@ -161,3 +161,135 @@ class ModuleAdoptionE2ETests(APITestCase):
         cs = self._diff(self._module_entity())
         self._apply(cs)
         self.assertEqual(Module.objects.filter(module_bay=self.bay).count(), 1)
+
+
+class ModuleBayInstalledModuleE2ETests(APITestCase):
+    """
+    The reverse side of the module/bay relation: dcim.modulebay.installed_module.
+
+    A producer walking a device's bays naturally nests the module inside the
+    bay it occupies, and the nested module has to name its own module_bay
+    (Module.module_bay is a required OneToOneField). That names the outer bay
+    back, so the pair only plans if the reverse-side write is deferred.
+    """
+
+    def setUp(self):
+        """Mock OAuth2 introspection so the Diode API endpoints accept requests."""
+        super().setUp()
+        self.diff_url = "/netbox/api/plugins/diode/generate-diff/"
+        self.apply_url = "/netbox/api/plugins/diode/apply-change-set/"
+        self.auth = {"HTTP_AUTHORIZATION": "Bearer mocked_oauth_token"}
+        diode_user = SimpleNamespace(
+            user=get_diode_user(),
+            token_scopes=["netbox:read", "netbox:write"],
+            token_data={"scope": "netbox:read netbox:write"},
+        )
+        p = mock.patch.object(
+            DiodeOAuth2Authentication, "_introspect_token", return_value=diode_user
+        )
+        p.start()
+        self.addCleanup(p.stop)
+
+        site = Site.objects.create(name="im-site", slug="im-site")
+        mfr = Manufacturer.objects.create(name="im-mfr", slug="im-mfr")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="im-dt", slug="im-dt")
+        role = DeviceRole.objects.create(name="im-role", slug="im-role")
+        self.mt = ModuleType.objects.create(manufacturer=mfr, model="im-linecard")
+        self.dev = Device.objects.create(
+            name="im-rtr", site=site, device_type=dt, role=role
+        )
+
+    def _dev_ref(self):
+        return {"name": "im-rtr", "site": {"name": "im-site"}}
+
+    def _module_ref(self, bay_name):
+        return {
+            "device": self._dev_ref(),
+            "module_bay": {"device": self._dev_ref(), "name": bay_name},
+            "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+            "serial": "IM-SER-1",
+        }
+
+    def _installed_module_entity(self, bay_name="im-bay1"):
+        """A bay carrying the module installed in it — the natural shape."""
+        return {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": self._dev_ref(),
+            "name": bay_name,
+            "label": "IM-1",
+            "installed_module": self._module_ref(bay_name),
+        }}}
+
+    def _parent_module_entity(self, bay_name="im-bay2"):
+        """The same bay claiming the module as its PARENT — contradictory data."""
+        return {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": self._dev_ref(),
+            "name": bay_name,
+            "module": self._module_ref(bay_name),
+        }}}
+
+    def _diff(self, payload, expect=200):
+        r = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r.status_code, expect, r.content)
+        return r.json().get("change_set", {}) or {}
+
+    def _apply(self, cs, expect=200):
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, expect, r.content)
+        return r
+
+    def _non_noop(self, cs):
+        return [c for c in cs.get("changes", []) if c["change_type"] != "noop"]
+
+    def test_installed_module_natural_shape_installs_the_module(self):
+        """The bay-carries-its-module shape plans, applies, and lands in the DB."""
+        self._apply(self._diff(self._installed_module_entity()))
+
+        bay = ModuleBay.objects.get(device=self.dev, name="im-bay1")
+        self.assertEqual(bay.label, "IM-1")
+        module = Module.objects.get(module_bay=bay)
+        self.assertEqual(module.device_id, self.dev.pk)
+        self.assertEqual(module.module_type_id, self.mt.pk)
+        self.assertEqual(module.serial, "IM-SER-1")
+        # the reverse accessor the field is named after now resolves
+        self.assertEqual(bay.installed_module.pk, module.pk)
+        self.assertEqual(Module.objects.filter(device=self.dev).count(), 1)
+
+        # and it converges: a second plan of the same payload is a no-op
+        self.assertEqual(self._non_noop(self._diff(self._installed_module_entity())), [])
+
+    def test_reingest_of_an_already_installed_module_is_a_noop(self):
+        """
+        Rows already correct in the DB must survive a second pass.
+
+        This is the convergence case: _topo_sort runs before
+        _resolve_existing_references, so an undeclared cycle rejects the
+        payload at plan time even when the database already agrees with it.
+        """
+        bay = ModuleBay.objects.create(device=self.dev, name="im-bay1", label="IM-1")
+        module = Module.objects.create(
+            device=self.dev, module_bay=bay, module_type=self.mt, serial="IM-SER-1"
+        )
+
+        self.assertEqual(self._non_noop(self._diff(self._installed_module_entity())), [])
+
+        module.refresh_from_db()
+        self.assertEqual(module.module_bay_id, bay.pk)
+        self.assertEqual(Module.objects.filter(device=self.dev).count(), 1)
+
+    def test_parent_module_field_still_reports_the_recursion_error(self):
+        """
+        dcim.modulebay.module stays a better-error path, NOT a working shape.
+
+        Its table entry exists to reach NetBox's own recursion message instead
+        of the opaque plan-time cycle error; a bay cannot be a sub-bay of the
+        module installed in it. Declaring installed_module must not turn this
+        contradiction into a success.
+        """
+        cs = self._diff(self._parent_module_entity())
+        r = self._apply(cs, expect=400)
+        self.assertIn(
+            "A module bay cannot belong to a module installed within it.",
+            r.content.decode(),
+        )
+        # the failed bay update aborts the whole change set
+        self.assertFalse(Module.objects.filter(device=self.dev).exists())
