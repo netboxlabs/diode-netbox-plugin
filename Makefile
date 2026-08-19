@@ -48,8 +48,18 @@ docker-compose-netbox-plugin-test-cover:
 	exit $$EXIT_CODE
 
 .PHONY: docker-compose-generate-matching-docs
+# Writes via a temp file and only replaces the doc on success. The previous form
+# redirected straight onto the doc, so a failing generator truncated it to zero
+# while make still reported success -- awk exits 0 on empty input, so the
+# non-zero status of the command upstream of the pipe was never seen. An
+# unmigrated database is enough to trigger it.
 docker-compose-generate-matching-docs:
-	@$(DOCKER_COMPOSE) $(COMPOSE_FILES) -f $(DOCKER_COMMON_PATH)/docker-compose.test.yaml run --rm netbox python manage.py generate_matching_docs | awk '/Generating markdown documentation.../{p=1;next} p' > ./docs/matching-criteria-documentation.md
+	@set -o pipefail; \
+	tmp=$$(mktemp) && \
+	$(DOCKER_COMPOSE) $(COMPOSE_FILES) -f $(DOCKER_COMMON_PATH)/docker-compose.test.yaml run --rm netbox python manage.py generate_matching_docs \
+	  | awk '/Generating markdown documentation.../{p=1;next} p' > "$$tmp" && \
+	if [ ! -s "$$tmp" ]; then echo "generate_matching_docs produced no output; doc left unchanged" >&2; rm -f "$$tmp"; exit 1; fi && \
+	mv "$$tmp" ./docs/matching-criteria-documentation.md
 
 .PHONY: docker-compose-migrate
 docker-compose-migrate:
