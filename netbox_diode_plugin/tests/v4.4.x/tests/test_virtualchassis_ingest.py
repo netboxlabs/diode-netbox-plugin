@@ -1,11 +1,14 @@
 """E2E: VirtualChassis natural-shape ingest, convergence, and regressions."""
+import uuid
 from types import SimpleNamespace
 from unittest import mock
 
 from core.models import ObjectChange
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
+from django.test import SimpleTestCase
 from utilities.testing import APITestCase
 
+from netbox_diode_plugin.api.applier import _coerce_pk
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.plugin_config import get_diode_user
 
@@ -687,3 +690,126 @@ class VirtualChassisIngestE2ETests(APITestCase):
                    and "master" in (c.get("data") or {})]
         self.assertTrue(updates, cs)
         self.assertIsNone(updates[0]["data"]["master"])
+
+    # ---- direct apply-change-set: master arrives exactly as posted ---------
+
+    def _vc_create_changeset(self, name, master):
+        """A minimal apply-change-set body carrying master exactly as given."""
+        return {
+            "id": str(uuid.uuid4()),
+            "changes": [{
+                "change_id": str(uuid.uuid4()),
+                "change_type": "create",
+                "object_version": None,
+                "object_type": "dcim.virtualchassis",
+                "object_id": None,
+                "ref_id": "1",
+                "data": {"name": name, "master": master},
+            }],
+        }
+
+    def _seed_adoptable(self, vc_name="vce-stack", master_name="vce-sw1"):
+        """A masterless VC to adopt, plus a chassis-less device to become its master."""
+        vc = VirtualChassis.objects.create(name=vc_name)
+        master = Device.objects.create(
+            name=master_name, site=self.site, device_type=self.dt, role=self.role
+        )
+        return vc, master
+
+    def test_direct_apply_integer_master_adopts(self):
+        """The well-formed direct-POST shape: an int pk adopts the masterless row."""
+        vc, master = self._seed_adoptable()
+
+        r = self.client.post(self.apply_url, data=self._vc_create_changeset("vce-stack", master.pk),
+                             format="json", **self.auth)
+
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+        adopted = self._assert_single_vc("vce-stack", master_name="vce-sw1", members={"vce-sw1": 1})
+        self.assertEqual(adopted.pk, vc.pk)
+
+    def test_direct_apply_numeric_string_master_adopts(self):
+        """
+        A numeric-string pk is a legal wire form and must keep adopting.
+
+        The malformed-value guard has to COERCE this, not decline it: declining
+        falls through to the create path, which would leave a second chassis of
+        the same name beside the masterless row this is supposed to bind.
+        """
+        vc, master = self._seed_adoptable()
+
+        r = self.client.post(self.apply_url,
+                             data=self._vc_create_changeset("vce-stack", str(master.pk)),
+                             format="json", **self.auth)
+
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+        adopted = self._assert_single_vc("vce-stack", master_name="vce-sw1", members={"vce-sw1": 1})
+        self.assertEqual(adopted.pk, vc.pk)
+
+    def test_direct_apply_malformed_master_is_a_structured_400(self):
+        """
+        A non-numeric master must be reported as an error, not crash the apply.
+
+        The plan path always resolves master to a pk, so this shape reaches the
+        applier only through a direct POST to apply-change-set (or bulk-apply)
+        -- a first-class entry point, and nothing between the wire and the
+        applier coerces the field: ChangeSet.validate pops relation fields
+        before instantiating the model. Carried into an ORM filter it raises
+        ValueError, which apply_changeset's handler chain does not catch
+        (ValidationError, ObjectDoesNotExist, TypeError, IntegrityError,
+        KeyError), so it escapes as a 500 -- burying the structured 400 the VC
+        serializer already produces for this exact value.
+
+        TWO lookups on this path carried it into the ORM: the adoption pass,
+        and the match lookup _create_or_find_instance falls back to once the
+        serializer has rejected the payload. Either one alone still 500s, so
+        this test goes green only when both decline a malformed reference.
+        """
+        vc, _ = self._seed_adoptable()
+        before = vc.last_updated
+
+        r = self.client.post(self.apply_url, data=self._vc_create_changeset("vce-stack", "abc"),
+                             format="json", **self.auth)
+
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = r.json()["errors"]
+        self.assertIn("dcim.virtualchassis", errors, errors)
+        self.assertIn("master", errors["dcim.virtualchassis"], errors)
+
+        # Declining the adoption must not half-apply it either. On a row that
+        # was already masterless and memberless, "untouched" and "saved without
+        # its master" look identical in those two fields -- last_updated is
+        # what separates them, so it carries the no-write assertion.
+        vc.refresh_from_db()
+        self.assertIsNone(vc.master_id)
+        self.assertEqual(vc.members.count(), 0)
+        self.assertEqual(vc.last_updated, before, "the rejected apply saved the chassis anyway")
+        self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
+
+
+class CoercePkTests(SimpleTestCase):
+    """
+    What may reach an ORM pk filter, for every shape a payload FK can carry.
+
+    Declining is never merely defensive: an unusable value passed through
+    raises ValueError/TypeError out of the ORM, and apply_changeset does not
+    catch either, so it lands as a 500 instead of the serializer's 400.
+    """
+
+    def test_usable_pk_forms_are_coerced(self):
+        """A resolved instance, an int, and a numeric string all yield the pk."""
+        self.assertEqual(_coerce_pk(SimpleNamespace(pk=7)), 7)
+        self.assertEqual(_coerce_pk(7), 7)
+        self.assertEqual(_coerce_pk("7"), 7)
+
+    def test_unusable_pk_forms_are_declined(self):
+        """Nothing the ORM would choke on gets through -- including an unsaved instance."""
+        for value in (None, "", "abc", "7.5", 7.5, [7], (7,), {"pk": 7}, SimpleNamespace(pk=None)):
+            with self.subTest(value=value):
+                self.assertIsNone(_coerce_pk(value))
+
+    def test_bool_is_not_a_pk(self):
+        """A bool is an int subclass, so True would otherwise silently mean pk 1."""
+        self.assertIsNone(_coerce_pk(True))
+        self.assertIsNone(_coerce_pk(False))

@@ -111,6 +111,40 @@ def _try_find_and_update_existing_instance(data: dict, object_type: str, seriali
     return None
 
 
+def _coerce_pk(value):
+    """
+    Normalise a payload reference to an int pk, or None when it is not one.
+
+    A direct POST to apply-change-set (or bulk-apply) skips the transformer
+    that resolves references, and ChangeSet.validate pops relation fields
+    before it instantiates the model, so whatever the wire put in an FK field
+    arrives here untouched: a resolved model instance, an int, a numeric string
+    -- or garbage. Garbage must not reach the ORM, because it raises out of
+    query construction (ValueError for "abc", TypeError for a list) and
+    apply_changeset's handler chain turns neither into a per-entity error, so
+    it escapes as a 500 instead of the structured 400 the serializer already
+    reports for the offending field. Returning None here declines whatever the
+    caller was about to do and leaves the create path -- and that serializer
+    error -- to handle it, the same treatment
+    _try_find_and_update_existing_instance gives its own lookup with
+    `except (ValueError, TypeError)`.
+
+    bool is rejected deliberately: it is an int subclass, so True would
+    otherwise mean pk 1 and adopt an unrelated row.
+    """
+    value = getattr(value, "pk", value)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
 class _MasterAttach(Enum):
     """
     Why an adopted VC's named master is, or is not, a member of it.
@@ -166,7 +200,11 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     master = data.get("master")
     if not isinstance(name, str) or not name or master is None:
         return None
-    master_pk = getattr(master, "pk", master)
+    master_pk = _coerce_pk(master)
+    if master_pk is None:
+        # Nothing to adopt BY: a master that is not a usable pk cannot pick a
+        # candidate row, and must not reach the queryset below. See _coerce_pk.
+        return None
     candidates = model_class.objects.filter(name=name, master__isnull=True).order_by("pk")
     existing = candidates.filter(members__pk=master_pk).first() or candidates.first()
     if existing is None:
@@ -325,6 +363,27 @@ def _cable_partition_matches(instance, data: dict) -> bool:
     return (sub_a == exist_a and sub_b == exist_b) or (sub_a == exist_b and sub_b == exist_a)
 
 
+def _find_existing_object_or_none(data: dict, object_type: str):
+    """
+    find_existing_object, but a malformed reference means "no match".
+
+    Matchers interpolate payload values straight into an ORM filter, and one is
+    auto-derived for every unique field, so a unique FK (VirtualChassis.master)
+    gets a matcher that filters on whatever the payload carried. A malformed
+    value therefore raises ValueError/TypeError out of query construction
+    instead of returning nothing -- and apply_changeset does not report either
+    as a per-entity error, so it escapes as a 500. There is no object to find
+    in that case anyway; the caller's own serializer error is what should
+    surface. This is the guard _try_find_and_update_existing_instance already
+    puts around its lookup, which is why only that path stayed a clean 400.
+    """
+    try:
+        return find_existing_object(data, object_type)
+    except (ValueError, TypeError) as e:
+        logger.debug(f"malformed reference in {object_type} match lookup: {e}")
+        return None
+
+
 def _create_or_find_instance(data: dict, object_type: str, serializer_class, request):
     """Create new instance or find existing one on conflict."""
     serializer = serializer_class(data=data, context={"request": request})
@@ -333,7 +392,7 @@ def _create_or_find_instance(data: dict, object_type: str, serializer_class, req
         with transaction.atomic():
             return serializer.save()
     except (ValidationError, IntegrityError) as e:
-        instance = find_existing_object(data, object_type)
+        instance = _find_existing_object_or_none(data, object_type)
         if not instance:
             raise e
         return instance
