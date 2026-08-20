@@ -9,7 +9,11 @@ from utilities.testing import APITestCase
 
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.api.differ import normalize_changeset
-from netbox_diode_plugin.api.field_policy import _DRIVER_FIELD_RULES, submitted_driver_field_drops
+from netbox_diode_plugin.api.field_policy import (
+    _DRIVER_FIELD_RULES,
+    match_participating_fields,
+    submitted_driver_field_drops,
+)
 from netbox_diode_plugin.plugin_config import get_diode_user
 
 
@@ -176,12 +180,30 @@ class NormalizeChangesetTests(SimpleTestCase):
         self.assertEqual(out["rf_channel"], "2.4g-1-2412-22")
         self.assertEqual(dropped, {})
 
-    def test_shared_policy_applies_to_vlan_qinq_role(self):
-        """The reversed policy is registry-wide: ipam.vlan "qinq_role" behaves the same."""
+    def test_a_match_participating_field_is_never_dropped(self):
+        """ipam.vlan qinq_svlan is a match criterion, so the policy leaves it alone."""
+        # The reversal is NOT registry-wide. qinq_svlan is read by four ipam.vlan
+        # matchers, so dropping it changes which row the payload identifies: measured,
+        # it adopted and renamed an unrelated VLAN sharing the vid, or inserted a
+        # duplicate and converged onto it. NetBox's own 400 stands instead.
+        self.assertIn("qinq_svlan", match_participating_fields("ipam.vlan"))
         entity = {"qinq_role": "svlan", "qinq_svlan": 7}
         out, dropped = self._drop("ipam.vlan", {}, entity)
-        self.assertNotIn("qinq_svlan", out)
-        self.assertEqual(list(dropped), ["qinq_svlan"])
+        self.assertEqual(out["qinq_svlan"], 7)
+        self.assertEqual(dropped, {})
+
+    def test_the_interface_policy_fields_are_not_match_criteria(self):
+        """The fields the policy does drop are not how any matcher identifies a row."""
+        # This is what makes the motivating cases safe to drop, and it is asserted
+        # rather than assumed: if a future matcher starts reading one of them, the
+        # gate above will silently start exempting it and this test says so first.
+        for object_type in ("dcim.interface", "virtualization.vminterface"):
+            matched = match_participating_fields(object_type)
+            for value_map in _DRIVER_FIELD_RULES[object_type].values():
+                for dependents in value_map.values():
+                    for dependent in dependents:
+                        with self.subTest(object_type=object_type, dependent=dependent):
+                            self.assertNotIn(dependent, matched)
 
     def test_shared_policy_keeps_qinq_svlan_on_a_customer_vlan(self):
         """qinq_role "cvlan" permits qinq_svlan, so an explicit create keeps it."""
@@ -329,6 +351,20 @@ class NormalizeChangesetTests(SimpleTestCase):
         """Assert one (driver value, dependent field) pair drops, clears once, then converges."""
         sentinel = self._pair_sentinel(dependent)
         submitted = {driver_field: driver_value, dependent: sentinel}
+
+        if dependent in match_participating_fields(object_type):
+            # Exempt: the field identifies the row, so phase 1 must not touch it and
+            # there is nothing for us to converge -- NetBox rejects the payload, which
+            # is develop's behaviour and the safe one. Phase 2 must still clear a stale
+            # STORED value the payload no longer carries.
+            out, dropped = self._drop(object_type, {}, dict(submitted))
+            self.assertEqual(out[dependent], sentinel)
+            self.assertEqual(dropped, {})
+            stored = {driver_field: driver_value, dependent: sentinel}
+            cleared, _ = self._drop(object_type, dict(stored), {driver_field: driver_value})
+            self.assertIn(dependent, cleared)
+            self.assertFalse(cleared[dependent])
+            return
 
         # 1. a submitted driver value drops the field it forbids, and writes no blank
         out, dropped = self._drop(object_type, {}, dict(submitted))
@@ -870,32 +906,34 @@ class InterfaceModeClearE2ETests(APITestCase):
 
     # --- N2: a dropped match criterion must be dropped BEFORE matching --------
 
-    def test_vlan_qinq_role_create_applies_and_converges(self):
-        """A VLAN naming a service role with an svlan applies once, then plans nothing."""
-        # qinq_svlan is an ipam.vlan MATCH criterion (unique_qinq_svlan_vid, and the
-        # "qinq_svlan IS NULL" condition on the logical vid criteria). Dropping it after
-        # the existing-object lookup left the entity unmatchable, so it re-planned a
-        # CREATE and duplicated the row on every ingest. The policy runs before matching.
+    def test_a_contradictory_vlan_payload_never_touches_a_same_vid_row(self):
+        """ipam.vlan is exempt from the drop, so a same-vid VLAN is left alone."""
+        # The regression this pins: dropping qinq_svlan before matching made the entity
+        # satisfy logical_vlan_vid_no_group_or_svlan_or_site ("vid where group IS NULL
+        # AND qinq_svlan IS NULL AND site IS NULL"), i.e. vid alone -- so it adopted
+        # whatever VLAN held that vid and renamed it. Measured: a seeded VLAN was
+        # silently renamed and re-roled where develop wrote nothing at all.
+        from ipam.models import VLAN
+        seeded = VLAN.objects.create(
+            vid=4091, name="lq-someone-elses-vlan", description="OWNED BY ANOTHER SOURCE",
+        )
         payload = {"timestamp": 1, "object_type": "ipam.vlan", "entity": {"vlan": {
-            "vid": 3971, "name": "n2-cvlan", "qinq_role": "svlan",
-            "qinq_svlan": {"vid": 3970, "name": "n2-svlan"},
+            "vid": 4091, "name": "lq-brand-new-svlan", "qinq_role": "svlan",
+            "qinq_svlan": {"vid": 4090, "name": "lq-parent"},
         }}}
         cs = self._plan(payload)
-        self.assertIn("qinq_svlan", cs.get("warnings", {}).get("ipam.vlan", {}))
-        for change in cs["changes"]:
-            self.assertNotIn("qinq_svlan", change.get("data", {}))
-            self.assertNotIn("qinq_svlan", change.get("new_refs", []))
-        self._apply(cs)
+        # nothing is dropped and nothing is warned about: the field identifies the row
+        self.assertNotIn("ipam.vlan", cs.get("warnings", {}))
 
-        from ipam.models import VLAN
-        vlan = VLAN.objects.get(vid=3971)
-        self.assertEqual(vlan.qinq_role, "svlan")
-        self.assertIsNone(vlan.qinq_svlan)
+        # NetBox rejects the contradiction, which is exactly develop's answer
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertNotEqual(r.status_code, 200, r.content)
 
-        for quiet in range(1, 5):
-            self.assertEqual(self._plan(payload).get("changes", []), [],
-                             f"re-planned on quiet round {quiet}")
-        self.assertEqual(VLAN.objects.filter(vid=3971).count(), 1)  # no duplicate rows
+        seeded.refresh_from_db()
+        self.assertEqual(seeded.name, "lq-someone-elses-vlan")
+        self.assertEqual(seeded.description, "OWNED BY ANOTHER SOURCE")
+        self.assertFalse(seeded.qinq_role)  # '' or None; both mean 'not a Q-in-Q VLAN'
+        self.assertEqual(VLAN.objects.filter(vid=4091).count(), 1)  # and no duplicate
 
     def test_vlan_customer_role_keeps_its_service_vlan_and_converges(self):
         """qinq_role 'cvlan' permits qinq_svlan: it is kept, applied and converges."""

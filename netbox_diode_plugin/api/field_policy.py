@@ -3,11 +3,14 @@
 """Diode NetBox Plugin - API - Driver field policy."""
 
 import logging
+from functools import lru_cache
 
 from dcim.choices import InterfaceTypeChoices
 from dcim.constants import WIRELESS_IFACE_TYPES
+from django.db.models import Q
 
-from .plugin_utils import get_json_ref_info
+from .matcher import get_model_matchers
+from .plugin_utils import get_json_ref_info, get_object_type_model
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +91,64 @@ _DRIVER_FIELD_RULES = {
 # blank that does not match diffs against the stored one on every later ingest.
 
 
+def _q_field_refs(condition) -> set[str]:
+    """Field names a matcher's ``condition`` Q object reads, lookups stripped."""
+    refs = set()
+    if condition is None:
+        return refs
+    children = getattr(condition, "children", None)
+    if children is None:
+        return refs
+    for child in children:
+        if isinstance(child, Q):
+            refs |= _q_field_refs(child)
+        elif isinstance(child, (tuple, list)) and child:
+            refs.add(str(child[0]).split("__", 1)[0])
+    return refs
+
+
+@lru_cache(maxsize=256)
+def match_participating_fields(object_type: str) -> frozenset:
+    """
+    Every field name any matcher for ``object_type`` reads, conditions included.
+
+    Phase 1 must never drop one of these. A matcher is how the plugin decides WHICH
+    row a payload is talking about, so removing a field it reads does not just change
+    what gets written -- it changes what gets matched, and the entity silently lands
+    on a different object.
+
+    Measured, and the reason this gate exists: ``ipam.vlan.qinq_svlan`` is read by
+    four matchers (``ipam_vlan_unique_qinq_svlan_vid`` and ``..._name`` through their
+    fields; ``logical_vlan_vid_no_group_or_svlan_or_site`` and ``logical_vlan_in_site``
+    through a ``qinq_svlan IS NULL`` condition). Dropping it pre-match made a
+    contradictory VLAN payload satisfy the vid-only criterion, so it adopted and
+    renamed an unrelated VLAN that merely shared the vid -- or inserted a duplicate
+    row and then converged onto it, which no re-ingest check can see. Dropping it
+    post-match instead re-planned a CREATE forever. Neither placement is safe, so a
+    match-participating field is simply never dropped and NetBox's own error stands.
+
+    No ``dcim.interface`` or ``virtualization.vminterface`` field in the registry is
+    read by any matcher (those match on device/VM plus name), so this costs the
+    motivating cases nothing.
+    """
+    try:
+        model_class = get_object_type_model(object_type)
+    except Exception:  # unknown/unavailable type -> claim nothing, fail closed below
+        logger.warning(f"match_participating_fields: cannot resolve model for {object_type}")
+        return frozenset()
+    names = set()
+    for matcher in get_model_matchers(model_class):
+        # ObjectMatchCriteria._get_refs() already unions fields with the names its
+        # expressions reference; other matcher classes only carry plain fields.
+        get_refs = getattr(matcher, "_get_refs", None)
+        if callable(get_refs):
+            names |= set(get_refs())
+        else:
+            names.update(getattr(matcher, "fields", None) or ())
+        names |= _q_field_refs(getattr(matcher, "condition", None))
+    return frozenset(names)
+
+
 def _drop_reason(driver_field: str, driver_value: str) -> str:
     """Explain a phase 1 drop, including when the submitted driver value is empty."""
     if driver_value:
@@ -135,6 +196,14 @@ def submitted_driver_field_drops(object_type: str, entity: dict) -> dict[str, st
         for dependent in value_map.get(driver_value, ()):
             if not entity.get(dependent):
                 continue  # not submitted, or submitted empty -> nothing to drop
+            if dependent in match_participating_fields(object_type):
+                # Identity field: dropping it would change which row we mean.
+                # See match_participating_fields.
+                logger.debug(
+                    f"{object_type}.{dependent} is forbidden by {driver_field} "
+                    f"'{driver_value}' but participates in matching; left for NetBox to reject"
+                )
+                continue
             del entity[dependent]
             dropped[dependent] = _drop_reason(driver_field, driver_value)
     return dropped
