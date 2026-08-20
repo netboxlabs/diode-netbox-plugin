@@ -1,13 +1,28 @@
 """Unit tests for masterless VirtualChassis name matching."""
+from types import SimpleNamespace
+
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
 from django.test import TestCase
 
+from netbox_diode_plugin.api.applier import apply_changeset
+from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeType
 from netbox_diode_plugin.api.matcher import (
     find_existing_object,
     fingerprints,
     get_model_matchers,
     requires_pre_save_match,
 )
+
+
+def _apply_vc_create(data):
+    """Apply a single dcim.virtualchassis CREATE, exactly as a changeset would."""
+    cs = ChangeSet(changes=[Change(
+        change_type=ChangeType.CREATE,
+        object_type="dcim.virtualchassis",
+        ref_id="vc1",
+        data=data,
+    )])
+    return apply_changeset(cs, SimpleNamespace(user=None))
 
 
 class VirtualChassisNameMatcherTests(TestCase):
@@ -79,9 +94,105 @@ class VirtualChassisNameMatcherTests(TestCase):
         shared = set(fp_no_master) & set(fp_master)
         self.assertTrue(shared, "expected a shared name-keyed fingerprint")
 
-    def test_requires_pre_save_match(self):
-        """VC creates must find-first at apply time (no DB name constraint)."""
-        self.assertTrue(requires_pre_save_match("dcim.virtualchassis"))
+
+class VirtualChassisPreSaveMatchScopeTests(TestCase):
+    """
+    What the find-first CREATE route does, and to which payloads it applies.
+
+    The route is an UPDATE path -- it applies a CREATE's payload to whatever
+    find_existing_object returns -- so its scope is a behavioural contract with
+    two halves, and both are asserted here through a real apply. (The test this
+    replaced asserted only that "dcim.virtualchassis" was a member of the set
+    literal that defines the route, which is true by construction and cannot
+    fail for any reason a reader would care about.)
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        """A chassis-less device, plus a device that already masters a chassis."""
+        site = Site.objects.create(name="vcs-site", slug="vcs-site")
+        mfr = Manufacturer.objects.create(name="vcs-mfr", slug="vcs-mfr")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="vcs-dt", slug="vcs-dt")
+        role = DeviceRole.objects.create(name="vcs-role", slug="vcs-role")
+        cls.free = Device.objects.create(
+            name="vcs-free", site=site, device_type=dt, role=role
+        )
+        cls.owner = Device.objects.create(
+            name="vcs-owner", site=site, device_type=dt, role=role
+        )
+        cls.owned = VirtualChassis.objects.create(name="vcs-owned", master=cls.owner)
+        Device.objects.filter(pk=cls.owner.pk).update(
+            virtual_chassis=cls.owned, vc_position=1
+        )
+
+    def test_masterless_create_updates_the_existing_row_instead_of_inserting(self):
+        """
+        The half the route exists for: a masterless CREATE binds the row by name.
+
+        This is the plan-ahead race in miniature. VirtualChassis has no unique
+        constraint on name, so without the pre-save lookup this CREATE inserts
+        a second row and the payload lands on it, splitting a chassis across
+        two rows.
+        """
+        existing = VirtualChassis.objects.create(name="vcs-race")
+
+        _apply_vc_create({"name": "vcs-race", "description": "from the second plan"})
+
+        self.assertEqual(VirtualChassis.objects.filter(name="vcs-race").count(), 1)
+        existing.refresh_from_db()
+        self.assertEqual(existing.description, "from the second plan")
+
+    def test_master_bearing_create_does_not_become_an_update(self):
+        """
+        The half the route must NOT cover: a CREATE may not rewrite another chassis.
+
+        With master present the matcher that answers find_existing_object is
+        the auto-derived unique_master one, so taking the UPDATE path here
+        would apply "the chassis named vcs-renamed, mastered by vcs-owner" to
+        the chassis vcs-owner already masters -- renaming a converged,
+        unrelated row on a create.
+        """
+        _apply_vc_create({
+            "name": "vcs-renamed",
+            "master": self.owner.pk,
+            "description": "must not land anywhere",
+        })
+
+        self.owned.refresh_from_db()
+        self.assertEqual(self.owned.name, "vcs-owned")
+        self.assertEqual(self.owned.description, "")
+        self.assertFalse(VirtualChassis.objects.filter(name="vcs-renamed").exists())
+
+    def test_route_is_scoped_to_masterless_payloads(self):
+        """
+        The seam itself: master present in any form keeps a CREATE off the UPDATE path.
+
+        The malformed forms matter as much as the well-formed one. A matcher
+        interpolates the payload value straight into an ORM pk filter, where
+        bool and non-integral float coerce SILENTLY (True -> 1, 7.5 -> 7)
+        instead of declining, so they would select an unrelated row. Excluding
+        master-bearing payloads makes that unreachable here rather than
+        guarded.
+        """
+        self.assertTrue(requires_pre_save_match("dcim.virtualchassis", {"name": "x"}))
+        self.assertTrue(
+            requires_pre_save_match("dcim.virtualchassis", {"name": "x", "master": None}),
+            "explicit null must gate as masterless, like VirtualChassisNameMatcher",
+        )
+        for master in (self.owner.pk, str(self.owner.pk), True, False, 7.5, 7.0, "abc", [1]):
+            with self.subTest(master=master):
+                self.assertFalse(
+                    requires_pre_save_match(
+                        "dcim.virtualchassis", {"name": "x", "master": master}
+                    )
+                )
+
+    def test_ungated_types_are_unaffected_by_the_scoping(self):
+        """Only dcim.virtualchassis is payload-scoped; the other entries are not."""
+        for object_type in ("dcim.macaddress", "dcim.cable", "ipam.prefix"):
+            with self.subTest(object_type=object_type):
+                self.assertTrue(requires_pre_save_match(object_type, {"master": 1}))
+        self.assertFalse(requires_pre_save_match("dcim.site", {}))
 
 
 class VirtualChassisAdoptionTests(TestCase):
@@ -100,19 +211,7 @@ class VirtualChassisAdoptionTests(TestCase):
         )
 
     def _apply_create(self, data):
-        from types import SimpleNamespace
-
-        from netbox_diode_plugin.api.applier import apply_changeset
-        from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeType
-
-        cs = ChangeSet(changes=[Change(
-            change_type=ChangeType.CREATE,
-            object_type="dcim.virtualchassis",
-            ref_id="vc1",
-            data=data,
-        )])
-        request = SimpleNamespace(user=None)
-        return apply_changeset(cs, request)
+        return _apply_vc_create(data)
 
     def test_master_bearing_create_adopts_masterless_vc(self):
         """No duplicate VC; adoption attaches the chassis-less master and sets it."""
@@ -134,24 +233,48 @@ class VirtualChassisAdoptionTests(TestCase):
         self.vc.refresh_from_db()
         self.assertEqual(self.vc.master_id, self.master.pk)
 
-    def test_unique_master_match_leaves_masterless_decoy_untouched(self):
-        """A same-named masterless decoy must not divert a CREATE from the row it already masters."""
+    def test_master_already_owning_a_chassis_declines_adoption_of_a_decoy(self):
+        """
+        A same-named masterless decoy must not receive a CREATE aimed at the owned row.
+
+        The decoy is the row the adopter's own queryset picks (same name,
+        master__isnull=True), and the master named by the payload cannot be
+        attached to it -- VirtualChassis.master is unique and another chassis
+        already holds it. Deferring master and saving the rest, which is how
+        the adopter treats a master that merely sits in another chassis, writes
+        the payload onto a row the payload never referred to and leaves the
+        real one untouched, with nothing to converge it. So the adopter must
+        decline outright, and the CREATE settles on the unique-master row
+        without rewriting it.
+
+        Applying the payload is the plan path's job, not a create's: an ingest
+        of this entity plans an UPDATE of the unique-master row, because
+        find_existing_object resolves master-bearing payloads to it at plan
+        time. A create that also rewrote it is what let a create rename a
+        chassis it did not name.
+        """
         mastered = VirtualChassis.objects.create(name="vca-mastered", master=self.master)
         Device.objects.filter(pk=self.master.pk).update(
             virtual_chassis=mastered, vc_position=1
         )
         decoy = VirtualChassis.objects.create(name="vca-mastered")  # masterless, same name
+        mastered.refresh_from_db()
+        before = mastered.last_updated
+
         self._apply_create({
             "name": "vca-mastered",
             "master": self.master.pk,
-            "description": "adopted-update",
+            "description": "must not land anywhere",
         })
+
         self.assertEqual(VirtualChassis.objects.filter(name="vca-mastered").count(), 2)
-        mastered.refresh_from_db()
-        self.assertEqual(mastered.description, "adopted-update")
         decoy.refresh_from_db()
         self.assertEqual(decoy.description, "")
         self.assertIsNone(decoy.master)
+        mastered.refresh_from_db()
+        self.assertEqual(mastered.description, "")
+        self.assertEqual(mastered.master_id, self.master.pk)
+        self.assertEqual(mastered.last_updated, before, "the CREATE wrote the owned row")
 
     def test_adoption_defers_master_for_a_device_in_another_chassis(self):
         """

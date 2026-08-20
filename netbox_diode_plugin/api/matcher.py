@@ -105,7 +105,10 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 #   - dcim.modulebay: matched by (name, device); NetBox's parent-aware
 #     constraint does not catch unscoped duplicates the matcher dedupes.
 #   - dcim.virtualchassis: matched by name when the payload has no master;
-#     NetBox has no uniqueness on VC name at all.
+#     NetBox has no uniqueness on VC name at all. Only the MASTERLESS half of
+#     this type's payload space takes the pre-save match -- see
+#     _virtualchassis_pre_save_match_applies for why a master-bearing CREATE
+#     must not, and _PRE_SAVE_MATCH_PAYLOAD_GATES for how it is excluded.
 #   - ipam.prefix: NetBox has no unique constraint on prefix, nor on
 #     (prefix, vrf) - Prefix.Meta carries only ordering and indexes.
 #     Duplicate detection lives solely in Prefix.clean(), behind
@@ -151,9 +154,78 @@ _REQUIRES_PRE_SAVE_MATCH = frozenset({
 })
 
 
-def requires_pre_save_match(object_type: str) -> bool:
-    """Whether the applier must look up an existing row before CREATE."""
-    return object_type in _REQUIRES_PRE_SAVE_MATCH
+def _virtualchassis_pre_save_match_applies(data: dict) -> bool:
+    """
+    Pre-save match a dcim.virtualchassis CREATE only when it carries no master.
+
+    What the routing is FOR, concretely -- the plan-ahead race. Two
+    generate-diff calls are issued before either apply, one per member device,
+    each carrying virtual_chassis: {"name": "X"} at a moment when no chassis
+    named X exists. Neither planner can match anything (there is no row to
+    match yet), so BOTH plans contain a create dcim.virtualchassis
+    {"name": "X"} with no master. Applied in sequence, the second create
+    inserts a SECOND row: a split chassis, half the members on each, one half
+    orphaned. Nothing else catches it -- VirtualChassis.name has no unique
+    constraint, so the INSERT succeeds and _create_or_find_instance's
+    IntegrityError fallback never runs; and no matcher can help at plan time
+    because the row genuinely does not exist yet. Looking the name up
+    immediately BEFORE the save is the only thing that collapses the two plans
+    onto one row. Every payload in that race is masterless by construction --
+    the members' own payloads name the chassis, nothing more.
+
+    A master-bearing CREATE is deliberately EXCLUDED, and the exclusion is
+    load-bearing rather than merely tidy. The pre-save match is an UPDATE path:
+    it applies the CREATE's payload to whatever find_existing_object returns.
+    With master present the matcher that answers is the auto-derived
+    unique_master one (VirtualChassisNameMatcher gates itself off -- see its
+    docstring), so a CREATE of "the chassis named NEW, mastered by device D"
+    would be applied to whichever chassis D already masters, RENAMING an
+    existing, unrelated chassis on a create. Excluding master-bearing payloads
+    also puts the payload's master value out of reach of an ORM pk filter,
+    where a bool or a non-integral float coerces silently (True -> pk 1,
+    7.5 -> pk 7) and would select an unrelated row; on this path the
+    mis-coercion becomes unreachable rather than guarded-and-hoped-for.
+
+    Nothing is lost by excluding them. VirtualChassis.master IS a DB unique
+    constraint, so a duplicate master-bearing insert raises IntegrityError and
+    _create_or_find_instance recovers; and a same-named MASTERLESS row left by
+    a member-first ingest is bound by
+    applier._try_adopt_masterless_virtualchassis, which chooses its row from
+    live database state and guards the same malformed-pk hazard explicitly.
+
+    An explicit null counts as absent, matching VirtualChassisNameMatcher's own
+    gate: the transformer emits master: None for a member-only payload.
+    """
+    return data.get("master") is None
+
+
+# Payload-level narrowing for entries in _REQUIRES_PRE_SAVE_MATCH whose
+# pre-save match is safe for only PART of their type's payload space. A type
+# with no gate here takes the pre-save match for every CREATE.
+_PRE_SAVE_MATCH_PAYLOAD_GATES = {
+    "dcim.virtualchassis": _virtualchassis_pre_save_match_applies,
+}
+
+
+def requires_pre_save_match(object_type: str, data: dict | None = None) -> bool:
+    """
+    Whether the applier must look up an existing row before CREATE.
+
+    ``data`` is the CREATE payload. It is optional only so a caller can ask the
+    type-level question; a type carrying a payload gate (see
+    _PRE_SAVE_MATCH_PAYLOAD_GATES) answers False without one. That default is
+    the safe direction: the pre-save match turns a CREATE into an UPDATE of an
+    existing row, and taking that route unproven is the direction that does
+    damage, while declining it only forgoes a dedupe.
+    """
+    if object_type not in _REQUIRES_PRE_SAVE_MATCH:
+        return False
+    gate = _PRE_SAVE_MATCH_PAYLOAD_GATES.get(object_type)
+    if gate is None:
+        return True
+    if data is None:
+        return False
+    return gate(data)
 
 
 _LOGICAL_MATCHERS = {

@@ -151,6 +151,73 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(vc.master.vc_priority, 128)
         self._assert_noop_rediff(payload)
 
+    def test_natural_shape_leaves_member_count_equal_to_actual_members(self):
+        """
+        The counter must not be double-incremented by the deferred device update.
+
+        This is the PR's headline shape and it plans three changes: create the
+        device (ref R), create the chassis mastered by R, then update R with its
+        position. Between changes two and three NetBox's own
+        dcim.signals.assign_virtualchassis_master has already written
+        virtual_chassis onto the device ROW -- through a different Python object
+        -- and utilities.counters has already counted that membership.
+
+        Applying change three to the instance the CREATE returned therefore
+        replays the assignment from a stale baseline:
+        utilities.counters.post_save_receiver reads TrackingModelMixin's
+        tracker, sees virtual_chassis_id go None -> chassis, and increments
+        VirtualChassis.member_count a second time for the one membership that
+        exists. member_count is not a field ingest diffs, so the re-diff below
+        is empty and nothing ever repairs it -- the stored count stays one
+        above the truth for the life of the row.
+
+        The two assertions are deliberately paired: member_count on its own
+        would also be satisfied by a chassis that ended up with two members.
+        """
+        payload = self._device_payload("vce-sw1", {
+            "vc_position": 3, "vc_priority": 128,
+            "virtual_chassis": {
+                "name": "vce-stack",
+                "master": {"name": "vce-sw1", "site": {"name": "vce-site"}},
+            },
+        })
+        cs = self._diff_apply(payload)
+
+        # Pin the shape: the third change is an UPDATE addressed by ref_id, so
+        # it is the branch that reuses the CREATE's in-memory instance.
+        deferred = [c for c in cs["changes"]
+                    if c["object_type"] == "dcim.device" and c["change_type"] == "update"]
+        self.assertEqual(len(deferred), 1, cs)
+        self.assertIsNone(deferred[0]["object_id"], deferred[0])
+        self.assertIsNotNone(deferred[0]["ref_id"], deferred[0])
+
+        vc = self._assert_single_vc("vce-stack", master_name="vce-sw1",
+                                   members={"vce-sw1": 3})
+        self.assertEqual(vc.members.count(), 1)
+        self.assertEqual(vc.member_count, 1, "stored member_count diverged from reality")
+
+        # ...and it never self-heals, so the divergence would be permanent.
+        self._assert_noop_rediff(payload)
+        self.assertEqual(VirtualChassis.objects.get(pk=vc.pk).member_count, 1)
+
+        # Re-reading must not cost the deferred update its changelog prechange
+        # snapshot, and the snapshot must be of the ROW: the chassis assignment
+        # NetBox's signal already made is what separates a fresh read from the
+        # stale instance, which still had virtual_chassis unset.
+        dev = Device.objects.get(name="vce-sw1")
+        dev_change = ObjectChange.objects.filter(
+            changed_object_type__app_label="dcim",
+            changed_object_type__model="device",
+            changed_object_id=dev.pk,
+        ).order_by("pk").last()
+        self.assertIsNotNone(dev_change, "the deferred update recorded no change at all")
+        self.assertEqual(dev_change.action, "update", dev_change)
+        self.assertIsNotNone(dev_change.prechange_data, dev_change)
+        self.assertEqual(
+            dev_change.prechange_data.get("virtual_chassis"), vc.pk,
+            dev_change.prechange_data,
+        )
+
     def test_custom_position_on_preexisting_master_device(self):
         """The signal-clobber case: pre-existing device, position must survive ingest 1."""
         Device.objects.create(name="vce-sw1", site=self.site, device_type=self.dt, role=self.role)
@@ -786,6 +853,59 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(vc.members.count(), 0)
         self.assertEqual(vc.last_updated, before, "the rejected apply saved the chassis anyway")
         self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
+
+
+    def test_direct_apply_master_bearing_create_never_rewrites_another_chassis(self):
+        """
+        A CREATE must not be able to rename or otherwise write an existing chassis.
+
+        The pre-save match (matcher._REQUIRES_PRE_SAVE_MATCH) is an UPDATE
+        path: it applies the CREATE's payload to whatever find_existing_object
+        returns. With master present the matcher that answers is the
+        auto-derived unique_master one, so routing a master-bearing CREATE
+        through it means "create the chassis named NEW, mastered by D" is
+        applied to whichever chassis D already masters -- an unrelated,
+        already-converged row, renamed by a create. Scoping the routing to
+        MASTERLESS payloads is what makes that unreachable, and it also puts
+        master beyond the reach of an ORM pk filter, where the malformed forms
+        below coerce silently rather than declining (True -> pk 1, 7.5 -> pk 7,
+        7.0 -> pk 7).
+
+        The invariant is asserted over every pre-existing row rather than over
+        the outcome of the apply, because the outcome legitimately varies with
+        the value: what must never vary is that no row that existed before the
+        request comes out of it changed.
+        """
+        vc, master = self._seed_stack(vc_name="vce-owned", master="vce-sw1")
+
+        for label, master_value in (
+            ("well_formed_pk", master.pk),
+            ("numeric_string", str(master.pk)),
+            ("bool_true", True),
+            ("bool_false", False),
+            ("non_integral_float", 7.5),
+            ("integral_float", 7.0),
+        ):
+            with self.subTest(master=label):
+                before = {
+                    row.pk: (row.name, row.description, row.master_id, row.last_updated)
+                    for row in VirtualChassis.objects.all()
+                }
+                r = self.client.post(
+                    self.apply_url,
+                    data=self._vc_create_changeset("vce-renamed", master_value),
+                    format="json", **self.auth,
+                )
+                self.assertIn(r.status_code, (200, 400), r.content)
+                after = {
+                    row.pk: (row.name, row.description, row.master_id, row.last_updated)
+                    for row in VirtualChassis.objects.filter(pk__in=before)
+                }
+                self.assertEqual(after, before, f"{label}: a pre-existing chassis was written")
+                self.assertEqual(
+                    VirtualChassis.objects.get(pk=vc.pk).name, "vce-owned",
+                    f"{label}: the chassis this master already owns was renamed",
+                )
 
 
 class CoercePkTests(SimpleTestCase):

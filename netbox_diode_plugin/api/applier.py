@@ -149,13 +149,23 @@ class _MasterAttach(Enum):
     """
     Why an adopted VC's named master is, or is not, a member of it.
 
-    Three outcomes, never two: the reasons NOT to attach are semantically
+    Four outcomes, never fewer: the reasons NOT to attach are semantically
     opposite and each caller branch is a different contract.
 
     - ATTACHED: the membership the payload implies now exists.
-    - IN_OTHER_CHASSIS: the device is real but sits in another chassis. A VC
-      payload is not authority to relocate it, so master is deferred to the
-      device's own payload and the adoption otherwise succeeds.
+    - IN_OTHER_CHASSIS: the device is real, is a plain MEMBER of another
+      chassis, and masters nothing. A VC payload is not authority to relocate
+      it, so master is deferred to the device's own payload and the adoption
+      otherwise succeeds.
+    - MASTERS_OTHER_CHASSIS: the device already MASTERS a different chassis.
+      VirtualChassis.master is a DB unique constraint, so that row -- not the
+      same-named masterless one this adoption was about to write -- is the row
+      the payload identifies. The adoption must decline outright: writing the
+      payload onto a masterless same-named decoy applies it to a row the
+      payload never referred to (its name matches, its identity is
+      contradicted) and leaves the real row untouched. Deferring master and
+      saving the rest, the IN_OTHER_CHASSIS treatment, is exactly that
+      mis-write, which is why this cannot share that branch.
     - DEVICE_MISSING: the pk resolves to no device at all (planned against a
       device deleted before this apply). Nothing later can converge a dangling
       reference, so it has to surface as a rejected apply, exactly as it did
@@ -165,6 +175,7 @@ class _MasterAttach(Enum):
 
     ATTACHED = "attached"
     IN_OTHER_CHASSIS = "in_other_chassis"
+    MASTERS_OTHER_CHASSIS = "masters_other_chassis"
     DEVICE_MISSING = "device_missing"
 
 
@@ -189,12 +200,13 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     real VC create (dcim.signals.assign_virtualchassis_master), and adoption
     stands in for that create, so both paths end in the same state.
 
-    master is dropped for exactly ONE reason: the device already belongs to a
+    master is dropped for exactly ONE reason: the device is a plain MEMBER of a
     DIFFERENT chassis. That case keeps the deviation visible instead of
     silently relocating a device on the strength of a VC payload; the device's
     own payload owns its membership and a later ingest of THAT does converge
-    it. A master pk with no device behind it is a different thing entirely and
-    must not share that handling -- see _MasterAttach.
+    it. A device that already MASTERS another chassis, and a master pk with no
+    device behind it, are different things entirely and must not share that
+    handling -- see _MasterAttach.
     """
     name = data.get("name")
     master = data.get("master")
@@ -223,6 +235,19 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
                 # Deliberate defer: the device's own payload owns its membership.
                 # Applying the rest of the payload is the intended outcome.
                 update_data.pop("master", None)
+            case _MasterAttach.MASTERS_OTHER_CHASSIS:
+                # Decline the adoption entirely. master is a DB unique key and
+                # another chassis already holds this one, so that row -- not
+                # this same-named masterless candidate -- is the row the
+                # payload identifies. Writing the payload here would apply it
+                # to a row the payload never referred to and leave the real one
+                # untouched, with nothing to converge it. Returning None hands
+                # the change back to the normal create path, whose
+                # unique-master recovery (_create_or_find_instance ->
+                # _find_existing_object_or_none) resolves it to that row. No
+                # save has happened yet, so the snapshot taken above is simply
+                # discarded with this instance.
+                return None
             case _MasterAttach.DEVICE_MISSING:
                 # Deliberately NOT the branch above. master stays in the update
                 # so the VC serializer rejects the dangling pk (NetBox's own
@@ -258,15 +283,27 @@ def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> _Ma
     masterless row), so it is planned as a CREATE and the adoption is purely an
     apply-time dedupe decision.
 
-    Refuses (IN_OTHER_CHASSIS) when the device already belongs to another
+    Refuses (IN_OTHER_CHASSIS) when the device is a plain member of another
     chassis. Membership is asserted by the DEVICE payload
     (Device.virtual_chassis); a VC payload naming a master is not authority to
-    pull a device out of a chassis it is already in, and when that device is the
-    other chassis's master NetBox refuses the move outright (Device.clean).
+    pull a device out of a chassis it is already in.
 
-    A pk that matches no device is reported separately (DEVICE_MISSING) rather
-    than as another refusal to attach: it is a dangling reference, not a
-    membership the payload may not assert. See _MasterAttach.
+    Reports separately (MASTERS_OTHER_CHASSIS) when the device already MASTERS
+    another chassis. That is not "a membership the payload may not assert" but
+    "the payload names a row that already exists": VirtualChassis.master is a
+    DB unique constraint, so the chassis holding this master IS the payload's
+    row, and NetBox refuses to move a master out of its chassis anyway
+    (Device.clean). The caller must decline the adoption rather than defer
+    master and write the same-named masterless candidate, which would apply the
+    payload to the wrong row -- see _MasterAttach.
+
+    A pk that matches no device is reported separately again (DEVICE_MISSING):
+    it is a dangling reference, not a membership the payload may not assert.
+    The order of the three checks is therefore missing-device, then
+    masters-elsewhere, then member-elsewhere: the unique-master collision is
+    decided from the VirtualChassis table, not from Device.virtual_chassis_id,
+    so it is caught even for the (anomalous) row whose master is not one of its
+    own members.
 
     The position is provisional: Device.clean requires a member to have one and
     the payload carries none, so this mirrors the position NetBox picks when it
@@ -277,6 +314,11 @@ def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> _Ma
     device = device_model.objects.filter(pk=master_pk).first()
     if device is None:
         return _MasterAttach.DEVICE_MISSING
+    virtualchassis_model = get_object_type_model("dcim.virtualchassis")
+    if virtualchassis_model.objects.filter(master_id=master_pk).exclude(
+        pk=virtual_chassis.pk
+    ).exists():
+        return _MasterAttach.MASTERS_OTHER_CHASSIS
     if device.virtual_chassis_id is not None:
         return _MasterAttach.IN_OTHER_CHASSIS
     device_serializer_class = get_serializer_for_model(device_model)
@@ -421,8 +463,13 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         # matcher._REQUIRES_PRE_SAVE_MATCH): concurrent planners would
         # otherwise each emit CREATE for the same logical row and both
         # inserts would succeed without IntegrityError to fall back on.
+        # The payload is passed because for some of those types only part of
+        # the payload space may take this route -- find-first is an UPDATE of
+        # an existing row, and dcim.virtualchassis restricts it to masterless
+        # payloads so a CREATE can never rewrite a chassis it did not name
+        # (matcher._virtualchassis_pre_save_match_applies).
         instance = None
-        if _is_auto_created_component(change.object_type) or requires_pre_save_match(change.object_type):
+        if _is_auto_created_component(change.object_type) or requires_pre_save_match(change.object_type, data):
             instance = _try_find_and_update_existing_instance(data, change.object_type, serializer_class, request)
 
         if not instance and (adopt := _CREATE_ADOPTERS.get(change.object_type)):
@@ -444,7 +491,35 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             serializer.save()
             invalidate_find_obj_entry(change.object_type, instance.id)
         # create and update in a same change set
-        elif change.ref_id and (instance := created[change.ref_id]):
+        elif change.ref_id and (created_instance := created[change.ref_id]):
+            # Re-read the row instead of updating the in-memory instance the
+            # CREATE returned earlier in this changeset. Between the two,
+            # NetBox's own signals write to that row directly -- the natural
+            # VirtualChassis shape (create device R, create chassis mastered by
+            # R, update device R with its position) has
+            # dcim.signals.assign_virtualchassis_master set the device's
+            # virtual_chassis_id by a plain save on a DIFFERENT instance -- so
+            # the object here is stale by the time it is saved.
+            #
+            # Stale is not merely "writes an old value back": for any field a
+            # utilities.counters CounterCacheField tracks it corrupts a counter.
+            # utilities.counters.post_save_receiver decides from
+            # TrackingModelMixin's tracker, which records the field's value as
+            # of THIS instance's load. On the stale object virtual_chassis_id
+            # reads None, so assigning the chassis looks like a first
+            # assignment and the receiver increments VirtualChassis.member_count
+            # a SECOND time for a membership already counted -- leaving
+            # member_count permanently one above the real member count, with no
+            # later plan able to notice, because member_count is not a field
+            # ingest ever diffs.
+            #
+            # refresh_from_db() would NOT fix it: it assigns through
+            # TrackingModelMixin.__setattr__, so the None -> chassis transition
+            # it performs is itself recorded in the tracker and the receiver
+            # still double-counts. A row loaded fresh has an empty tracker,
+            # which is also exactly what the object_id branch above operates on.
+            instance = model_class.objects.get(pk=created_instance.pk)
+            snapshot_for_apply(instance)
             serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             serializer.save()
