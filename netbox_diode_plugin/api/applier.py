@@ -560,6 +560,38 @@ def _carry_forward_relation_cache(stale, fresh) -> None:
             field.set_cached_value(fresh, cached)
 
 
+def _instance_for_deferred_update(created_instance, model_class):
+    """
+    The row a ref_id-only UPDATE should be applied to.
+
+    Normally that is a FRESH READ of the created row: see _apply_change's
+    ref_id branch for why the in-memory instance is stale by this point.
+
+    The re-read is a PK lookup, though, and a pk only identifies a row WITHIN a
+    type. A hand-built changeset may point a ref_id-only UPDATE at a CREATE of
+    a DIFFERENT object_type, and then created[ref_id].pk is a pk from the other
+    type's sequence: re-reading it as THIS type lands on whatever unrelated row
+    happens to carry that number, and the payload is written onto that
+    bystander. Measured -- [create dcim.virtualchassis ref "1", update
+    dcim.site ref "1" {description X}] with a Site planted at the pk the new
+    chassis takes wrote X onto that Site, where the parent commit wrote it onto
+    the chassis the ref actually names.
+
+    Nothing plannable reaches the mismatch: differ.diff_to_change takes ref_id
+    from the entity node's own id, so a create and its deferred update are one
+    node and therefore one type. Declining the re-read there is not an attempt
+    to make a malformed changeset meaningful -- it keeps that case
+    byte-identical to the parent commit, so the re-read stays confined to the
+    staleness it was added for, which only exists for the type that was
+    created.
+    """
+    if not isinstance(created_instance, model_class):
+        return created_instance
+    instance = model_class.objects.get(pk=created_instance.pk)
+    _carry_forward_relation_cache(created_instance, instance)
+    return instance
+
+
 def _find_existing_object_or_none(data: dict, object_type: str):
     """
     find_existing_object, but a malformed reference means "no match".
@@ -702,8 +734,9 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             # Whether these deferred updates ought to carry a prechange is a
             # real question and a separate one from this branch's staleness, so
             # the changelog behaviour is left exactly as it was.
-            instance = model_class.objects.get(pk=created_instance.pk)
-            _carry_forward_relation_cache(created_instance, instance)
+            # Re-read only when the ref resolves to this change's own type;
+            # _instance_for_deferred_update has the cross-type case.
+            instance = _instance_for_deferred_update(created_instance, model_class)
             serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             serializer.save()
