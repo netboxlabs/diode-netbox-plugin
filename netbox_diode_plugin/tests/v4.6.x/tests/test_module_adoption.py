@@ -3,6 +3,7 @@ import uuid
 from types import SimpleNamespace
 from unittest import mock
 
+from core.models import ObjectChange
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Module, ModuleBay, ModuleType, Site
 from utilities.testing import APITestCase
 
@@ -275,6 +276,40 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         module.refresh_from_db()
         self.assertEqual(module.module_bay_id, bay.pk)
         self.assertEqual(Module.objects.filter(device=self.dev).count(), 1)
+
+    def test_deferred_reverse_write_records_an_update_with_no_prechange(self):
+        """
+        Pin the changelog shape of the deferred (ref_id) UPDATE branch.
+
+        This shape is the cleanest probe of that branch there is: the deferred
+        write persists nothing at all (installed_module is a reverse
+        one-to-one, so asserting it only mutates the related object in memory),
+        which makes the row's presence in the changelog depend entirely on
+        whether the branch takes a prechange snapshot. NetBox's
+        ObjectChange.has_changes drops an update whose prechange equals its
+        postchange, so populating prechange_data here removes the 'update' row
+        outright -- measured: ['create', 'update'] becomes ['create'].
+
+        The branch re-reads its row (to keep a counter honest, see
+        test_virtualchassis_ingest) and a re-read makes a snapshot cheap to
+        take, which is exactly why this needs pinning in whichever direction it
+        ships: a changelog behaviour change must be a decision, not a side
+        effect of an unrelated fix. Shipped direction: unchanged from before
+        the re-read -- both rows recorded, neither carrying a prechange.
+        """
+        self._apply(self._diff(self._installed_module_entity()))
+
+        bay = ModuleBay.objects.get(device=self.dev, name="im-bay1")
+        rows = list(ObjectChange.objects.filter(
+            changed_object_type__app_label="dcim",
+            changed_object_type__model="modulebay",
+            changed_object_id=bay.pk,
+        ).order_by("pk"))
+
+        self.assertEqual([r.action for r in rows], ["create", "update"], rows)
+        for row in rows:
+            self.assertIsNone(row.prechange_data, row)
+            self.assertIsNotNone(row.postchange_data, row)
 
     def test_parent_module_field_still_reports_the_recursion_error(self):
         """

@@ -200,10 +200,15 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self._assert_noop_rediff(payload)
         self.assertEqual(VirtualChassis.objects.get(pk=vc.pk).member_count, 1)
 
-        # Re-reading must not cost the deferred update its changelog prechange
-        # snapshot, and the snapshot must be of the ROW: the chassis assignment
-        # NetBox's signal already made is what separates a fresh read from the
-        # stale instance, which still had virtual_chassis unset.
+        # Re-reading the row must not change what the deferred update records.
+        # A fresh read makes a prechange snapshot cheap to take, and taking one
+        # would alter the changelog in two ways at once -- adding
+        # prechange_data, and (through NetBox's ObjectChange.has_changes gate)
+        # deciding whether the row is recorded at all. Neither belongs in a
+        # counter fix, so the shipped behaviour is the one from before the
+        # re-read: an 'update' row, with no prechange.
+        # test_module_adoption pins the same branch on the shape where that
+        # gate actually drops the row.
         dev = Device.objects.get(name="vce-sw1")
         dev_change = ObjectChange.objects.filter(
             changed_object_type__app_label="dcim",
@@ -212,10 +217,10 @@ class VirtualChassisIngestE2ETests(APITestCase):
         ).order_by("pk").last()
         self.assertIsNotNone(dev_change, "the deferred update recorded no change at all")
         self.assertEqual(dev_change.action, "update", dev_change)
-        self.assertIsNotNone(dev_change.prechange_data, dev_change)
+        self.assertIsNone(dev_change.prechange_data, dev_change)
         self.assertEqual(
-            dev_change.prechange_data.get("virtual_chassis"), vc.pk,
-            dev_change.prechange_data,
+            dev_change.postchange_data.get("virtual_chassis"), vc.pk,
+            dev_change.postchange_data,
         )
 
     def test_custom_position_on_preexisting_master_device(self):

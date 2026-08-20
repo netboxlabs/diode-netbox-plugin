@@ -476,6 +476,49 @@ def _cable_partition_matches(instance, data: dict) -> bool:
     return (sub_a == exist_a and sub_b == exist_b) or (sub_a == exist_b and sub_b == exist_a)
 
 
+def _carry_forward_relation_cache(stale, fresh) -> None:
+    """
+    Re-attach to a re-read row the related objects the stale instance had loaded.
+
+    The deferred-update branch below re-reads its row so the counter machinery
+    sees a truthful before-state. A freshly loaded instance starts with an
+    empty _state.fields_cache, so every forward FK the serializer's validators
+    or the model's own save() touch is fetched again -- for dcim.interface that
+    is a full dcim_device row plus, through Interface.save()'s _site
+    denormalisation, a full dcim_site row. That is two queries per deferred
+    update charged to every mac-bearing interface, on a path shared with nine
+    other circular-reference shapes (transformer._IS_CIRCULAR_REFERENCE), for a
+    counter fix that needs none of it.
+
+    The row's OWN column values must come from the database. The rows its FKs
+    point AT need not, and did not before this branch re-read anything: the
+    CREATE's instance had them attached and the update read them from there.
+    Carrying them over restores exactly that. Only _state.fields_cache is
+    written, never a model attribute, so the fresh instance's change tracker --
+    the whole point of re-reading -- stays empty.
+
+    What the guard covers, stated precisely because it is narrower than it
+    looks. `cached.pk == getattr(fresh, field.attname)` compares the FK COLUMN,
+    so a column the database has since repointed is never paired with the
+    object it used to point to. It does NOT notice the target ROW's own
+    contents changing after the stale instance loaded it, and that exposure is
+    real rather than theoretical: NetBox's ModularComponentModel.save()
+    (dcim/models/device_components.py:133) does
+    `self._site = self.device.site`, so a carried-forward device whose site
+    moved underneath would persist a stale _site onto the component. No
+    end-to-end trigger for it could be constructed -- inside a changeset the
+    device's own update is planned BEFORE the component create -- so the
+    optimisation stands, but it is not a guarantee that a carried object is
+    fresh.
+    """
+    for field in fresh._meta.concrete_fields:
+        if not field.is_relation or not field.is_cached(stale):
+            continue
+        cached = field.get_cached_value(stale)
+        if cached is not None and cached.pk == getattr(fresh, field.attname):
+            field.set_cached_value(fresh, cached)
+
+
 def _find_existing_object_or_none(data: dict, object_type: str):
     """
     find_existing_object, but a malformed reference means "no match".
@@ -589,10 +632,23 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             # refresh_from_db() would NOT fix it: it assigns through
             # TrackingModelMixin.__setattr__, so the None -> chassis transition
             # it performs is itself recorded in the tracker and the receiver
-            # still double-counts. A row loaded fresh has an empty tracker,
-            # which is also exactly what the object_id branch above operates on.
+            # still double-counts. It would not even be cheaper -- it clears
+            # every cached relation it finds, exactly as a fresh load has none.
+            # A row loaded fresh has an empty tracker, which is also exactly
+            # what the object_id branch above operates on.
+            #
+            # No prechange snapshot is taken here, and that is a decision
+            # rather than an omission. snapshot_for_apply does not only add
+            # prechange_data: because NetBox's ObjectChange.has_changes drops
+            # an update whose prechange equals its postchange, populating it
+            # also decides whether the row is recorded AT ALL -- measured on
+            # the modulebay/installed_module shape, whose deferred write
+            # persists nothing, where ['create', 'update'] became ['create'].
+            # Whether these deferred updates ought to carry a prechange is a
+            # real question and a separate one from this branch's staleness, so
+            # the changelog behaviour is left exactly as it was.
             instance = model_class.objects.get(pk=created_instance.pk)
-            snapshot_for_apply(instance)
+            _carry_forward_relation_cache(created_instance, instance)
             serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
             serializer.is_valid(raise_exception=True)
             serializer.save()
