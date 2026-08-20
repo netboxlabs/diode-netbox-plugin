@@ -107,7 +107,9 @@ def _try_pre_save_match(data: dict, object_type: str, serializer_class, request)
     rather than a flag threaded through either of them:
 
     - BIND-ONLY, for matcher._PRE_SAVE_MATCH_BIND_ONLY: hand back the row and
-      write nothing to it. See _try_bind_existing_instance.
+      write nothing to it. The payload is still validated against that row --
+      binding declines the write, not the error. See
+      _try_bind_existing_instance.
     - FIND-AND-UPDATE: apply the CREATE's payload to the matched row. This is
       what the auto-created-component path is for -- a component NetBox
       instantiated from a device or module template holds template defaults and
@@ -116,11 +118,11 @@ def _try_pre_save_match(data: dict, object_type: str, serializer_class, request)
       always done. See _try_find_and_update_existing_instance.
     """
     if pre_save_match_binds_only(object_type):
-        return _try_bind_existing_instance(data, object_type)
+        return _try_bind_existing_instance(data, object_type, serializer_class, request)
     return _try_find_and_update_existing_instance(data, object_type, serializer_class, request)
 
 
-def _try_bind_existing_instance(data: dict, object_type: str):
+def _try_bind_existing_instance(data: dict, object_type: str, serializer_class, request):
     """
     Resolve a CREATE onto an existing row WITHOUT applying its payload.
 
@@ -140,16 +142,55 @@ def _try_bind_existing_instance(data: dict, object_type: str):
     duplicate row this whole path exists to avoid, and leave it behind forever
     (nothing deletes it and no diff mentions it).
 
-    No snapshot, no serializer, no save, so no changelog entry: nothing
-    happened to the row. invalidate_find_obj_entry is likewise not called --
-    the cached match is still accurate, precisely because nothing was written.
+    The payload is still VALIDATED against the matched row, and the save is
+    then discarded. Dropping the serializer along with the save was a
+    regression against the parent commit rather than a simplification:
+    is_valid(raise_exception=True) is the only thing that reports a bad
+    payload, so an invalid masterless CREATE that matched an existing row
+    answered 200 with errors null while storing nothing -- measured with a
+    400-character description against a max_length=200 column, and again with
+    an over-length domain, where the parent commit answered 400. Two things
+    follow from that misreport: the reconciler is told a change applied when
+    nothing was stored, and the change no longer aborts its own changeset, so
+    companion changes the parent rolled back are left half-landed. Building the
+    serializer exactly as _try_find_and_update_existing_instance does (the
+    matched instance, this data, partial=True) and never calling save()
+    restores the parent's 400 verbatim at no cost to the no-write guarantee:
+    validation reads, it does not write.
+
+    No snapshot and no save, so no changelog entry and no last_updated churn:
+    nothing happened to the row. invalidate_find_obj_entry is likewise not
+    called -- the cached match is still accurate, precisely because nothing was
+    written.
+
+    That guarantee covers the CREATE path, and only it. It is not a promise
+    that no changeset can write this row. _apply_change's UPDATE branch that
+    resolves through created[ref_id] takes an ordinary serializer.save(), so a
+    hand-built changeset pairing a create with a ref_id-only update (no
+    object_id) writes the update's payload onto the row this bind chose. The
+    parent commit does the same; origin/develop does not, because it inserts a
+    duplicate and writes to that instead -- so this is a divergence from
+    develop in the destructive direction and it is stated rather than implied.
+    Nothing plannable reaches it: dcim.virtualchassis is absent from
+    transformer._IS_CIRCULAR_REFERENCE, so generate-diff never emits a VC
+    update without an object_id (0 of 960 planned changes across three matrix
+    runs). test_bind_only_types_are_not_circular_references pins exactly that,
+    so adding the type there cannot turn this gap reachable in silence.
 
     The lookup is _find_existing_object_or_none rather than a bare
     find_existing_object for the same reason its other callers use it: a
     malformed reference in the payload must mean "no match", not a ValueError
     out of query construction that apply_changeset turns into a 500.
     """
-    return _find_existing_object_or_none(data, object_type)
+    instance = _find_existing_object_or_none(data, object_type)
+    if instance is None:
+        return None
+    # Validate against the matched row, then discard the result. No save(), so
+    # no write, no changelog row, no last_updated bump -- only the payload
+    # errors the parent commit reported.
+    serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
+    serializer.is_valid(raise_exception=True)
+    return instance
 
 
 def _try_find_and_update_existing_instance(data: dict, object_type: str, serializer_class, request):
@@ -627,7 +668,10 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             # a SECOND time for a membership already counted -- leaving
             # member_count permanently one above the real member count, with no
             # later plan able to notice, because member_count is not a field
-            # ingest ever diffs.
+            # ingest ever diffs. It fired on the PR's headline natural shape and
+            # on the plan-ahead race path alike -- 3 for a two-member chassis,
+            # in both apply orders -- so the re-read fixes a drift that two
+            # independent shapes could produce, not one.
             #
             # refresh_from_db() would NOT fix it: it assigns through
             # TrackingModelMixin.__setattr__, so the None -> chassis transition
@@ -636,6 +680,17 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             # every cached relation it finds, exactly as a fresh load has none.
             # A row loaded fresh has an empty tracker, which is also exactly
             # what the object_id branch above operates on.
+            #
+            # This branch is an ordinary serializer.save(), and it is NOT
+            # covered by the bind-only no-write guarantee
+            # (_try_bind_existing_instance), which is a property of the CREATE
+            # path alone. A hand-built changeset that pairs a create with a
+            # ref_id-only update of the same type writes the update's payload
+            # onto whatever row the create bound -- including a row the create
+            # itself refused to touch. Unreachable from generate-diff today,
+            # and test_bind_only_types_are_not_circular_references keeps it
+            # that way by failing the moment a bind-only type is added to
+            # transformer._IS_CIRCULAR_REFERENCE.
             #
             # No prechange snapshot is taken here, and that is a decision
             # rather than an omission. snapshot_for_apply does not only add

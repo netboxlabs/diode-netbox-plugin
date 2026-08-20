@@ -10,6 +10,8 @@ from utilities.testing import APITestCase
 
 from netbox_diode_plugin.api.applier import _coerce_pk
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
+from netbox_diode_plugin.api.matcher import _PRE_SAVE_MATCH_BIND_ONLY
+from netbox_diode_plugin.api.transformer import _IS_CIRCULAR_REFERENCE
 from netbox_diode_plugin.plugin_config import get_diode_user
 
 
@@ -1003,9 +1005,12 @@ class VirtualChassisIngestE2ETests(APITestCase):
         Both masterless wire forms are covered because a client changeset
         reaches the applier without the transformer, so master may be absent or
         explicitly null; the payload gate treats them alike and so must this.
-        The explicit-null form is the more destructive -- it would not merely
-        overwrite fields but write master_id NULL onto a mastered row while its
-        members stayed put.
+        The explicit-null form is the more destructive, and it is where this
+        change FIXES a bug rather than merely declining to introduce one: an
+        explicit master: null on a matched row set that row's master_id to NULL
+        while every member stayed attached -- measured on the parent commit AND
+        on the first draft of this branch, which is why the "master_null" arms
+        below are assertions about a repair, not a regression guard.
 
         The row-count assertion is the other half, and it is why this refuses
         the WRITE rather than the MATCH: exactly one row, so no duplicate is
@@ -1287,6 +1292,197 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
         # ...and the reference did not smuggle the payload in either
         self.assertEqual(VirtualChassis.objects.get(pk=vc.pk).description, "")
+
+
+    # ---- bind, but still report the payload's errors ----------------------
+
+    #: Over-length values for two VirtualChassis CharFields. Any serializer at
+    #: all rejects these, which is the point: the question under test is
+    #: whether a serializer runs, not which error it produces.
+    TOO_LONG = (("description", "d" * 400), ("domain", "x" * 300))
+
+    def test_an_invalid_masterless_create_on_a_matched_row_is_still_a_400(self):
+        """
+        Binding declines the WRITE. It must not also swallow the payload error.
+
+        _try_bind_existing_instance hands the matched row back without saving,
+        and the first draft of it ran no serializer at all -- so
+        is_valid(raise_exception=True), the only thing that reports a bad
+        payload, never fired. An INVALID masterless CREATE that matched an
+        existing row therefore answered 200 with errors null while storing
+        nothing, where the parent commit answered 400. Two harms, both real:
+        the reconciler is told a change applied when nothing was stored, and
+        the change no longer aborts its own changeset, so companion changes the
+        parent rolled back are left half-landed. It is not permanent silence --
+        the next generate-diff plans an UPDATE carrying the same invalid value
+        and that 400s -- but it is a misreport, and a regression against base.
+
+        The fix validates against the matched instance and discards the save,
+        so both halves have to hold at once: the 400 comes back (here) and the
+        row is still untouched (asserted here too, and across the full matrix
+        in test_a_masterless_create_never_writes_the_row_it_matched).
+
+        Every row kind and both masterless wire forms are covered, because the
+        bind is reached identically for all six and a fix that only restored
+        the error for one of them would be worse than useless.
+        """
+        for field, value in self.TOO_LONG:
+            for kind in self.ROW_KINDS:
+                for label, extra in (("master_absent", {}), ("master_null", {"master": None})):
+                    with self.subTest(field=field, row=kind, master=label):
+                        name = f"vce-inv-{field[:3]}-{kind.replace('_', '-')}-{label.replace('_', '-')}"
+                        vc = self._seed_row_kind(kind, name)
+                        before = self._row_fields([vc.pk])
+                        data = {"name": name, field: value}
+                        data.update(extra)
+
+                        r = self.client.post(
+                            self.apply_url,
+                            data={
+                                "id": str(uuid.uuid4()),
+                                "changes": [{
+                                    "change_id": str(uuid.uuid4()),
+                                    "change_type": "create",
+                                    "object_version": None,
+                                    "object_type": "dcim.virtualchassis",
+                                    "object_id": None,
+                                    "ref_id": "1",
+                                    "data": data,
+                                }],
+                            },
+                            format="json", **self.auth,
+                        )
+
+                        self.assertEqual(r.status_code, 400, r.content)
+                        errors = r.json()["errors"]
+                        self.assertIn("dcim.virtualchassis", errors, errors)
+                        self.assertIn(field, errors["dcim.virtualchassis"], errors)
+
+                        # ...and rejecting it wrote nothing either.
+                        self.assertEqual(self._row_fields([vc.pk]), before,
+                                         f"{field}/{kind}/{label}: the rejected create wrote the row")
+                        self.assertEqual(
+                            VirtualChassis.objects.filter(name=name).count(), 1,
+                            f"{field}/{kind}/{label}: the rejected create inserted a row",
+                        )
+                        self._assert_member_count_is_honest(vc)
+
+    def test_a_valid_masterless_create_on_a_matched_row_is_200_and_writes_nothing(self):
+        """
+        The other half of the same seam, stated next to it.
+
+        Restoring the serializer must not turn a legal payload into an error,
+        and running the serializer must not turn a bind into a write. The
+        values here are well inside both columns' limits and are DIFFERENT from
+        the seeded row's, so a save of any kind would show up in _row_fields --
+        last_updated included, which is what separates "untouched" from "saved
+        with values identical to its own".
+        """
+        for kind in self.ROW_KINDS:
+            for label, extra in (("master_absent", {}), ("master_null", {"master": None})):
+                with self.subTest(row=kind, master=label):
+                    name = f"vce-val-{kind.replace('_', '-')}-{label.replace('_', '-')}"
+                    vc = self._seed_row_kind(kind, name)
+                    before = self._row_fields([vc.pk])
+                    data = {"name": name, "description": "FROM-A", "domain": "dom-a"}
+                    data.update(extra)
+
+                    r = self.client.post(
+                        self.apply_url,
+                        data={
+                            "id": str(uuid.uuid4()),
+                            "changes": [{
+                                "change_id": str(uuid.uuid4()),
+                                "change_type": "create",
+                                "object_version": None,
+                                "object_type": "dcim.virtualchassis",
+                                "object_id": None,
+                                "ref_id": "1",
+                                "data": data,
+                            }],
+                        },
+                        format="json", **self.auth,
+                    )
+
+                    self.assertEqual(r.status_code, 200, r.content)
+                    self.assertIsNone(r.json().get("errors"))
+                    self.assertEqual(self._row_fields([vc.pk]), before,
+                                     f"{kind}/{label}: validating the payload also saved it")
+                    self.assertEqual(VirtualChassis.objects.filter(name=name).count(), 1,
+                                     f"{kind}/{label}: the CREATE left a duplicate row behind")
+                    self._assert_member_count_is_honest(vc)
+
+    def test_an_invalid_masterless_create_with_no_matching_row_is_still_a_400(self):
+        """
+        The control: with nothing to bind, the error was never in question.
+
+        This is the arm that localises the bug to the bind. It 400s on the
+        parent commit, on the first draft of this branch, and here, because it
+        goes through _create_or_find_instance's own serializer. If it ever
+        diverged from the matched-row arms above, the difference would be
+        somewhere other than the seam this fix touches.
+        """
+        for field, value in self.TOO_LONG:
+            with self.subTest(field=field):
+                name = f"vce-nomatch-{field[:3]}"
+                r = self.client.post(
+                    self.apply_url,
+                    data={
+                        "id": str(uuid.uuid4()),
+                        "changes": [{
+                            "change_id": str(uuid.uuid4()),
+                            "change_type": "create",
+                            "object_version": None,
+                            "object_type": "dcim.virtualchassis",
+                            "object_id": None,
+                            "ref_id": "1",
+                            "data": {"name": name, field: value},
+                        }],
+                    },
+                    format="json", **self.auth,
+                )
+                self.assertEqual(r.status_code, 400, r.content)
+                self.assertIn(field, r.json()["errors"]["dcim.virtualchassis"], r.content)
+                self.assertFalse(VirtualChassis.objects.filter(name=name).exists())
+
+
+class BindOnlyReachabilityTests(SimpleTestCase):
+    """
+    The no-write guarantee covers the CREATE path. This pins its edge.
+
+    _try_bind_existing_instance writes nothing to the row it binds. The UPDATE
+    branch of _apply_change that resolves through created[ref_id] is an
+    ordinary serializer.save(), so a changeset pairing a create with a
+    ref_id-only update (object_id null) writes that update's payload onto the
+    bound row. The parent commit does the same; origin/develop does not,
+    because it inserts a duplicate and writes to that instead -- so it is a
+    divergence from develop in the destructive direction, and the only reason
+    it is a documentation item rather than a defect is that nothing plannable
+    emits that shape.
+
+    That reachability rests on ONE fact: transformer._IS_CIRCULAR_REFERENCE is
+    what makes generate-diff split a create from a ref_id-only update, and no
+    bind-only type is in it (measured: 0 of 960 planned changes across three
+    matrix runs was a VC update with no object_id). Adding one there would make
+    the gap reachable from ordinary ingest, silently.
+
+    A runtime guard was considered and rejected: silently skipping a write a
+    client changeset explicitly asked for is a new, undocumented behaviour, and
+    it would mask the intent instead of surfacing it. A seam test costs nothing
+    at runtime and fails loudly the moment the assumption stops holding, which
+    is the behaviour that is actually wanted here.
+    """
+
+    def test_bind_only_types_are_not_circular_references(self):
+        """No bind-only type may be split into a create plus a ref_id update."""
+        overlap = _PRE_SAVE_MATCH_BIND_ONLY & set(_IS_CIRCULAR_REFERENCE)
+        self.assertEqual(
+            overlap, set(),
+            "A bind-only type gained a deferred reference. _apply_change's "
+            "ref_id UPDATE branch saves, so generate-diff can now write the "
+            "row a CREATE only bound. Decide that deliberately before "
+            "relaxing this test.",
+        )
 
 
 class CoercePkTests(SimpleTestCase):

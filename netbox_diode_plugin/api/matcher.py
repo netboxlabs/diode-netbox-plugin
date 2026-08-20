@@ -111,7 +111,8 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 #     must not, and _PRE_SAVE_MATCH_PAYLOAD_GATES for how it is excluded.
 #     That same absent uniqueness means a row matched by name may be a
 #     different stack that merely shares it, so this type's match BINDS the row
-#     and writes nothing to it -- see _PRE_SAVE_MATCH_BIND_ONLY.
+#     and writes nothing to it, while still validating the payload against it
+#     -- see _PRE_SAVE_MATCH_BIND_ONLY.
 #   - ipam.prefix: NetBox has no unique constraint on prefix, nor on
 #     (prefix, vrf) - Prefix.Meta carries only ordering and indexes.
 #     Duplicate detection lives solely in Prefix.clean(), behind
@@ -140,7 +141,12 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 # This closes the common race (concurrent plan, sequential apply).
 # It does not close TOCTOU under truly concurrent apply across
 # replicas - that would require a DB unique constraint or a
-# coordinating lock.
+# coordinating lock. That bound is measured, not assumed: with a
+# threading.Barrier released inside find_existing_object so both
+# applies pass the lookup before either saves, dcim.virtualchassis
+# ends at TWO rows with the pre-save match and two rows without it.
+# Read any claim about this routing as covering concurrent PLAN plus
+# sequential APPLY, and nothing wider.
 _REQUIRES_PRE_SAVE_MATCH = frozenset({
     "dcim.cable",
     "dcim.macaddress",
@@ -187,18 +193,28 @@ def _virtualchassis_pre_save_match_applies(data: dict) -> bool:
     is a legitimately different device and VirtualChassis.name is not unique.
     It is stated here so the gate is not read as closing more than it does.
 
-    A master-bearing CREATE is deliberately EXCLUDED, and the exclusion is
-    load-bearing rather than merely tidy. The pre-save match is an UPDATE path:
-    it applies the CREATE's payload to whatever find_existing_object returns.
-    With master present the matcher that answers is the auto-derived
-    unique_master one (VirtualChassisNameMatcher gates itself off -- see its
-    docstring), so a CREATE of "the chassis named NEW, mastered by device D"
-    would be applied to whichever chassis D already masters, RENAMING an
-    existing, unrelated chassis on a create. Excluding master-bearing payloads
-    also puts the payload's master value out of reach of an ORM pk filter,
-    where a bool or a non-integral float coerces silently (True -> pk 1,
-    7.5 -> pk 7) and would select an unrelated row; on this path the
-    mis-coercion becomes unreachable rather than guarded-and-hoped-for.
+    A master-bearing CREATE is deliberately EXCLUDED, and it matters which
+    hazard that still buys and which one it no longer does. With master present
+    the matcher that answers is the auto-derived unique_master one
+    (VirtualChassisNameMatcher gates itself off -- see its docstring), so a
+    CREATE of "the chassis named NEW, mastered by device D" resolves onto
+    whichever chassis D already masters. When the pre-save match still applied
+    the payload, that RENAMED an existing, unrelated chassis on a create; with
+    bind-only in force (_PRE_SAVE_MATCH_BIND_ONLY) it would instead silently
+    bind the CREATE to that other chassis, so the chassis the payload named is
+    never created and every later reference in the changeset resolves to the
+    wrong row. Both are worth excluding; only the first is a write.
+
+    The second reason to exclude them is a SEAM PIN, and is best not read as
+    more: it keeps master out of an ORM pk filter, where a bool or a
+    non-integral float coerces silently (True -> pk 1, 7.5 -> pk 7) and would
+    select an unrelated row. Since bind-only landed this gate changes no row's
+    state, so mutating it away fails only this gate's own seam test -- it is
+    not a behavioural guarantee that the mis-coercion is "unreachable". The
+    place a master value is genuinely coerced is the ADOPTION path,
+    applier._try_adopt_masterless_virtualchassis, which guards it explicitly
+    with applier._coerce_pk. That distinction has been got wrong once already;
+    keep it straight here.
 
     Nothing is lost by excluding them. VirtualChassis.master IS a DB unique
     constraint, so a duplicate master-bearing insert raises IntegrityError and
@@ -237,9 +253,33 @@ _PRE_SAVE_MATCH_PAYLOAD_GATES = {
 # measurably destructive: a stale plan's description and domain landed on
 # another site's live chassis, no error, and no later diff mentioning it -- two
 # sources then flap those fields indefinitely. Binding without writing keeps
-# the dedupe the plan-ahead race needs and gives up nothing else: the payload's
-# own fields converge on the next pass, where the matcher finds the row and the
-# plan is an UPDATE addressing it by id, which is the path that may write.
+# the dedupe the plan-ahead race needs.
+#
+# It is NOT free, and an earlier draft of this comment claiming it "gives up
+# nothing else" was wrong. Binding costs ONE INGEST ROUND on the row that is
+# genuinely correct, not only on a foreign one. A member-first ingest leaves a
+# bare chassis row; when the chassis's own entity is then ingested ONCE, from a
+# plan built before that row existed, the apply returns 200 and binds -- and
+# description, domain, comments, tags and custom_fields stay unset until the
+# next pass, where the matcher finds the row and the plan is an UPDATE
+# addressing it by id, which is the path that may write. The parent commit
+# landed all five on that same apply. For a steady-state producer that is one
+# round of latency; for a one-shot backfill, or a push-on-change producer that
+# will not re-send, the data waits for the next full re-ingest. The trade is
+# still worth taking -- a wrong write into another source's live stack is
+# silent and unrepairable, a delayed write is neither -- but it is a trade.
+#
+# Why this set holds dcim.virtualchassis ALONE, when the no-uniqueness argument
+# above applies verbatim to the other eleven types in
+# _REQUIRES_PRE_SAVE_MATCH: because those were measured to behave the same way,
+# and to do so already. ipam.vlan, ipam.vrf, ipam.prefix and
+# virtualization.cluster each let a CREATE overwrite a same-keyed row's own
+# fields through the pre-save match, IDENTICALLY on the parent commit and on
+# origin/develop, so none of it is a regression this branch introduces, and
+# widening the set here would change behaviour for four more types well outside
+# a VirtualChassis ingest PR. dcim.virtualchassis is in this set because this
+# branch is what put VC CREATEs on the pre-save path at all -- not because VC
+# is uniquely exposed. Broadening it is filed separately.
 #
 # Read narrowly, because this does NOT make a same-named row safe from ingest
 # generally. Once the row exists the matcher finds it by name, so the next
@@ -249,6 +289,13 @@ _PRE_SAVE_MATCH_PAYLOAD_GATES = {
 # on origin/develop alike -- it is out of this seam's reach. What changes here
 # is narrower and worth having on its own: a CREATE no longer writes a row it
 # only guessed at, and no duplicate row is left behind when it declines.
+#
+# Binding declines the WRITE, not the payload's errors: the applier still
+# validates the CREATE against the matched row and discards the save, so an
+# invalid payload is still the 400 it was before this seam existed. And the
+# no-write property belongs to the CREATE path only -- see
+# applier._try_bind_existing_instance for the ref_id-update gap it does not
+# cover.
 _PRE_SAVE_MATCH_BIND_ONLY = frozenset({
     "dcim.virtualchassis",
 })
