@@ -866,17 +866,26 @@ class VirtualChassisIngestE2ETests(APITestCase):
         """
         A CREATE must not be able to rename or otherwise write an existing chassis.
 
-        The pre-save match (matcher._REQUIRES_PRE_SAVE_MATCH) is an UPDATE
-        path: it applies the CREATE's payload to whatever find_existing_object
-        returns. With master present the matcher that answers is the
-        auto-derived unique_master one, so routing a master-bearing CREATE
-        through it means "create the chassis named NEW, mastered by D" is
-        applied to whichever chassis D already masters -- an unrelated,
-        already-converged row, renamed by a create. Scoping the routing to
-        MASTERLESS payloads is what makes that unreachable, and it also puts
-        master beyond the reach of an ORM pk filter, where the malformed forms
-        below coerce silently rather than declining (True -> pk 1, 7.5 -> pk 7,
-        7.0 -> pk 7).
+        With master present the matcher that answers find_existing_object is
+        the auto-derived unique_master one, so a master-bearing CREATE routed
+        onto the pre-save path resolves "create the chassis named NEW, mastered
+        by D" onto whichever chassis D already masters -- an unrelated,
+        already-converged row.
+
+        Read the mechanism carefully, because it changed inside this series and
+        the earlier wording here was wrong. It is NOT the payload gate
+        (matcher._virtualchassis_pre_save_match_applies) that keeps this green
+        today: bind-only does (matcher._PRE_SAVE_MATCH_BIND_ONLY), because a
+        pre-save-matched dcim.virtualchassis CREATE no longer writes the row it
+        resolves onto at all. Removing the gate leaves this test -- and every
+        other test in this file -- passing; only the gate's own seam test,
+        test_route_is_scoped_to_masterless_payloads, fails. The gate still
+        earns its place as a seam pin: it keeps master out of an ORM pk filter,
+        where the malformed forms below coerce silently rather than declining
+        (True -> pk 1, 7.5 -> pk 7, 7.0 -> pk 7), and it stops a master-bearing
+        CREATE binding to the wrong row so that later references in the
+        changeset resolve to it. Neither of those is a WRITE, which is why
+        mutating the gate away does not fail this assertion.
 
         The invariant is asserted over every pre-existing row rather than over
         the outcome of the apply, because the outcome legitimately varies with
@@ -1453,12 +1462,17 @@ class BindOnlyReachabilityTests(SimpleTestCase):
     _try_bind_existing_instance writes nothing to the row it binds. The UPDATE
     branch of _apply_change that resolves through created[ref_id] is an
     ordinary serializer.save(), so a changeset pairing a create with a
-    ref_id-only update (object_id null) writes that update's payload onto the
-    bound row. The parent commit does the same; origin/develop does not,
-    because it inserts a duplicate and writes to that instead -- so it is a
-    divergence from develop in the destructive direction, and the only reason
-    it is a documentation item rather than a defect is that nothing plannable
-    emits that shape.
+    ref_id-only update of the SAME object_type (object_id null) writes that
+    update's payload onto the bound row. The parent commit does the same;
+    origin/develop does not, because it inserts a duplicate and writes to that
+    instead -- so it is a divergence from develop in the destructive direction,
+    and the only reason it is a documentation item rather than a defect is that
+    nothing plannable emits that shape.
+
+    The same-type scoping is load-bearing. A ref_id-only update of a DIFFERENT
+    object_type also matches the parent, but that is a property of
+    applier._instance_for_deferred_update rather than of this branch, and
+    DeferredUpdateRefTypeTests is what pins it.
 
     That reachability rests on ONE fact: transformer._IS_CIRCULAR_REFERENCE is
     what makes generate-diff split a create from a ref_id-only update, and no

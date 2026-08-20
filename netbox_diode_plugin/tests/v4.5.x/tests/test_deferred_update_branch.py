@@ -37,13 +37,17 @@ class CarryForwardRelationCacheTests(TestCase):
     again.
 
     That cost lands on far more than VirtualChassis. transformer's
-    _IS_CIRCULAR_REFERENCE routes ten shapes through this branch, including
-    dcim.interface.primary_mac_address -- every mac-bearing interface in an
-    ingest. Measured on a 48-interface /bulk-plan-apply/: the re-read alone was
-    +7 queries per interface, of which four were an unrelated changelog
-    snapshot and two were full-row re-fetches of dcim_device and dcim_site that
-    the CREATE's instance already had in hand. Carrying the cache forward is
-    what brings the branch to the +1 the re-read itself costs.
+    _IS_CIRCULAR_REFERENCE routes thirteen (type, field) shapes over seven
+    types through this branch, including dcim.interface.primary_mac_address --
+    every mac-bearing interface in an ingest. Measured on a 48-interface
+    /bulk-plan-apply/, per deferred update, and stated as three separate
+    numbers because the first draft of this branch conflated them: the re-read
+    ITSELF costs +3 (2758 -> 2902 over 48, 79 -> 82 on one); the changelog
+    snapshot that first draft also took cost a further +4 and has since been
+    dropped; and carrying the relation cache forward gives back 2 of the 3
+    (2902 -> 2806, 82 -> 80), those two being full-row re-fetches of dcim_device
+    and dcim_site the CREATE's instance already had in hand. +7 was the whole
+    first draft, not the re-read. What ships is +1 per deferred update.
     """
 
     def setUp(self):
@@ -110,8 +114,9 @@ class CarryForwardRelationCacheTests(TestCase):
         This is the one hazard the guard does cover, and the guard is a COLUMN
         comparison: it cannot notice the target row's own contents changing
         under the stale instance. See _carry_forward_relation_cache for the
-        known consumer of that (ModularComponentModel.save's _site
-        denormalisation).
+        known consumer of that -- ComponentModel.save's _site / _location /
+        _rack denormalisation, on the base of every device component, not
+        ModularComponentModel, which defines no save() of its own.
         """
         stale = self._instance_with_loaded_relations()
         Interface.objects.filter(pk=self.iface.pk).update(device=self.other)

@@ -270,9 +270,13 @@ _PRE_SAVE_MATCH_PAYLOAD_GATES = {
 # silent and unrepairable, a delayed write is neither -- but it is a trade.
 #
 # Why this set holds dcim.virtualchassis ALONE, when the no-uniqueness argument
-# above applies verbatim to the other eleven types in
-# _REQUIRES_PRE_SAVE_MATCH: because those were measured to behave the same way,
-# and to do so already. ipam.vlan, ipam.vrf, ipam.prefix and
+# above applies just as well to the nine other types this file's own gap list
+# names for absent uniqueness -- dcim.macaddress, dcim.modulebay, ipam.prefix,
+# ipam.vlan, ipam.vlangroup, ipam.vrf, virtualization.cluster,
+# virtualization.virtualmachine, wireless.wirelesslan (dcim.module is the
+# separate DB-constraint-backed entry above, and dcim.cable is matched by its
+# terminations): because those were measured to behave the same way, and to do
+# so already. ipam.vlan, ipam.vrf, ipam.prefix and
 # virtualization.cluster each let a CREATE overwrite a same-keyed row's own
 # fields through the pre-save match, IDENTICALLY on the parent commit and on
 # origin/develop, so none of it is a regression this branch introduces, and
@@ -313,9 +317,13 @@ def requires_pre_save_match(object_type: str, data: dict | None = None) -> bool:
     ``data`` is the CREATE payload. It is optional only so a caller can ask the
     type-level question; a type carrying a payload gate (see
     _PRE_SAVE_MATCH_PAYLOAD_GATES) answers False without one. That default is
-    the safe direction: the pre-save match turns a CREATE into an UPDATE of an
-    existing row, and taking that route unproven is the direction that does
-    damage, while declining it only forgoes a dedupe.
+    the safe direction: the pre-save match resolves a CREATE onto an existing
+    row, and for every type outside _PRE_SAVE_MATCH_BIND_ONLY it then writes
+    the payload there, so taking that route unproven is the direction that does
+    damage, while declining it only forgoes a dedupe. (For the one gated type
+    today, dcim.virtualchassis, the match is bind-only and writes nothing --
+    so the default is conservative about the resolution itself, not about a
+    write.)
     """
     if object_type not in _REQUIRES_PRE_SAVE_MATCH:
         return False

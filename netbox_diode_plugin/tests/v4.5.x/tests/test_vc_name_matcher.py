@@ -159,10 +159,18 @@ class VirtualChassisPreSaveMatchScopeTests(TestCase):
         The half the route must NOT cover: a CREATE may not rewrite another chassis.
 
         With master present the matcher that answers find_existing_object is
-        the auto-derived unique_master one, so taking the UPDATE path here
-        would apply "the chassis named vcs-renamed, mastered by vcs-owner" to
-        the chassis vcs-owner already masters -- renaming a converged,
-        unrelated row on a create.
+        the auto-derived unique_master one, so a master-bearing CREATE on the
+        pre-save path resolves "the chassis named vcs-renamed, mastered by
+        vcs-owner" onto the chassis vcs-owner already masters.
+
+        What that resolution would DO depends on the other seam: before
+        _PRE_SAVE_MATCH_BIND_ONLY it renamed that converged, unrelated row on a
+        create; with bind-only in force it would bind to it silently instead,
+        so the named chassis is never created and later references resolve to
+        the wrong row. Both are worth excluding, but only the first was a
+        write, and the assertions below now hold for either reason -- see
+        test_route_is_scoped_to_masterless_payloads for what actually pins the
+        gate.
         """
         _apply_vc_create({
             "name": "vcs-renamed",
@@ -183,8 +191,10 @@ class VirtualChassisPreSaveMatchScopeTests(TestCase):
         interpolates the payload value straight into an ORM pk filter, where
         bool and non-integral float coerce SILENTLY (True -> 1, 7.5 -> 7)
         instead of declining, so they would select an unrelated row. Excluding
-        master-bearing payloads makes that unreachable here rather than
-        guarded.
+        master-bearing payloads keeps that filter out of reach rather than
+        guarding it -- a seam pin, not a claim about row state: with bind-only
+        in force the gate changes no row's contents, so this test is the only
+        thing that fails if the gate is removed.
         """
         self.assertTrue(requires_pre_save_match("dcim.virtualchassis", {"name": "x"}))
         self.assertTrue(

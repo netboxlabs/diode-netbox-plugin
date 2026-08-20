@@ -166,16 +166,21 @@ def _try_bind_existing_instance(data: dict, object_type: str, serializer_class, 
     That guarantee covers the CREATE path, and only it. It is not a promise
     that no changeset can write this row. _apply_change's UPDATE branch that
     resolves through created[ref_id] takes an ordinary serializer.save(), so a
-    hand-built changeset pairing a create with a ref_id-only update (no
-    object_id) writes the update's payload onto the row this bind chose. The
-    parent commit does the same; origin/develop does not, because it inserts a
-    duplicate and writes to that instead -- so this is a divergence from
-    develop in the destructive direction and it is stated rather than implied.
-    Nothing plannable reaches it: dcim.virtualchassis is absent from
-    transformer._IS_CIRCULAR_REFERENCE, so generate-diff never emits a VC
-    update without an object_id (0 of 960 planned changes across three matrix
-    runs). test_bind_only_types_are_not_circular_references pins exactly that,
-    so adding the type there cannot turn this gap reachable in silence.
+    hand-built changeset pairing a create with a ref_id-only update of the SAME
+    object_type (no object_id) writes the update's payload onto the row this
+    bind chose. The parent commit does the same -- note the scoping, which is
+    exact: for a ref_id-only update of a DIFFERENT object_type the parent and
+    this branch also agree, but only because _instance_for_deferred_update
+    declines the re-read there; without it the write lands on an unrelated row
+    of the update's own type. origin/develop does not do either, because it
+    inserts a duplicate and writes to that instead -- so the same-type case is
+    a divergence from develop in the destructive direction and it is stated
+    rather than implied. Nothing plannable reaches it: dcim.virtualchassis is
+    absent from transformer._IS_CIRCULAR_REFERENCE, so generate-diff never
+    emits a VC update without an object_id (0 of 960 planned changes across
+    three matrix runs). test_bind_only_types_are_not_circular_references pins
+    exactly that, so adding the type there cannot turn this gap reachable in
+    silence.
 
     The lookup is _find_existing_object_or_none rather than a bare
     find_existing_object for the same reason its other callers use it: a
@@ -525,11 +530,13 @@ def _carry_forward_relation_cache(stale, fresh) -> None:
     sees a truthful before-state. A freshly loaded instance starts with an
     empty _state.fields_cache, so every forward FK the serializer's validators
     or the model's own save() touch is fetched again -- for dcim.interface that
-    is a full dcim_device row plus, through Interface.save()'s _site
-    denormalisation, a full dcim_site row. That is two queries per deferred
-    update charged to every mac-bearing interface, on a path shared with nine
-    other circular-reference shapes (transformer._IS_CIRCULAR_REFERENCE), for a
-    counter fix that needs none of it.
+    is a full dcim_device row plus, through the _site denormalisation
+    Interface.save() inherits, a full dcim_site row. That is two queries per
+    deferred update charged to every mac-bearing interface -- measured, 82 -> 80
+    on a single interface and 2902 -> 2806 on 48 of them -- on a path shared
+    with twelve other (type, field) shapes across six other types
+    (transformer._IS_CIRCULAR_REFERENCE), for a counter fix that needs none of
+    it.
 
     The row's OWN column values must come from the database. The rows its FKs
     point AT need not, and did not before this branch re-read anything: the
@@ -543,10 +550,13 @@ def _carry_forward_relation_cache(stale, fresh) -> None:
     so a column the database has since repointed is never paired with the
     object it used to point to. It does NOT notice the target ROW's own
     contents changing after the stale instance loaded it, and that exposure is
-    real rather than theoretical: NetBox's ModularComponentModel.save()
-    (dcim/models/device_components.py:133) does
-    `self._site = self.device.site`, so a carried-forward device whose site
-    moved underneath would persist a stale _site onto the component. No
+    real rather than theoretical: NetBox's ComponentModel.save() (dcim/models/
+    device_components.py, line 129/133/132 on 4.4/4.5/4.6) does
+    `self._site = self.device.site`, and `self._location` / `self._rack` from
+    the same device, so a carried-forward device whose site moved underneath
+    would persist a stale _site onto the component. Note the class: it is
+    ComponentModel, the base of EVERY device component, not just the modular
+    ones -- ModularComponentModel defines no save() of its own. No
     end-to-end trigger for it could be constructed -- inside a changeset the
     device's own update is planned BEFORE the component create -- so the
     optimisation stands, but it is not a guarantee that a carried object is
