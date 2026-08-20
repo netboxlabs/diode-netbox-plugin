@@ -781,12 +781,21 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             # persists nothing, where ['create', 'update'] became ['create'].
             # Whether these deferred updates ought to carry a prechange is a
             # real question and a separate one from this branch's staleness, so
-            # the changelog behaviour is left exactly as it was -- which the
-            # re-read alone did NOT do, because the snapshot the CREATE path
+            # the changelog behaviour is left exactly as it was for every
+            # shape the differ can plan -- which the re-read alone did NOT do,
+            # because the snapshot the CREATE path
             # takes when it resolves onto an existing row lives on the instance
             # the re-read replaces. _carry_forward_prechange_snapshot moves it
             # across; DeferredUpdateChangelogTests measures both halves of what
-            # dropping it changed.
+            # dropping it changed. Not "every shape" full stop: the bind-only
+            # route takes no snapshot at all by design, so a HAND-BUILT ref_id
+            # update following a bind has no prechange to carry and records one
+            # row with prechange null where base recorded two populated ones.
+            # dcim.virtualchassis is absent from _IS_CIRCULAR_REFERENCE, so the
+            # differ cannot plan that shape (test_bind_only_types_are_not_
+            # circular_references pins it), and the row it leaves is correct --
+            # it is the audit trail that is thinner, in exchange for not making
+            # the destructive write at all.
             # Re-read only when the ref resolves to this change's own type;
             # _instance_for_deferred_update has the cross-type case.
             instance = _instance_for_deferred_update(created_instance, model_class)
