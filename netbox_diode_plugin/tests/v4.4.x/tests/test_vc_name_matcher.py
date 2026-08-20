@@ -101,12 +101,15 @@ class VirtualChassisPreSaveMatchScopeTests(TestCase):
     """
     What the find-first CREATE route does, and to which payloads it applies.
 
-    The route is an UPDATE path -- it applies a CREATE's payload to whatever
-    find_existing_object returns -- so its scope is a behavioural contract with
-    two halves, and both are asserted here through a real apply. (The test this
-    replaced asserted only that "dcim.virtualchassis" was a member of the set
-    literal that defines the route, which is true by construction and cannot
-    fail for any reason a reader would care about.)
+    For dcim.virtualchassis the route RESOLVES a CREATE onto an existing row
+    and writes nothing to it (matcher._PRE_SAVE_MATCH_BIND_ONLY); for every
+    other entry in matcher._REQUIRES_PRE_SAVE_MATCH it is an UPDATE path that
+    applies the CREATE's payload to whatever find_existing_object returns. The
+    scope of the routing is a behavioural contract with two halves either way,
+    and both are asserted here through a real apply. (The test this replaced
+    asserted only that "dcim.virtualchassis" was a member of the set literal
+    that defines the route, which is true by construction and cannot fail for
+    any reason a reader would care about.)
     """
 
     @classmethod
