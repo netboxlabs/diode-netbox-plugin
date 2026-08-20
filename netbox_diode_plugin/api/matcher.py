@@ -109,6 +109,9 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 #     this type's payload space takes the pre-save match -- see
 #     _virtualchassis_pre_save_match_applies for why a master-bearing CREATE
 #     must not, and _PRE_SAVE_MATCH_PAYLOAD_GATES for how it is excluded.
+#     That same absent uniqueness means a row matched by name may be a
+#     different stack that merely shares it, so this type's match BINDS the row
+#     and writes nothing to it -- see _PRE_SAVE_MATCH_BIND_ONLY.
 #   - ipam.prefix: NetBox has no unique constraint on prefix, nor on
 #     (prefix, vrf) - Prefix.Meta carries only ordering and indexes.
 #     Duplicate detection lives solely in Prefix.clean(), behind
@@ -170,8 +173,19 @@ def _virtualchassis_pre_save_match_applies(data: dict) -> bool:
     IntegrityError fallback never runs; and no matcher can help at plan time
     because the row genuinely does not exist yet. Looking the name up
     immediately BEFORE the save is the only thing that collapses the two plans
-    onto one row. Every payload in that race is masterless by construction --
-    the members' own payloads name the chassis, nothing more.
+    onto one row.
+
+    What that covers is the MASTERLESS half of the race, which is the half this
+    gate admits: a member-only payload names the chassis and nothing more, so
+    the create it plans carries no master. It is NOT the whole race. The PR's
+    headline natural shape plans a MASTER-BEARING create dcim.virtualchassis,
+    and two such plans naming DIFFERENT masters split the chassis permanently:
+    two rows, member_count 1 each, and empty re-diffs afterwards, so nothing
+    converges them. That split is a pre-existing bound rather than a cost of
+    this gate -- it reproduces on the parent commit, on origin/develop, and
+    even with the two ingests run fully sequentially, because each row's master
+    is a legitimately different device and VirtualChassis.name is not unique.
+    It is stated here so the gate is not read as closing more than it does.
 
     A master-bearing CREATE is deliberately EXCLUDED, and the exclusion is
     load-bearing rather than merely tidy. The pre-save match is an UPDATE path:
@@ -205,6 +219,44 @@ def _virtualchassis_pre_save_match_applies(data: dict) -> bool:
 _PRE_SAVE_MATCH_PAYLOAD_GATES = {
     "dcim.virtualchassis": _virtualchassis_pre_save_match_applies,
 }
+
+
+# Types whose pre-save match may BIND an existing row but must not WRITE to it.
+#
+# The pre-save match does two separable things in one code path: it decides
+# that a CREATE names a row that already exists (a dedupe -- the only thing
+# _REQUIRES_PRE_SAVE_MATCH is for), and it then applies the CREATE's payload to
+# that row (an update). The second is safe only where the match criteria really
+# do identify the row. For an auto-created component they do: NetBox
+# instantiated it from the very device or module the payload names, and the
+# payload is the authority meant to overwrite the template's defaults.
+#
+# For dcim.virtualchassis they do not. The criterion is the name alone and
+# VirtualChassis.name carries no unique constraint, so the matched row may be a
+# different, converged stack that another source owns. Writing there was
+# measurably destructive: a stale plan's description and domain landed on
+# another site's live chassis, no error, and no later diff mentioning it -- two
+# sources then flap those fields indefinitely. Binding without writing keeps
+# the dedupe the plan-ahead race needs and gives up nothing else: the payload's
+# own fields converge on the next pass, where the matcher finds the row and the
+# plan is an UPDATE addressing it by id, which is the path that may write.
+#
+# Read narrowly, because this does NOT make a same-named row safe from ingest
+# generally. Once the row exists the matcher finds it by name, so the next
+# generate-diff plans an UPDATE onto it and that update is applied; two sources
+# naming one chassis still flap its description and domain. That flap comes
+# from name matching in the DIFF path and reproduces on the parent commit and
+# on origin/develop alike -- it is out of this seam's reach. What changes here
+# is narrower and worth having on its own: a CREATE no longer writes a row it
+# only guessed at, and no duplicate row is left behind when it declines.
+_PRE_SAVE_MATCH_BIND_ONLY = frozenset({
+    "dcim.virtualchassis",
+})
+
+
+def pre_save_match_binds_only(object_type: str) -> bool:
+    """Whether a pre-save-matched CREATE binds its row without writing to it."""
+    return object_type in _PRE_SAVE_MATCH_BIND_ONLY
 
 
 def requires_pre_save_match(object_type: str, data: dict | None = None) -> bool:

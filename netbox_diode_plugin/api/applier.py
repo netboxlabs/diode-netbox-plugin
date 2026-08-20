@@ -23,7 +23,12 @@ from .common import (
     ChangeType,
     error_from_validation_error,
 )
-from .matcher import find_existing_object, invalidate_find_obj_entry, requires_pre_save_match
+from .matcher import (
+    find_existing_object,
+    invalidate_find_obj_entry,
+    pre_save_match_binds_only,
+    requires_pre_save_match,
+)
 from .plugin_utils import get_object_type_model, legal_fields
 from .profile import profiled
 from .supported_models import get_serializer_for_model
@@ -92,6 +97,59 @@ def _is_auto_created_component(object_type: str) -> bool:
         "dcim.inventoryitem",
     ]
     return object_type in auto_created_components
+
+
+def _try_pre_save_match(data: dict, object_type: str, serializer_class, request):
+    """
+    Resolve a CREATE onto the row it duplicates, or return None to insert.
+
+    Two treatments, chosen by type, and the choice is why this seam exists
+    rather than a flag threaded through either of them:
+
+    - BIND-ONLY, for matcher._PRE_SAVE_MATCH_BIND_ONLY: hand back the row and
+      write nothing to it. See _try_bind_existing_instance.
+    - FIND-AND-UPDATE: apply the CREATE's payload to the matched row. This is
+      what the auto-created-component path is for -- a component NetBox
+      instantiated from a device or module template holds template defaults and
+      the ingest payload is the authority that must overwrite them -- and it is
+      what every non-bind-only entry in matcher._REQUIRES_PRE_SAVE_MATCH has
+      always done. See _try_find_and_update_existing_instance.
+    """
+    if pre_save_match_binds_only(object_type):
+        return _try_bind_existing_instance(data, object_type)
+    return _try_find_and_update_existing_instance(data, object_type, serializer_class, request)
+
+
+def _try_bind_existing_instance(data: dict, object_type: str):
+    """
+    Resolve a CREATE onto an existing row WITHOUT applying its payload.
+
+    The bind-only treatment. What the pre-save match exists to prevent is a
+    duplicate INSERT (matcher._REQUIRES_PRE_SAVE_MATCH): two planners that
+    could not see each other's row each emit CREATE for the same logical row,
+    and with no DB unique constraint both inserts succeed. Returning the
+    existing row is the whole of that cure -- the change resolves to that row,
+    nothing is inserted, and later changes in the same changeset that reference
+    it resolve against it through created[ref_id].
+
+    Pushing the CREATE's payload onto the row is a separate act, and for a type
+    whose match criteria carry no DB uniqueness it is not a safe one: the row
+    may be a different, converged object that merely matches. Refusing the
+    WRITE rather than the MATCH is what keeps both properties at once, and it
+    is strictly a reduction -- refusing the match instead would insert the
+    duplicate row this whole path exists to avoid, and leave it behind forever
+    (nothing deletes it and no diff mentions it).
+
+    No snapshot, no serializer, no save, so no changelog entry: nothing
+    happened to the row. invalidate_find_obj_entry is likewise not called --
+    the cached match is still accurate, precisely because nothing was written.
+
+    The lookup is _find_existing_object_or_none rather than a bare
+    find_existing_object for the same reason its other callers use it: a
+    malformed reference in the payload must mean "no match", not a ValueError
+    out of query construction that apply_changeset turns into a 500.
+    """
+    return _find_existing_object_or_none(data, object_type)
 
 
 def _try_find_and_update_existing_instance(data: dict, object_type: str, serializer_class, request):
@@ -207,6 +265,19 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     it. A device that already MASTERS another chassis, and a master pk with no
     device behind it, are different things entirely and must not share that
     handling -- see _MasterAttach.
+
+    Known bound, stated because the blast radius is wider than "bind the row a
+    member-first ingest left". VirtualChassis.name carries no unique
+    constraint, so the same-named masterless row adopted here may belong to an
+    entirely different stack -- another site's, left masterless by its own
+    member-first ingest or by this function's own IN_OTHER_CHASSIS branch.
+    Adoption then attaches THIS payload's master to THAT stack and drags the
+    device into it. That is the intended behaviour and it is what keeps a
+    duplicate row out of a table with nothing to dedupe it later, but it is a
+    guess about identity rather than a fact, and no subsequent diff reports the
+    join. The pre-save match declines to WRITE such a row for exactly this
+    reason (matcher._PRE_SAVE_MATCH_BIND_ONLY); adoption cannot decline in the
+    same way, because a master-bearing payload has nowhere else to land.
     """
     name = data.get("name")
     master = data.get("master")
@@ -467,10 +538,12 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         # the payload space may take this route -- find-first is an UPDATE of
         # an existing row, and dcim.virtualchassis restricts it to masterless
         # payloads so a CREATE can never rewrite a chassis it did not name
-        # (matcher._virtualchassis_pre_save_match_applies).
+        # (matcher._virtualchassis_pre_save_match_applies). What a matched row
+        # is then allowed to receive is a second, separate question, which
+        # _try_pre_save_match answers per type.
         instance = None
         if _is_auto_created_component(change.object_type) or requires_pre_save_match(change.object_type, data):
-            instance = _try_find_and_update_existing_instance(data, change.object_type, serializer_class, request)
+            instance = _try_pre_save_match(data, change.object_type, serializer_class, request)
 
         if not instance and (adopt := _CREATE_ADOPTERS.get(change.object_type)):
             instance = adopt(data, model_class, serializer_class, request)

@@ -4,12 +4,14 @@ from types import SimpleNamespace
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
 from django.test import TestCase
 
-from netbox_diode_plugin.api.applier import apply_changeset
+from netbox_diode_plugin.api.applier import _is_auto_created_component, apply_changeset
 from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeType
 from netbox_diode_plugin.api.matcher import (
+    _REQUIRES_PRE_SAVE_MATCH,
     find_existing_object,
     fingerprints,
     get_model_matchers,
+    pre_save_match_binds_only,
     requires_pre_save_match,
 )
 
@@ -125,22 +127,32 @@ class VirtualChassisPreSaveMatchScopeTests(TestCase):
             virtual_chassis=cls.owned, vc_position=1
         )
 
-    def test_masterless_create_updates_the_existing_row_instead_of_inserting(self):
+    def test_masterless_create_binds_the_existing_row_without_writing_it(self):
         """
         The half the route exists for: a masterless CREATE binds the row by name.
 
         This is the plan-ahead race in miniature. VirtualChassis has no unique
         constraint on name, so without the pre-save lookup this CREATE inserts
-        a second row and the payload lands on it, splitting a chassis across
-        two rows.
+        a second row and the chassis is split across two, half its members
+        orphaned on each.
+
+        Binding is the whole of what the race needs, and the payload is
+        deliberately NOT applied. The same absent uniqueness that makes the
+        lookup necessary also makes it insufficient as an identity claim: the
+        row matched by name may be a different stack another source owns (see
+        matcher._PRE_SAVE_MATCH_BIND_ONLY). last_updated carries the no-write
+        assertion, because on a row that was already blank "untouched" and
+        "saved with the payload minus its description" look alike.
         """
         existing = VirtualChassis.objects.create(name="vcs-race")
+        before = existing.last_updated
 
         _apply_vc_create({"name": "vcs-race", "description": "from the second plan"})
 
         self.assertEqual(VirtualChassis.objects.filter(name="vcs-race").count(), 1)
         existing.refresh_from_db()
-        self.assertEqual(existing.description, "from the second plan")
+        self.assertEqual(existing.description, "")
+        self.assertEqual(existing.last_updated, before, "the bound row was saved")
 
     def test_master_bearing_create_does_not_become_an_update(self):
         """
@@ -193,6 +205,74 @@ class VirtualChassisPreSaveMatchScopeTests(TestCase):
             with self.subTest(object_type=object_type):
                 self.assertTrue(requires_pre_save_match(object_type, {"master": 1}))
         self.assertFalse(requires_pre_save_match("dcim.site", {}))
+
+
+class PreSaveMatchBindOnlyTests(TestCase):
+    """
+    The second seam: what a pre-save-matched CREATE may do to the row it found.
+
+    requires_pre_save_match decides whether to LOOK; this decides whether to
+    WRITE. They are separate questions because the find-first path serves two
+    populations with opposite needs. An auto-created component was instantiated
+    by NetBox from the very device or module the payload names, so the match is
+    an identity and the payload is the authority that must overwrite the
+    template's defaults. A dcim.virtualchassis match is by name alone against a
+    model with no uniqueness on name, so it is a guess -- good enough to dedupe
+    an insert, not good enough to write another source's row.
+    """
+
+    #: applier._is_auto_created_component's own list, asserted against it below.
+    AUTO_CREATED = (
+        "dcim.consoleport",
+        "dcim.consoleserverport",
+        "dcim.powerport",
+        "dcim.poweroutlet",
+        "dcim.interface",
+        "dcim.rearport",
+        "dcim.frontport",
+        "dcim.modulebay",
+        "dcim.devicebay",
+        "dcim.inventoryitem",
+    )
+
+    def test_virtualchassis_binds_without_writing(self):
+        """The one bind-only type, and the reason the seam exists at all."""
+        self.assertTrue(pre_save_match_binds_only("dcim.virtualchassis"))
+
+    def test_every_other_pre_save_matched_type_still_applies_its_payload(self):
+        """
+        Naming them all: this is a behavioural change nobody else may inherit.
+
+        dcim.module's find-first, for one, exists precisely to APPLY a payload
+        that the IntegrityError recovery it replaced used to discard.
+        """
+        for object_type in sorted(_REQUIRES_PRE_SAVE_MATCH - {"dcim.virtualchassis"}):
+            with self.subTest(object_type=object_type):
+                self.assertFalse(pre_save_match_binds_only(object_type))
+
+    def test_no_auto_created_component_is_bind_only(self):
+        """
+        The overlap that would be silent: both populations share one dispatch.
+
+        applier._try_pre_save_match routes auto-created components through this
+        same seam, so a component type added to _PRE_SAVE_MATCH_BIND_ONLY would
+        stop ingest overwriting template defaults with no test failing for that
+        reason -- the row would still be bound and no duplicate created.
+        """
+        for object_type in self.AUTO_CREATED:
+            with self.subTest(object_type=object_type):
+                self.assertTrue(
+                    _is_auto_created_component(object_type),
+                    "the list under test has drifted from the applier's",
+                )
+                self.assertFalse(pre_save_match_binds_only(object_type))
+
+    def test_a_type_with_no_pre_save_match_at_all_is_not_bind_only(self):
+        """Bind-only narrows the find-first route; it is not a route of its own."""
+        for object_type in ("dcim.site", "dcim.device", "dcim.rack"):
+            with self.subTest(object_type=object_type):
+                self.assertFalse(pre_save_match_binds_only(object_type))
+                self.assertFalse(requires_pre_save_match(object_type, {}))
 
 
 class VirtualChassisAdoptionTests(TestCase):

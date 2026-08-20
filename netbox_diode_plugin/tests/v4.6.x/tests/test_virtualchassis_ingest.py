@@ -908,6 +908,382 @@ class VirtualChassisIngestE2ETests(APITestCase):
                 )
 
 
+    # ---- bind, do not overwrite -------------------------------------------
+
+    def _row_fields(self, pks):
+        """
+        The chassis fields a CREATE must never write, per row.
+
+        member_count is deliberately NOT here: binding a member legitimately
+        changes it, and _assert_member_count_is_honest checks that instead.
+        last_updated IS here, because it is the only witness that separates
+        "untouched" from "saved with values identical to its own".
+        """
+        return {
+            row.pk: (row.name, row.description, row.domain, row.master_id, row.last_updated)
+            for row in VirtualChassis.objects.filter(pk__in=pks)
+        }
+
+    def _assert_member_count_is_honest(self, *vcs):
+        """Stored member_count against the membership that actually exists."""
+        for vc in vcs:
+            fresh = VirtualChassis.objects.get(pk=vc.pk)
+            self.assertEqual(
+                fresh.member_count, fresh.members.count(),
+                f"{fresh.name}: stored member_count diverged from reality",
+            )
+
+    #: Every shape a name-only match can land on. Not variations on a theme --
+    #: three distinct ways that criterion can be wrong about identity, and the
+    #: two that are not "masterless and empty" are the two it was never
+    #: verified against.
+    ROW_KINDS = (
+        # A converged stack another source owns. VirtualChassis.name has no
+        # unique constraint, so a same-named plan is no evidence of sameness.
+        "mastered",
+        # The row the plan-ahead race actually means: inserted moments earlier
+        # by a sibling plan built from the same masterless payload.
+        "masterless_empty",
+        # What a member-first ingest leaves, and what this PR's own
+        # IN_OTHER_CHASSIS branch deliberately leaves: real members, no master.
+        # A guard keyed on master__isnull calls this one fresh and writes it.
+        "masterless_populated",
+    )
+
+    def _seed_row_kind(self, kind, name):
+        """One chassis of the given shape, owned by another site, with fields set."""
+        vc = VirtualChassis.objects.create(
+            name=name, domain="dom-b", description="OWNED-BY-B"
+        )
+        if kind == "masterless_empty":
+            return vc
+        site_b = Site.objects.filter(slug="vce-site-b").first() or Site.objects.create(
+            name="vce-site-b", slug="vce-site-b"
+        )
+        members = []
+        for position in (1, 2):
+            d = Device.objects.create(
+                name=f"{name}-b{position}", site=site_b,
+                device_type=self.dt, role=self.role,
+            )
+            d.virtual_chassis = vc
+            d.vc_position = position
+            d.save()
+            members.append(d)
+        if kind == "mastered":
+            # Re-read before saving: the membership signals have since bumped
+            # member_count by direct UPDATE, and a full save() through this
+            # instance would write its own stale 0 back over them. (The applier
+            # guards the same hazard in _try_adopt_masterless_virtualchassis.)
+            vc.refresh_from_db()
+            vc.master = members[0]
+            vc.save()
+        vc.refresh_from_db()
+        return vc
+
+    def test_a_masterless_create_never_writes_the_row_it_matched(self):
+        """
+        The contract, at the applier's own door: bind the row, write nothing.
+
+        The pre-save match (matcher._REQUIRES_PRE_SAVE_MATCH) exists to stop a
+        duplicate INSERT, and for dcim.virtualchassis that is ALL it may do.
+        Applying the CREATE's payload to the matched row is a separate act and
+        an unsafe one: the criterion is the name alone, VirtualChassis.name has
+        no unique constraint, so the row may be a converged stack another
+        source owns. Measured before this change -- a stale plan's description
+        and domain landed on another site's live chassis, 200, no error, and
+        nothing in any later diff to repair it, after which the two sources
+        flapped those fields indefinitely.
+
+        Both masterless wire forms are covered because a client changeset
+        reaches the applier without the transformer, so master may be absent or
+        explicitly null; the payload gate treats them alike and so must this.
+        The explicit-null form is the more destructive -- it would not merely
+        overwrite fields but write master_id NULL onto a mastered row while its
+        members stayed put.
+
+        The row-count assertion is the other half, and it is why this refuses
+        the WRITE rather than the MATCH: exactly one row, so no duplicate is
+        left behind for nothing to clean up.
+        """
+        for kind in self.ROW_KINDS:
+            for label, extra in (("master_absent", {}), ("master_null", {"master": None})):
+                with self.subTest(row=kind, master=label):
+                    name = f"vce-{kind.replace('_', '-')}-{label.replace('_', '-')}"
+                    vc = self._seed_row_kind(kind, name)
+                    before = self._row_fields([vc.pk])
+                    data = {"name": name, "description": "FROM-A", "domain": "dom-a"}
+                    data.update(extra)
+
+                    r = self.client.post(
+                        self.apply_url,
+                        data={
+                            "id": str(uuid.uuid4()),
+                            "changes": [{
+                                "change_id": str(uuid.uuid4()),
+                                "change_type": "create",
+                                "object_version": None,
+                                "object_type": "dcim.virtualchassis",
+                                "object_id": None,
+                                "ref_id": "1",
+                                "data": data,
+                            }],
+                        },
+                        format="json", **self.auth,
+                    )
+
+                    self.assertEqual(r.status_code, 200, r.content)
+                    self.assertIsNone(r.json().get("errors"))
+                    self.assertEqual(self._row_fields([vc.pk]), before,
+                                     f"{kind}/{label}: the matched chassis was written")
+                    self.assertEqual(
+                        VirtualChassis.objects.filter(name=name).count(), 1,
+                        f"{kind}/{label}: the CREATE left a duplicate row behind",
+                    )
+                    self._assert_member_count_is_honest(vc)
+
+    def test_a_stale_plan_applied_never_writes_the_row_it_matched(self):
+        """
+        The same contract through the real plan path, which is how it happens.
+
+        The pre-save match exists for plans that went stale: a worker plans a
+        member device whose chassis is named but not yet present, so its plan
+        holds a masterless create dcim.virtualchassis carrying whatever the
+        source says about the chassis. Between plan and apply, the row appears.
+
+        The membership DOES bind -- the device joins the matched chassis -- and
+        that is the point rather than a concession: binding is what keeps a
+        second, permanently orphaned row out of the table. What must not travel
+        with it is the payload's opinion of that row's own fields.
+        """
+        for kind in self.ROW_KINDS:
+            with self.subTest(row=kind):
+                name = f"vce-plan-{kind.replace('_', '-')}"
+                dev_name = f"vce-a-{kind.replace('_', '-')}"
+                payload = self._device_payload(dev_name, {
+                    "vc_position": 9,
+                    "virtual_chassis": {
+                        "name": name, "description": "FROM-A", "domain": "dom-a",
+                    },
+                })
+
+                cs = self._diff(payload)
+                vc_creates = [c for c in cs["changes"]
+                              if c["object_type"] == "dcim.virtualchassis"
+                              and c["change_type"] == "create"]
+                self.assertEqual(len(vc_creates), 1, cs)
+                self.assertIsNone(vc_creates[0]["data"].get("master"), vc_creates[0])
+
+                # ...and only now does the chassis appear.
+                vc = self._seed_row_kind(kind, name)
+                before = self._row_fields([vc.pk])
+
+                r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+                self.assertEqual(r.status_code, 200, r.content)
+                self.assertIsNone(r.json().get("errors"))
+
+                self.assertEqual(self._row_fields([vc.pk]), before,
+                                 f"{kind}: a plan that never named this row wrote it")
+                self.assertEqual(VirtualChassis.objects.filter(name=name).count(), 1,
+                                 f"{kind}: the stale plan left a duplicate row")
+                self.assertEqual(Device.objects.get(name=dev_name).virtual_chassis_id, vc.pk)
+                self._assert_member_count_is_honest(vc)
+
+    def test_a_stale_member_only_plan_leaves_no_orphan_chassis(self):
+        """
+        The routing's own headline case: a name-only plan, applied late.
+
+        This is the shape the pre-save match was added for, and the one a
+        row-level refusal breaks. A member device whose payload names the
+        chassis and nothing else plans exactly
+        create dcim.virtualchassis {"name": X} -- no master, no fields. Refuse
+        that match and the apply inserts a SECOND masterless X, binds the
+        member to it, and leaves it behind forever once a later round rebinds
+        the member: same name, no master, no members, and no diff that ever
+        mentions it, because ingest does not delete rows.
+
+        Binding gives the parent commit's behaviour back exactly: one row, the
+        member joins the converged chassis, its fields untouched, member_count
+        truthful, and the immediate re-diff empty -- converged in one apply.
+        """
+        payload = self._device_payload("vce-late", {
+            "vc_position": 2, "virtual_chassis": {"name": "vce-stack"},
+        })
+        cs = self._diff(payload)
+        vc_creates = [c for c in cs["changes"]
+                      if c["object_type"] == "dcim.virtualchassis"
+                      and c["change_type"] == "create"]
+        self.assertEqual(len(vc_creates), 1, cs)
+        self.assertEqual(vc_creates[0]["data"].get("name"), "vce-stack")
+        self.assertIsNone(vc_creates[0]["data"].get("master"), vc_creates[0])
+        self.assertNotIn("description", vc_creates[0]["data"], vc_creates[0])
+
+        # ...and only now does a converged, MASTERED vce-stack appear.
+        vc, master = self._seed_stack()
+        VirtualChassis.objects.filter(pk=vc.pk).update(
+            description="CONVERGED-B", domain="dom-b"
+        )
+        vc.refresh_from_db()
+        before = self._row_fields([vc.pk])
+
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+
+        self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1,
+                         "a second, permanently orphaned chassis was inserted")
+        self.assertEqual(self._row_fields([vc.pk]), before)
+        self.assertEqual(Device.objects.get(name="vce-late").virtual_chassis_id, vc.pk)
+        self.assertEqual(VirtualChassis.objects.get(pk=vc.pk).member_count, 2)
+        self._assert_member_count_is_honest(vc)
+        self._assert_noop_rediff(payload)
+
+    def test_three_stale_member_only_plans_leave_no_orphan_chassis(self):
+        """
+        Orphans accumulate one per stale plan, so more than one must be shown.
+
+        A single stale plan hides the shape of the defect: refusing the match
+        yields ONE extra row, which reads like a duplicate some later pass
+        tidies up. Nothing tidies it up, and every additional planner adds
+        another. Three plans, all built before the chassis existed, must still
+        converge on one row.
+        """
+        plans = []
+        for position, dev_name in enumerate(("vce-l1", "vce-l2", "vce-l3"), start=2):
+            plans.append(self._diff(self._device_payload(dev_name, {
+                "vc_position": position, "virtual_chassis": {"name": "vce-stack"},
+            })))
+
+        vc, _ = self._seed_stack()
+
+        for cs in plans:
+            r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+            self.assertEqual(r.status_code, 200, r.content)
+            self.assertIsNone(r.json().get("errors"))
+
+        rows = VirtualChassis.objects.filter(name="vce-stack")
+        self.assertEqual(rows.count(), 1,
+                         list(rows.values("pk", "master_id", "member_count")))
+        for dev_name in ("vce-l1", "vce-l2", "vce-l3"):
+            self.assertEqual(
+                Device.objects.get(name=dev_name).virtual_chassis_id, vc.pk, dev_name
+            )
+        self.assertEqual(VirtualChassis.objects.get(pk=vc.pk).member_count, 4)
+        self._assert_member_count_is_honest(vc)
+
+    def test_a_bound_chassis_converges_its_fields_on_the_next_pass(self):
+        """
+        Refusing the write is a DEFERRAL, and the design is wrong unless it is.
+
+        The fields a bound CREATE declines to write have to land eventually, or
+        binding is just data loss. They do, and by the ordinary route: the row
+        now exists, so the next generate-diff matches it and plans an UPDATE
+        addressed by object_id -- the path that is entitled to write, because
+        that plan was built against the row rather than guessing at it. One
+        further round is all it takes.
+        """
+        payload = self._device_payload("vce-sw2", {
+            "vc_position": 2,
+            "virtual_chassis": {
+                "name": "vce-stack", "description": "FROM-A", "domain": "dom-a",
+            },
+        })
+
+        # Planned while no such chassis exists, so the plan holds a masterless
+        # CREATE. Seeding the row first would have the matcher find it at PLAN
+        # time and plan an UPDATE, which never exercises the bind.
+        cs = self._diff(payload)
+        vc_creates = [c for c in cs["changes"]
+                      if c["object_type"] == "dcim.virtualchassis"
+                      and c["change_type"] == "create"]
+        self.assertEqual(len(vc_creates), 1, cs)
+        vc = VirtualChassis.objects.create(name="vce-stack")
+
+        # pass 1: the CREATE binds the row and declines its fields
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+        fresh = VirtualChassis.objects.get(pk=vc.pk)
+        self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
+        self.assertEqual(fresh.description, "")
+        self.assertEqual(fresh.domain, "")
+        self.assertEqual(Device.objects.get(name="vce-sw2").virtual_chassis_id, vc.pk)
+
+        # pass 2: the matcher finds the row, so this is an UPDATE naming it
+        cs = self._diff(payload)
+        vc_changes = [c for c in cs["changes"] if c["object_type"] == "dcim.virtualchassis"]
+        self.assertEqual(len(vc_changes), 1, cs)
+        self.assertEqual(vc_changes[0]["change_type"], "update", vc_changes[0])
+        self.assertEqual(vc_changes[0]["object_id"], vc.pk, vc_changes[0])
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+
+        fresh = VirtualChassis.objects.get(pk=vc.pk)
+        self.assertEqual(fresh.description, "FROM-A")
+        self.assertEqual(fresh.domain, "dom-a")
+
+        # ...and that is convergence, not a flap: nothing left to plan.
+        self._assert_noop_rediff(payload)
+
+    def test_a_bound_chassis_is_referenceable_later_in_the_same_changeset(self):
+        """
+        A bound row must reach created[ref_id], or the changeset breaks.
+
+        The find-first path returns the row it settled on and _apply_change
+        stores it under the change's ref_id; every later change resolves its
+        new_object references out of that dict. Binding returns an instance
+        this request never saved, which is exactly the case where an
+        implementation could plausibly return None ("nothing happened") and
+        turn the next change into a KeyError -- surfaced as "unresolved
+        reference", a 400 for a changeset that is perfectly valid.
+        """
+        vc = VirtualChassis.objects.create(name="vce-stack")
+
+        r = self.client.post(
+            self.apply_url,
+            data={
+                "id": str(uuid.uuid4()),
+                "changes": [
+                    {
+                        "change_id": str(uuid.uuid4()),
+                        "change_type": "create",
+                        "object_version": None,
+                        "object_type": "dcim.virtualchassis",
+                        "object_id": None,
+                        "ref_id": "vc-1",
+                        "data": {"name": "vce-stack", "description": "FROM-A"},
+                    },
+                    {
+                        "change_id": str(uuid.uuid4()),
+                        "change_type": "create",
+                        "object_version": None,
+                        "object_type": "dcim.device",
+                        "object_id": None,
+                        "ref_id": "dev-1",
+                        "new_refs": ["virtual_chassis"],
+                        "data": {
+                            "name": "vce-sw2",
+                            "site": self.site.pk,
+                            "role": self.role.pk,
+                            "device_type": self.dt.pk,
+                            "vc_position": 2,
+                            "virtual_chassis": "vc-1",
+                        },
+                    },
+                ],
+            },
+            format="json", **self.auth,
+        )
+
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+        self.assertEqual(Device.objects.get(name="vce-sw2").virtual_chassis_id, vc.pk)
+        self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
+        # ...and the reference did not smuggle the payload in either
+        self.assertEqual(VirtualChassis.objects.get(pk=vc.pk).description, "")
+
+
 class CoercePkTests(SimpleTestCase):
     """
     What may reach an ORM pk filter, for every shape a payload FK can carry.

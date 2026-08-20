@@ -575,6 +575,85 @@ class BulkPlanApplyTestCase(APITestCase):
         )
         self.assertEqual(vc.member_count, 2)
 
+    def test_a_stale_bulk_plan_does_not_write_the_chassis_it_matches(self):
+        """
+        The bulk endpoints reach the same applier, and the same stale plan.
+
+        /bulk-plan-apply/ cannot produce this shape by itself -- it plans and
+        applies in one call, so a chassis that exists is matched at PLAN time
+        and the plan is an UPDATE naming it by id. The stale plan needs the
+        pair: /bulk-plan/ while the chassis is absent, then /bulk-apply/ after
+        it has appeared, which is how a reconciler batches work and is exactly
+        the window the pre-save match exists to survive.
+
+        Asserted: the converged row is bound (one row, member joined, no
+        orphan) and none of its own fields are written by the plan.
+        """
+        suffix = uuid4().hex[:8]
+        vc_name = f"stack-{suffix}"
+        common = {
+            "site": {"name": f"site-{suffix}"},
+            "role": {"name": f"role-{suffix}"},
+            "device_type": {
+                "manufacturer": {"name": f"mfr-{suffix}"},
+                "model": f"dt-{suffix}",
+            },
+        }
+        plan = self.client.post(
+            "/netbox/api/plugins/diode/bulk-plan/",
+            data={"entities": [{
+                "id": f"sw1-{suffix}",
+                "object_type": "dcim.device",
+                "entity": {"device": {
+                    "name": f"sw1-{suffix}",
+                    "vc_position": 4,
+                    "virtual_chassis": {
+                        "name": vc_name,
+                        "description": "FROM-A",
+                        "domain": "dom-a",
+                    },
+                    **common,
+                }},
+            }]},
+            format="json",
+            **self.authorization_header,
+        )
+        self.assertEqual(plan.status_code, status.HTTP_200_OK, plan.json())
+        result = plan.json()["results"][0]
+        self.assertIsNone(result.get("errors"), result)
+        change_set = result["change_set"]
+        vc_creates = [c for c in change_set["changes"]
+                      if c["object_type"] == "dcim.virtualchassis"
+                      and c["change_type"] == "create"]
+        self.assertEqual(len(vc_creates), 1, change_set)
+
+        # ...and only now does a chassis of that name appear.
+        vc = VirtualChassis.objects.create(
+            name=vc_name, description="OWNED-BY-B", domain="dom-b"
+        )
+        before = (vc.name, vc.description, vc.domain, vc.master_id, vc.last_updated)
+
+        applied = self.client.post(
+            "/netbox/api/plugins/diode/bulk-apply/",
+            data={"change_sets": [change_set]},
+            format="json",
+            **self.authorization_header,
+        )
+        self.assertEqual(applied.status_code, status.HTTP_200_OK, applied.json())
+
+        rows = VirtualChassis.objects.filter(name=vc_name)
+        self.assertEqual(rows.count(), 1, list(rows.values("pk", "description", "master_id")))
+        fresh = rows.first()
+        self.assertEqual(
+            (fresh.name, fresh.description, fresh.domain, fresh.master_id, fresh.last_updated),
+            before,
+            "a stale bulk plan wrote the chassis it merely matched",
+        )
+        self.assertEqual(
+            Device.objects.get(name=f"sw1-{suffix}").virtual_chassis_id, fresh.pk
+        )
+        self.assertEqual(fresh.member_count, fresh.members.count())
+
     def test_insufficient_scope_returns_403(self):
         """Token with only read scope cannot call bulk-plan-apply (requires write)."""
         read_only_user = SimpleNamespace(
