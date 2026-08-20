@@ -18,6 +18,11 @@ class NormalizeChangesetTests(SimpleTestCase):
         normalize_changeset(object_type, prechange, entity)
         return entity
 
+    def _drop(self, object_type, prechange, entity):
+        """Run the normalizer and return (entity, dropped-submitted-field map)."""
+        dropped = normalize_changeset(object_type, prechange, entity)
+        return entity, dropped
+
     def test_tagged_to_access_clears_tagged_vlans_keeps_untagged(self):
         """Mode tagged -> access clears tagged_vlans but leaves untagged_vlan untouched."""
         prechange = {"mode": "tagged", "tagged_vlans": [101, 102], "untagged_vlan": 5}
@@ -42,13 +47,40 @@ class NormalizeChangesetTests(SimpleTestCase):
         self.assertEqual(out["tagged_vlans"], [])
         self.assertIsNone(out["qinq_svlan"])
 
-    def test_explicit_value_is_respected_not_overwritten(self):
-        """An explicitly submitted dependent field value is never overwritten."""
-        # producer explicitly sent tagged_vlans with an incompatible mode -> leave it
+    def test_explicit_forbidden_value_is_dropped_driver_wins(self):
+        """The submitted driver value wins: an explicit but forbidden value is dropped."""
+        # POLICY (reversed): a payload naming mode "access" AND naming tagged VLANs is
+        # self-contradictory. NetBox rejects the WHOLE entity for it, so the mode wins
+        # and the field it forbids is discarded — producer intent does NOT protect it.
         prechange = {"mode": "tagged", "tagged_vlans": [101]}
         entity = {"mode": "access", "tagged_vlans": [200]}
-        out = self._run("dcim.interface", prechange, entity)
+        out, dropped = self._drop("dcim.interface", prechange, entity)
+        self.assertEqual(out["tagged_vlans"], [])
+        self.assertIn("tagged_vlans", dropped)
+        self.assertIn("mode", dropped["tagged_vlans"])
+        self.assertIn("access", dropped["tagged_vlans"])
+
+    def test_explicit_allowed_value_is_respected(self):
+        """Producer intent survives for everything the driver value ALLOWS."""
+        # mode "tagged" permits tagged_vlans, so an explicit list is kept verbatim and
+        # is not reported as dropped. This is the half of producer intent that stands.
+        out, dropped = self._drop(
+            "dcim.interface",
+            {"mode": "access", "tagged_vlans": []},
+            {"mode": "tagged", "tagged_vlans": [200]},
+        )
         self.assertEqual(out["tagged_vlans"], [200])
+        self.assertEqual(dropped, {})
+
+    def test_explicit_empty_forbidden_value_is_not_a_change(self):
+        """A submitted value that is already empty is left exactly as submitted."""
+        # Rewriting it would be pointless and could only manufacture a spurious
+        # change (e.g. [] -> None); nothing is reported as dropped either.
+        out, dropped = self._drop(
+            "dcim.interface", {}, {"mode": "access", "tagged_vlans": []}
+        )
+        self.assertEqual(out["tagged_vlans"], [])
+        self.assertEqual(dropped, {})
 
     def test_no_clear_when_prechange_field_already_empty(self):
         """Nothing is injected into entity when the prechange dependent field was already empty."""
@@ -79,11 +111,72 @@ class NormalizeChangesetTests(SimpleTestCase):
         out = self._run("dcim.device", prechange, entity)
         self.assertNotIn("tagged_vlans", out)
 
-    def test_create_no_prechange_is_noop(self):
-        """Create flows (empty prechange, no existing row) are a no-op."""
+    def test_create_drops_forbidden_submitted_value(self):
+        """A create is not exempt: mode "access" drops the tagged_vlans it forbids."""
+        # This is the corpus shape (interface "WirelessGigabitEthernet1/0/1"): a CREATE
+        # carrying mode "access" together with untagged_vlan AND tagged_vlans. Before
+        # the reversed policy this was a no-op and NetBox 400'd the whole entity.
+        entity = {
+            "mode": "access",
+            "untagged_vlan": 900,
+            "tagged_vlans": [101, 102],
+        }
+        out, dropped = self._drop("dcim.interface", {}, entity)
+        self.assertEqual(out["tagged_vlans"], [])       # forbidden -> dropped
+        self.assertEqual(out["untagged_vlan"], 900)     # allowed for access -> kept
+        self.assertEqual(list(dropped), ["tagged_vlans"])
+
+    def test_create_injects_nothing_when_field_not_submitted(self):
+        """A create with nothing forbidden submitted stays untouched (nothing injected)."""
         entity = {"mode": "access"}
-        out = self._run("dcim.interface", {}, entity)
-        self.assertNotIn("tagged_vlans", out)
+        out, dropped = self._drop("dcim.interface", {}, entity)
+        self.assertNotIn("tagged_vlans", out)  # no stored row, nothing to clear
+        self.assertNotIn("qinq_svlan", out)
+        self.assertEqual(dropped, {})
+
+    def test_create_unknown_mode_fails_open(self):
+        """An unrecognised driver value forbids nothing, on creates too."""
+        entity = {"mode": "future-mode", "tagged_vlans": [101]}
+        out, dropped = self._drop("dcim.interface", {}, entity)
+        self.assertEqual(out["tagged_vlans"], [101])
+        self.assertEqual(dropped, {})
+
+    def test_stale_clear_is_not_reported_as_dropped(self):
+        """Injecting a clear for a stale STORED value is not a drop of producer data."""
+        out, dropped = self._drop(
+            "dcim.interface", {"mode": "tagged", "tagged_vlans": [101]}, {"mode": "access"}
+        )
+        self.assertEqual(out["tagged_vlans"], [])
+        self.assertEqual(dropped, {})  # nothing was submitted, so nothing was discarded
+
+    def test_shared_policy_applies_to_interface_type_rf_fields(self):
+        """The reversed policy is registry-wide: dcim.interface "type" behaves the same."""
+        entity = {"type": "1000base-t", "rf_channel": "2.4g-1-2412-22", "rf_role": "ap"}
+        out, dropped = self._drop("dcim.interface", {}, entity)
+        self.assertIsNone(out["rf_channel"])
+        self.assertIsNone(out["rf_role"])
+        self.assertEqual(sorted(dropped), ["rf_channel", "rf_role"])
+
+    def test_shared_policy_keeps_rf_fields_on_a_wireless_type(self):
+        """A wireless type permits the rf fields, so an explicit create keeps them."""
+        entity = {"type": "ieee802.11ac", "rf_channel": "2.4g-1-2412-22", "rf_role": "ap"}
+        out, dropped = self._drop("dcim.interface", {}, entity)
+        self.assertEqual(out["rf_channel"], "2.4g-1-2412-22")
+        self.assertEqual(dropped, {})
+
+    def test_shared_policy_applies_to_vlan_qinq_role(self):
+        """The reversed policy is registry-wide: ipam.vlan "qinq_role" behaves the same."""
+        entity = {"qinq_role": "svlan", "qinq_svlan": 7}
+        out, dropped = self._drop("ipam.vlan", {}, entity)
+        self.assertIsNone(out["qinq_svlan"])
+        self.assertEqual(list(dropped), ["qinq_svlan"])
+
+    def test_shared_policy_keeps_qinq_svlan_on_a_customer_vlan(self):
+        """qinq_role "cvlan" permits qinq_svlan, so an explicit create keeps it."""
+        entity = {"qinq_role": "cvlan", "qinq_svlan": 7}
+        out, dropped = self._drop("ipam.vlan", {}, entity)
+        self.assertEqual(out["qinq_svlan"], 7)
+        self.assertEqual(dropped, {})
 
     def test_unknown_mode_fails_open(self):
         """An unknown/unlisted mode value fails open and clears nothing."""
@@ -262,11 +355,12 @@ class InterfaceModeClearE2ETests(APITestCase):
         ch = [c for c in r.json()["change_set"]["changes"] if c["object_type"] == "dcim.interface"]
         self.assertTrue(all(c["change_type"] == "noop" for c in ch))
 
-    def test_explicit_incompatible_tagged_vlans_still_fails(self):
-        """Guard: an explicit incompatible mode/tagged_vlans combo must still be rejected."""
-        # Guard: a producer that explicitly sends mode=access WITH tagged_vlans is a
-        # producer-side error — the normalizer must NOT silently clear it; apply must
-        # fail and the DB must be unchanged.
+    def test_explicit_incompatible_tagged_vlans_is_dropped_not_rejected(self):
+        """An explicit incompatible mode/tagged_vlans update applies with the field dropped."""
+        # POLICY (reversed): this combination used to be left alone so NetBox could
+        # reject it, which cost the whole entity. The submitted mode now wins: the
+        # update applies, tagged_vlans is dropped, and the drop is surfaced as a
+        # warning on the change set rather than swallowed silently.
         create = {
             "name": "EthNeg", "type": "1000base-t", "device": self._device(),
             "mode": "tagged",
@@ -275,7 +369,7 @@ class InterfaceModeClearE2ETests(APITestCase):
         _, apply1 = self._diff_apply(create)
         self.assertEqual(apply1.status_code, 200)
         iface = Interface.objects.get(name="EthNeg")
-        before = set(iface.tagged_vlans.values_list("vid", flat=True))
+        self.assertEqual(iface.tagged_vlans.count(), 1)
 
         bad = {
             "name": "EthNeg", "type": "1000base-t", "device": self._device(),
@@ -284,12 +378,70 @@ class InterfaceModeClearE2ETests(APITestCase):
         }
         payload = {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": bad}}
         r1 = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r1.status_code, 200)
         cs = r1.json().get("change_set", {})
+        self.assertIn("tagged_vlans", cs.get("warnings", {}).get("dcim.interface", {}))
         r2 = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
-        # NetBox rejects the incompatible combo: non-200, or 200 with an errors payload.
-        self.assertTrue(r2.status_code != 200 or r2.json().get("errors"))
+        self.assertEqual(r2.status_code, 200)
+        self.assertIsNone(r2.json().get("errors"))
         iface.refresh_from_db()
-        self.assertEqual(set(iface.tagged_vlans.values_list("vid", flat=True)), before)  # unchanged
+        self.assertEqual(iface.mode, "access")
+        self.assertEqual(iface.tagged_vlans.count(), 0)  # the mode won; the field was dropped
+
+        # and the very same self-contradictory payload re-diffs as a NOOP
+        r3 = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        ch = [c for c in r3.json()["change_set"]["changes"] if c["object_type"] == "dcim.interface"]
+        self.assertTrue(all(c["change_type"] == "noop" for c in ch))
+
+    def test_corpus_create_access_mode_with_tagged_vlans_applies(self):
+        """A CREATE naming mode access, untagged_vlan AND tagged_vlans applies and is idempotent."""
+        # Reproduction of the corpus entity "WirelessGigabitEthernet1/0/1", which used to
+        # lose the whole interface to a 400 {"tagged_vlans": ["Interface mode does not
+        # support tagged vlans"]}. The create must now land with the mode honoured, the
+        # untagged VLAN attached and the forbidden tagged VLANs dropped.
+        create = {
+            "name": "WlAccess", "type": "other-wireless", "device": self._device(),
+            "mode": "access",
+            "rf_role": "ap", "rf_channel": "2.4g-1-2412-22",
+            "untagged_vlan": {"vid": 900, "name": "v900"},
+            "tagged_vlans": [{"vid": 101, "name": "v101"}, {"vid": 102, "name": "v102"}],
+        }
+        payload = {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": create}}
+        r1 = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r1.status_code, 200)
+        cs = r1.json().get("change_set", {})
+        # the create's CREATE change must not carry tagged_vlans at all, and must not
+        # leave a dangling unresolved-reference path for the field it no longer carries
+        iface_creates = [c for c in cs["changes"] if c["object_type"] == "dcim.interface"]
+        self.assertTrue(iface_creates)
+        for c in iface_creates:
+            self.assertNotIn("tagged_vlans", c.get("data", {}))
+            self.assertNotIn("tagged_vlans", c.get("new_refs", []))
+        self.assertIn("tagged_vlans", cs.get("warnings", {}).get("dcim.interface", {}))
+
+        r2 = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r2.status_code, 200)
+        self.assertIsNone(r2.json().get("errors"))
+        iface = Interface.objects.get(name="WlAccess")
+        self.assertEqual(iface.mode, "access")
+        self.assertIsNotNone(iface.untagged_vlan)
+        self.assertEqual(iface.untagged_vlan.vid, 900)
+        self.assertEqual(iface.tagged_vlans.count(), 0)
+        self.assertEqual(iface.rf_channel, "2.4g-1-2412-22")  # wireless type keeps rf fields
+
+        # re-ingesting the identical payload is a no-op
+        r3 = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r3.json().get("change_set", {}).get("changes", []), [])
+
+        # and submitting the forbidden field EMPTY under the same mode is a no-op too:
+        # clearing an already-empty submitted value must never plan an update
+        empty = dict(create, tagged_vlans=[])
+        r4 = self.client.post(
+            self.diff_url,
+            data={"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": empty}},
+            format="json", **self.auth,
+        )
+        self.assertEqual(r4.json().get("change_set", {}).get("changes", []), [])
 
     def test_qinq_to_access_clears_qinq_svlan_orm_seed(self):
         """E2E: an ORM-seeded q-in-q interface moving to access has qinq_svlan cleared."""
@@ -359,6 +511,33 @@ class InterfaceModeClearE2ETests(APITestCase):
             any(c.get("data", {}).get("tagged_vlans") == [] for c in vm_updates),
             "hook must emit tagged_vlans:[] for vminterface (DB-only assertion is vacuous here)",
         )
+
+    def test_vminterface_create_drops_tagged_vlans_netbox_would_have_kept(self):
+        """The uniform policy costs a vminterface its tagged VLANs, deliberately."""
+        # virtualization.vminterface is the one registry entry whose serializer does NO
+        # mode/VLAN validation: NetBox accepts mode "access" WITH tagged VLANs on a create
+        # and stores them (BaseInterface.save() only clears on a later save, guarded by
+        # `not self._state.adding`). The shared registry means the driver value wins here
+        # too, so the tagged VLANs are dropped. Pinned so the cost stays a decision.
+        vm = {"name": "drop-vm", "cluster": {"name": "drop-cl", "type": {"name": "drop-ct"}}}
+        create = {"name": "vmeth1", "virtual_machine": vm, "mode": "access",
+                  "tagged_vlans": [{"vid": 711, "name": "v711"}]}
+        payload = {"timestamp": 1, "object_type": "virtualization.vminterface",
+                   "entity": {"vm_interface": create}}
+        r1 = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r1.status_code, 200)
+        cs = r1.json()["change_set"]
+        self.assertIn(
+            "tagged_vlans", cs.get("warnings", {}).get("virtualization.vminterface", {})
+        )
+        r2 = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r2.status_code, 200)
+        self.assertIsNone(r2.json().get("errors"))
+
+        from virtualization.models import VMInterface
+        vmi = VMInterface.objects.get(name="vmeth1")
+        self.assertEqual(vmi.mode, "access")
+        self.assertEqual(vmi.tagged_vlans.count(), 0)
 
     def test_interface_wireless_to_ethernet_clears_rf(self):
         """Type change wireless->ethernet clears stale rf_channel and rf_role."""
