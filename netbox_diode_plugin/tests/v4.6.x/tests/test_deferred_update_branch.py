@@ -3,11 +3,13 @@ import uuid
 from types import SimpleNamespace
 from unittest import mock
 
+from core.models import ObjectChange
 from dcim.models import (
     Device,
     DeviceRole,
     DeviceType,
     Interface,
+    InterfaceTemplate,
     Manufacturer,
     Site,
     VirtualChassis,
@@ -271,4 +273,194 @@ class InstanceForDeferredUpdateTests(TestCase):
         self.assertTrue(
             Interface._meta.get_field("device").is_cached(fresh),
             "the re-read dropped a relation the CREATE's instance already had",
+        )
+
+
+    def test_the_re_read_keeps_the_prechange_snapshot_the_create_took(self):
+        """
+        The changelog record must survive the re-read, not only the relations.
+
+        snapshot_for_apply attaches _prechange_snapshot to the instance it is
+        given, and the CREATE path calls it whenever a CREATE resolves onto an
+        existing row. The parent commit's deferred UPDATE saved THAT instance,
+        so NetBox recorded prechange_data; a fresh read carries no such
+        attribute. DeferredUpdateChangelogTests measures what that costs
+        end-to-end -- this pins the mechanism.
+        """
+        vc = VirtualChassis.objects.create(name="ifdu-snap", description="BEFORE")
+        vc._prechange_snapshot = {"description": "BEFORE"}
+
+        fresh = _instance_for_deferred_update(vc, VirtualChassis)
+
+        self.assertIsNot(fresh, vc)
+        self.assertEqual(
+            getattr(fresh, "_prechange_snapshot", None), {"description": "BEFORE"},
+            "the re-read dropped the prechange snapshot the CREATE path took",
+        )
+
+    def test_no_snapshot_is_invented_when_the_create_took_none(self):
+        """A plain CREATE takes no snapshot, and the re-read must not add one."""
+        vc = VirtualChassis.objects.create(name="ifdu-nosnap")
+
+        fresh = _instance_for_deferred_update(vc, VirtualChassis)
+
+        self.assertFalse(hasattr(fresh, "_prechange_snapshot"))
+
+
+class DeferredUpdateChangelogTests(APITestCase):
+    """
+    What the deferred UPDATE records in the changelog, on a planned shape.
+
+    The re-read this branch added replaces the CREATE's instance, and the
+    CREATE's instance is where snapshot_for_apply left its prechange. Dropping
+    it changes the audit trail twice over: an update that persists something
+    records prechange_data null instead of the row's before-state, and (through
+    NetBox's ObjectChange.has_changes gate, which compares prechange with
+    postchange) an update that persists NOTHING goes from being dropped to
+    being recorded. Neither belongs in a counter fix, and both are measured
+    here rather than argued: without _carry_forward_prechange_snapshot the
+    first test sees prechange_data null and the second sees one row instead of
+    none, on v4.4, v4.5 and v4.6 alike.
+    """
+
+    def setUp(self):
+        """Mock OAuth2 introspection, and a device type with an eth0 template."""
+        super().setUp()
+        self.apply_url = "/netbox/api/plugins/diode/apply-change-set/"
+        self.bulk_plan_apply_url = "/netbox/api/plugins/diode/bulk-plan-apply/"
+        self.auth = {"HTTP_AUTHORIZATION": "Bearer mocked_oauth_token"}
+        diode_user = SimpleNamespace(
+            user=get_diode_user(),
+            token_scopes=["netbox:read", "netbox:write"],
+            token_data={"scope": "netbox:read netbox:write"},
+        )
+        p = mock.patch.object(
+            DiodeOAuth2Authentication, "_introspect_token", return_value=diode_user
+        )
+        p.start()
+        self.addCleanup(p.stop)
+        self.site = Site.objects.create(name="duc-site", slug="duc-site")
+        self.mfr = Manufacturer.objects.create(name="duc-mfr", slug="duc-mfr")
+        self.dt = DeviceType.objects.create(
+            manufacturer=self.mfr, model="duc-dt", slug="duc-dt"
+        )
+        self.role = DeviceRole.objects.create(name="duc-role", slug="duc-role")
+
+    def _interface_changes(self, iface):
+        """This interface's changelog rows, oldest first."""
+        return list(
+            ObjectChange.objects.filter(
+                changed_object_type__app_label="dcim",
+                changed_object_type__model="interface",
+                changed_object_id=iface.pk,
+            ).order_by("pk")
+        )
+
+    def test_a_planned_deferred_update_records_its_prechange(self):
+        """
+        The PR's own headline cost shape, and its changelog.
+
+        The device type carries an eth0 InterfaceTemplate, so the device CREATE
+        auto-creates eth0 within this same apply; the interface CREATE then
+        matches that row through the auto-created-component find-first path
+        (which snapshots), and primary_mac_address is deferred to a ref_id
+        UPDATE. Fully plan-reachable: generate-diff emits exactly this.
+        """
+        InterfaceTemplate.objects.create(
+            device_type=self.dt, name="eth0", type="1000base-t"
+        )
+        payload = {"entities": [{
+            "id": "duc-1",
+            "object_type": "dcim.interface",
+            "entity": {"interface": {
+                "name": "eth0",
+                "type": "1000base-t",
+                "description": "FROM-INGEST",
+                "device": {
+                    "name": "duc-sw1",
+                    "role": {"name": "duc-role"},
+                    "site": {"name": "duc-site"},
+                    "device_type": {
+                        "manufacturer": {"name": "duc-mfr"}, "model": "duc-dt",
+                    },
+                },
+                "primary_mac_address": {"mac_address": "00:00:00:00:00:34"},
+            }},
+        }]}
+
+        response = self.client.post(
+            self.bulk_plan_apply_url, data=payload, format="json", **self.auth
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        result = response.json()["results"][0]
+        self.assertIsNone(result.get("errors"), result)
+        # Pin the shape this test depends on: the interface's primary_mac_address
+        # really is a ref_id UPDATE, not an object_id one.
+        deferred = [c for c in result["change_set"]["changes"]
+                    if c["object_type"] == "dcim.interface"
+                    and c["change_type"] == "update"]
+        self.assertEqual(len(deferred), 1, result["change_set"])
+        self.assertIsNone(deferred[0]["object_id"], deferred[0])
+        self.assertIsNotNone(deferred[0]["ref_id"], deferred[0])
+
+        iface = Interface.objects.get(device__name="duc-sw1", name="eth0")
+        self.assertIsNotNone(iface.primary_mac_address_id)
+        last = self._interface_changes(iface)[-1]
+        self.assertEqual(last.action, "update", last)
+        self.assertIsNotNone(
+            last.prechange_data,
+            "the deferred update recorded no prechange_data at all",
+        )
+        self.assertEqual(
+            sorted(k for k in last.postchange_data
+                   if last.prechange_data.get(k) != last.postchange_data.get(k)),
+            ["description", "primary_mac_address"],
+            last.prechange_data,
+        )
+
+    def test_a_deferred_update_that_persists_nothing_records_nothing(self):
+        """
+        The has_changes gate: no write, no changelog row.
+
+        Both writes in this changeset store what is already stored, so the
+        prechange equals the postchange and NetBox drops the row. It can only
+        do that if the prechange is there to compare.
+        """
+        device = Device.objects.create(
+            name="duc-sw2", site=self.site, device_type=self.dt, role=self.role
+        )
+        iface = Interface.objects.create(
+            device=device, name="eth0", type="1000base-t",
+            description="SAME", label="SAMELABEL",
+        )
+
+        def change(change_type, data):
+            return {
+                "id": str(uuid.uuid4()), "change_type": change_type,
+                "object_type": "dcim.interface", "object_id": None,
+                "ref_id": "1", "data": data, "new_refs": [],
+            }
+
+        response = self.client.post(
+            self.apply_url,
+            data={"id": str(uuid.uuid4()), "changes": [
+                change("create", {
+                    "device": device.pk, "name": "eth0", "type": "1000base-t",
+                    "description": "SAME", "label": "SAMELABEL",
+                }),
+                change("update", {"label": "SAMELABEL"}),
+            ]},
+            format="json", **self.auth,
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertIsNone(response.json().get("errors"))
+        self.assertEqual(
+            Interface.objects.filter(device=device, name="eth0").count(), 1,
+            "the matched CREATE inserted a duplicate",
+        )
+        self.assertEqual(
+            self._interface_changes(iface), [],
+            "a changeset that stored nothing wrote a changelog row",
         )

@@ -570,6 +570,43 @@ def _carry_forward_relation_cache(stale, fresh) -> None:
             field.set_cached_value(fresh, cached)
 
 
+def _carry_forward_prechange_snapshot(stale, fresh) -> None:
+    """
+    Move the CREATE's prechange snapshot onto the re-read instance.
+
+    The changelog record is the third thing the re-read silently changed, and
+    the only one that was not intended. ``snapshot_for_apply`` attaches
+    ``_prechange_snapshot`` to the instance it is given, and the CREATE path
+    calls it whenever a CREATE resolves onto an existing row
+    (_try_find_and_update_existing_instance, and the VC adoption). The parent
+    commit's deferred UPDATE then saved THAT instance, so NetBox's
+    ``to_objectchange`` found the snapshot and recorded prechange_data. A
+    freshly read instance has no such attribute, so the same update recorded
+    prechange_data null -- and because ``ObjectChange.has_changes`` compares
+    prechange with postchange, an update that persists nothing went from being
+    dropped to being recorded.
+
+    Measured on the plan-reachable shape, not a hand-built one: a device whose
+    device type carries an eth0 InterfaceTemplate, ingested with an interface
+    and a primary_mac_address, plans [create device, create interface, create
+    macaddress, update interface(ref_id)] and the interface CREATE matches the
+    row the device's own save auto-created. The parent commit records that
+    deferred update with a 46-field prechange (diff: description,
+    primary_mac_address); without this carry-forward it records prechange null.
+    The same shape with a payload that persists nothing records no changelog
+    row at all on the parent commit and one row without it.
+
+    Copying the attribute is exactly what the parent did, because it is the
+    same dict on the same row: no query, and no decision about whether these
+    updates OUGHT to carry a prechange -- which is a real question, and a
+    separate one this branch deliberately does not answer (see the ref_id
+    branch's comment on snapshot_for_apply).
+    """
+    snapshot = getattr(stale, "_prechange_snapshot", None)
+    if snapshot is not None:
+        fresh._prechange_snapshot = snapshot
+
+
 def _instance_for_deferred_update(created_instance, model_class):
     """
     The row a ref_id-only UPDATE should be applied to.
@@ -599,6 +636,7 @@ def _instance_for_deferred_update(created_instance, model_class):
         return created_instance
     instance = model_class.objects.get(pk=created_instance.pk)
     _carry_forward_relation_cache(created_instance, instance)
+    _carry_forward_prechange_snapshot(created_instance, instance)
     return instance
 
 
@@ -743,7 +781,12 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             # persists nothing, where ['create', 'update'] became ['create'].
             # Whether these deferred updates ought to carry a prechange is a
             # real question and a separate one from this branch's staleness, so
-            # the changelog behaviour is left exactly as it was.
+            # the changelog behaviour is left exactly as it was -- which the
+            # re-read alone did NOT do, because the snapshot the CREATE path
+            # takes when it resolves onto an existing row lives on the instance
+            # the re-read replaces. _carry_forward_prechange_snapshot moves it
+            # across; DeferredUpdateChangelogTests measures both halves of what
+            # dropping it changed.
             # Re-read only when the ref resolves to this change's own type;
             # _instance_for_deferred_update has the cross-type case.
             instance = _instance_for_deferred_update(created_instance, model_class)
