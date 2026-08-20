@@ -1,27 +1,36 @@
-"""Unit tests for the interface mode/VLAN changeset normalizer."""
+"""Unit tests for the driver-field policy (interface mode/type, VLAN qinq_role)."""
 from types import SimpleNamespace
 from unittest import mock
 
 from dcim.models import Interface
 from django.test import SimpleTestCase
+from utilities.data import shallow_compare_dict
 from utilities.testing import APITestCase
 
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.api.differ import normalize_changeset
+from netbox_diode_plugin.api.field_policy import _DRIVER_FIELD_RULES, submitted_driver_field_drops
 from netbox_diode_plugin.plugin_config import get_diode_user
 
 
 class NormalizeChangesetTests(SimpleTestCase):
     """Pure-logic tests: no DB, operate on plain dicts."""
 
-    def _run(self, object_type, prechange, entity):
+    def _plan(self, object_type, prechange, entity):
+        """Run both policy phases in pipeline order and return (entity, dropped)."""
+        # Phase 1 runs in the transformer, before any fingerprinting; phase 2 runs
+        # in the differ once an existing row has been matched. Tests exercise them
+        # in that order so a unit result means the same thing an ingest would.
+        dropped = submitted_driver_field_drops(object_type, entity)
         normalize_changeset(object_type, prechange, entity)
-        return entity
+        return entity, dropped
+
+    def _run(self, object_type, prechange, entity):
+        return self._plan(object_type, prechange, entity)[0]
 
     def _drop(self, object_type, prechange, entity):
-        """Run the normalizer and return (entity, dropped-submitted-field map)."""
-        dropped = normalize_changeset(object_type, prechange, entity)
-        return entity, dropped
+        """Run both phases and return (entity, dropped-submitted-field map)."""
+        return self._plan(object_type, prechange, entity)
 
     def test_tagged_to_access_clears_tagged_vlans_keeps_untagged(self):
         """Mode tagged -> access clears tagged_vlans but leaves untagged_vlan untouched."""
@@ -122,7 +131,10 @@ class NormalizeChangesetTests(SimpleTestCase):
             "tagged_vlans": [101, 102],
         }
         out, dropped = self._drop("dcim.interface", {}, entity)
-        self.assertEqual(out["tagged_vlans"], [])       # forbidden -> dropped
+        # DROPPED, not blanked: with no stored row there is nothing to clear, so the
+        # payload must read as if the producer had never sent the field. Writing a
+        # blank here is what made the rf_* fields re-diff against NetBox's "" forever.
+        self.assertNotIn("tagged_vlans", out)           # forbidden -> dropped
         self.assertEqual(out["untagged_vlan"], 900)     # allowed for access -> kept
         self.assertEqual(list(dropped), ["tagged_vlans"])
 
@@ -153,8 +165,8 @@ class NormalizeChangesetTests(SimpleTestCase):
         """The reversed policy is registry-wide: dcim.interface "type" behaves the same."""
         entity = {"type": "1000base-t", "rf_channel": "2.4g-1-2412-22", "rf_role": "ap"}
         out, dropped = self._drop("dcim.interface", {}, entity)
-        self.assertIsNone(out["rf_channel"])
-        self.assertIsNone(out["rf_role"])
+        self.assertNotIn("rf_channel", out)
+        self.assertNotIn("rf_role", out)
         self.assertEqual(sorted(dropped), ["rf_channel", "rf_role"])
 
     def test_shared_policy_keeps_rf_fields_on_a_wireless_type(self):
@@ -168,7 +180,7 @@ class NormalizeChangesetTests(SimpleTestCase):
         """The reversed policy is registry-wide: ipam.vlan "qinq_role" behaves the same."""
         entity = {"qinq_role": "svlan", "qinq_svlan": 7}
         out, dropped = self._drop("ipam.vlan", {}, entity)
-        self.assertIsNone(out["qinq_svlan"])
+        self.assertNotIn("qinq_svlan", out)
         self.assertEqual(list(dropped), ["qinq_svlan"])
 
     def test_shared_policy_keeps_qinq_svlan_on_a_customer_vlan(self):
@@ -227,6 +239,139 @@ class NormalizeChangesetTests(SimpleTestCase):
         self.assertNotIn("rf_channel", out)
 
 
+    # --- a driver value must be SUBMITTED to win (N3) -------------------------
+
+    def test_create_omitting_the_driver_field_keeps_its_dependent_fields(self):
+        """A create that simply omits mode keeps the VLANs NetBox would have stored."""
+        # The policy is that a SUBMITTED driver value wins over the fields it forbids.
+        # With no submitted driver value there is nothing to win, so producer data is
+        # left alone: mode absent must not read as mode "" and drop both VLAN fields.
+        entity = {"name": "vmeth0", "untagged_vlan": 601, "tagged_vlans": [602]}
+        out, dropped = self._drop("virtualization.vminterface", {}, entity)
+        self.assertEqual(out["untagged_vlan"], 601)
+        self.assertEqual(out["tagged_vlans"], [602])
+        self.assertEqual(dropped, {})
+
+    def test_explicitly_submitted_empty_driver_value_does_win(self):
+        """An explicitly submitted empty mode IS a submitted value, and forbids the VLANs."""
+        entity = {"name": "vmeth0", "mode": "", "untagged_vlan": 601, "tagged_vlans": [602]}
+        out, dropped = self._drop("virtualization.vminterface", {}, entity)
+        self.assertNotIn("untagged_vlan", out)
+        self.assertNotIn("tagged_vlans", out)
+        self.assertEqual(sorted(dropped), ["tagged_vlans", "untagged_vlan"])
+        # the reason must not claim a value that was never submitted
+        self.assertIn("empty", dropped["tagged_vlans"])
+        self.assertNotIn("''", dropped["tagged_vlans"])
+
+    def test_explicitly_submitted_null_driver_value_does_win(self):
+        """A submitted null mode is submitted too, and reads as no 802.1Q."""
+        out, dropped = self._drop("dcim.interface", {}, {"mode": None, "tagged_vlans": [602]})
+        self.assertNotIn("tagged_vlans", out)
+        self.assertEqual(list(dropped), ["tagged_vlans"])
+
+    def test_stored_driver_value_never_drops_submitted_data(self):
+        """A driver value that was only STORED does not drop submitted data."""
+        # The stored mode forbids tagged_vlans, but the producer submitted no mode, so
+        # there is no submitted driver value to win and the explicit list stands (NetBox
+        # judges it, exactly as it does on develop).
+        out, dropped = self._drop(
+            "dcim.interface", {"mode": "access", "tagged_vlans": [101]}, {"tagged_vlans": [102]},
+        )
+        self.assertEqual(out["tagged_vlans"], [102])
+        self.assertEqual(dropped, {})
+
+    def test_non_string_driver_value_fails_open_in_both_phases(self):
+        """A driver value that is not a string is not one we can reason about."""
+        # A malformed payload must not turn into a TypeError on an unhashable rule key.
+        out, dropped = self._drop(
+            "dcim.interface",
+            {"mode": "tagged", "tagged_vlans": [101]},
+            {"mode": {"vid": 5}, "tagged_vlans": [102]},
+        )
+        self.assertEqual(out["tagged_vlans"], [102])
+        self.assertEqual(dropped, {})
+
+    # --- the clear must converge against what NetBox actually stores (N1) -----
+
+    def test_submitted_forbidden_field_is_removed_not_blanked(self):
+        """A dropped field leaves the payload entirely; no blank is invented for it."""
+        out, dropped = self._drop("dcim.interface", {}, {"type": "1000base-t", "rf_role": "ap"})
+        self.assertNotIn("rf_role", out)
+        self.assertEqual(list(dropped), ["rf_role"])
+
+    def test_type_rf_clear_converges_against_the_blank_string_netbox_stores(self):
+        """The type/rf_* clear plans nothing once NetBox has stored '' for the rf fields."""
+        # rf_channel/rf_role are CharFields with null=False: NetBox coerces the submitted
+        # null to ''. Re-injecting None every round diffed '' vs None and emitted a
+        # spurious UPDATE on every ingest cycle forever.
+        payload = {"type": "1000base-t", "rf_role": "ap", "rf_channel": "2.4g-1-2412-22"}
+        stored = {"type": "ieee802.11ac", "rf_role": "ap", "rf_channel": "2.4g-1-2412-22",
+                  "rf_channel_frequency": 2412, "rf_channel_width": 22}
+        round1, dropped = self._drop("dcim.interface", dict(stored), dict(payload))
+        self.assertEqual(sorted(dropped), ["rf_channel", "rf_role"])
+        self.assertIsNone(round1["rf_role"])                            # stale value cleared
+        self.assertNotEqual(shallow_compare_dict(stored, round1), {})    # round 1 is a real change
+
+        stored2 = {"type": "1000base-t", "rf_role": "", "rf_channel": "",
+                   "rf_channel_frequency": None, "rf_channel_width": None}
+        round2, dropped2 = self._drop("dcim.interface", dict(stored2), dict(payload))
+        self.assertEqual(sorted(dropped2), ["rf_channel", "rf_role"])    # still reported
+        self.assertNotIn("rf_role", round2)                             # but nothing written
+        self.assertEqual(shallow_compare_dict(stored2, round2), {})      # -> empty plan
+
+    # --- every (driver value, dependent field) pair in the registry -----------
+
+    def _pair_sentinel(self, dependent):
+        """A non-empty submitted value for a dependent field (only truthiness matters)."""
+        return ["x"] if dependent == "tagged_vlans" else "x"
+
+    def _assert_pair_converges(self, object_type, driver_field, driver_value, dependent):
+        """Assert one (driver value, dependent field) pair drops, clears once, then converges."""
+        sentinel = self._pair_sentinel(dependent)
+        submitted = {driver_field: driver_value, dependent: sentinel}
+
+        # 1. a submitted driver value drops the field it forbids, and writes no blank
+        out, dropped = self._drop(object_type, {}, dict(submitted))
+        self.assertNotIn(dependent, out)
+        self.assertIn(dependent, dropped)
+
+        # 2. with no submitted driver value, submitted data survives untouched
+        out, dropped = self._drop(object_type, {}, {dependent: sentinel})
+        self.assertEqual(out[dependent], sentinel)
+        self.assertEqual(dropped, {})
+
+        # 3. a non-empty STORED value is cleared exactly once...
+        stored = {driver_field: driver_value, dependent: sentinel}
+        round1, _ = self._drop(object_type, dict(stored), dict(submitted))
+        self.assertNotEqual(shallow_compare_dict(stored, round1), {})
+
+        # ...and whichever empty representation NetBox then stores, the next round
+        # plans nothing at all for the field.
+        for netbox_stored in ("", None, [], (), {}):
+            with self.subTest(netbox_stored=netbox_stored):
+                stored2 = {driver_field: driver_value, dependent: netbox_stored}
+                round2, _ = self._drop(object_type, dict(stored2), dict(submitted))
+                self.assertNotIn(dependent, round2)
+                self.assertEqual(shallow_compare_dict(stored2, round2), {})
+
+    def test_every_registered_driver_value_dependent_pair_converges(self):
+        """Every (driver value, dependent field) pair in every rule map converges."""
+        # Exhaustive over the registry, including all ~100 non-wireless interface types
+        # in _INTERFACE_TYPE_RF_RULES, so a new rule cannot be added without meeting it.
+        pairs = 0
+        for object_type, rules in _DRIVER_FIELD_RULES.items():
+            for driver_field, value_map in rules.items():
+                for driver_value, dependents in value_map.items():
+                    for dependent in dependents:
+                        with self.subTest(object_type=object_type, driver_field=driver_field,
+                                          driver_value=driver_value, dependent=dependent):
+                            self._assert_pair_converges(
+                                object_type, driver_field, driver_value, dependent,
+                            )
+                        pairs += 1
+        self.assertGreater(pairs, 100)  # the map is generated; guard against an empty sweep
+
+
 class InterfaceModeClearE2ETests(APITestCase):
     """End-to-end: seed an existing interface, ingest a mode change, assert clear."""
 
@@ -262,6 +407,58 @@ class InterfaceModeClearE2ETests(APITestCase):
         cs = r1.json().get("change_set", {})
         r2 = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
         return r1, r2
+
+    def _plan(self, payload):
+        """Generate a diff for a payload and return its change set."""
+        r = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json().get("change_set", {})
+
+    def _apply(self, cs):
+        """Apply a change set and assert it landed without errors."""
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"), r.content)
+        return r
+
+    def _converge(self, payload, label, max_applies=2, quiet_rounds=4):
+        """
+        Apply a payload until its plan is empty, then assert it stays empty.
+
+        Returns the number of applies it took. An empty plan is the strongest
+        available statement of convergence: the change set carries no changes at
+        all, so re-ingest performs no write and logs no object change.
+        """
+        applies = 0
+        for _ in range(max_applies + 1):
+            cs = self._plan(payload)
+            if not cs.get("changes", []):
+                break
+            self._apply(cs)
+            applies += 1
+        else:
+            self.fail(f"{label} did not converge within {max_applies} applies")
+        self.assertLessEqual(applies, max_applies, f"{label} needed {applies} applies")
+        for quiet in range(1, quiet_rounds + 1):
+            self.assertEqual(
+                self._plan(payload).get("changes", []), [],
+                f"{label} re-planned on quiet round {quiet}",
+            )
+        return applies
+
+    def _iface_payload(self, **fields):
+        """Build a dcim.interface generate-diff payload for this test's device."""
+        entity = {"device": self._device()}
+        entity.update(fields)
+        return {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": entity}}
+
+    def _vm_payload(self, **fields):
+        """Build a virtualization.vminterface generate-diff payload."""
+        entity = {"virtual_machine": {"name": "obs3607-vm",
+                                      "cluster": {"name": "obs3607-cl", "type": {"name": "obs3607-ct"}}}}
+        entity.update(fields)
+        return {"timestamp": 1, "object_type": "virtualization.vminterface",
+                "entity": {"vm_interface": entity}}
 
     def test_tagged_to_access_clears_tagged_vlans_and_is_idempotent(self):
         """E2E: tagged -> access clears tagged_vlans, keeps untagged_vlan, and re-diffs as NOOP."""
@@ -585,3 +782,221 @@ class InterfaceModeClearE2ETests(APITestCase):
         cvlan.refresh_from_db()
         self.assertEqual(cvlan.qinq_role, "svlan")
         self.assertIsNone(cvlan.qinq_svlan)
+
+    # --- N1: the type/rf_* clear converges instead of writing every cycle -----
+
+    def test_type_change_rf_clear_converges_and_stops_writing(self):
+        """A non-wireless type reported with rf_* fields clears once, then plans nothing."""
+        # An interface exists as ieee802.11ac with rf_role/rf_channel set; the producer
+        # now reports it as 1000base-t while STILL reporting the rf fields. Round 1 must
+        # clear the stale values; every round after it must plan nothing. Blanking the
+        # submitted value instead of dropping it made rounds 2+ diff the injected None
+        # against the "" NetBox stores and emit a spurious UPDATE forever.
+        _, a1 = self._diff_apply({
+            "name": "Wl1", "type": "ieee802.11ac", "device": self._device(),
+            "rf_role": "ap", "rf_channel": "2.4g-1-2412-22",
+        })
+        self.assertEqual(a1.status_code, 200)
+        iface = Interface.objects.get(name="Wl1")
+        self.assertEqual(iface.rf_role, "ap")
+        self.assertIsNotNone(iface.rf_channel_frequency)  # derived by Interface.save()
+
+        payload = self._iface_payload(
+            name="Wl1", type="1000base-t", rf_role="ap", rf_channel="2.4g-1-2412-22",
+        )
+        cs = self._plan(payload)
+        self.assertTrue([c for c in cs["changes"] if c["object_type"] == "dcim.interface"])
+        self.assertEqual(
+            sorted(cs.get("warnings", {}).get("dcim.interface", {})), ["rf_channel", "rf_role"],
+        )
+        self._apply(cs)
+        iface.refresh_from_db()
+        self.assertEqual(iface.type, "1000base-t")
+        self.assertEqual(iface.rf_role, "")        # what NetBox stores for these CharFields
+        self.assertEqual(iface.rf_channel, "")
+        self.assertIsNone(iface.rf_channel_frequency)
+        self.assertIsNone(iface.rf_channel_width)
+        last_updated = iface.last_updated
+
+        for quiet in range(1, 6):
+            cs = self._plan(payload)
+            self.assertEqual(cs.get("changes", []), [], f"re-planned on quiet round {quiet}")
+            # still reported by the producer, still dropped, never written again
+            self.assertEqual(
+                sorted(cs.get("warnings", {}).get("dcim.interface", {})),
+                ["rf_channel", "rf_role"],
+            )
+        iface.refresh_from_db()
+        self.assertEqual(iface.last_updated, last_updated)  # no write after round 1
+
+    # --- N3: a create that omits the driver field keeps its data --------------
+
+    def test_vminterface_create_without_mode_keeps_the_vlans_netbox_stores(self):
+        """A vminterface create omitting mode keeps its tagged VLANs, exactly as NetBox does."""
+        # NetBox nulls untagged_vlan itself in BaseInterface.save() but KEEPS tagged_vlans
+        # on a create (_state.adding is True), and the vminterface serializer validates
+        # neither. Nothing may be dropped here: no mode was submitted, so no driver value
+        # won anything, and the payload contradicted nothing.
+        payload = self._vm_payload(
+            name="vmeth0",
+            untagged_vlan={"vid": 3601, "name": "v3601"},
+            tagged_vlans=[{"vid": 3602, "name": "v3602"}],
+        )
+        cs = self._plan(payload)
+        self.assertNotIn("virtualization.vminterface", cs.get("warnings", {}))
+        self._apply(cs)
+
+        from virtualization.models import VMInterface
+        vmi = VMInterface.objects.get(name="vmeth0")
+        self.assertFalse(vmi.mode)
+        self.assertIsNone(vmi.untagged_vlan)                                # NetBox's own save()
+        self.assertEqual([v.vid for v in vmi.tagged_vlans.all()], [3602])   # kept, not dropped
+
+    def test_modeless_untagged_vlan_replans_exactly_as_on_develop(self):
+        """A mode-less interface still reporting an untagged VLAN re-plans, as on develop."""
+        # Documented residual, NOT introduced by the driver-field policy: NetBox nulls
+        # untagged_vlan on EVERY save of a mode-less interface, so a producer that keeps
+        # reporting one keeps planning an update. Closing it would mean dropping submitted
+        # data with no submitted driver value to justify it, which is exactly the loss this
+        # scoping exists to prevent, so develop's behaviour is kept and pinned here.
+        payload = self._vm_payload(name="vmeth1", untagged_vlan={"vid": 3611, "name": "v3611"})
+        self._apply(self._plan(payload))
+        from virtualization.models import VMInterface
+        vmi = VMInterface.objects.get(name="vmeth1")
+        self.assertIsNone(vmi.untagged_vlan)
+        vm_changes = [c for c in self._plan(payload).get("changes", [])
+                      if c["object_type"] == "virtualization.vminterface"]
+        self.assertTrue(vm_changes)  # re-plans; the policy deliberately does not silence it
+
+    # --- N2: a dropped match criterion must be dropped BEFORE matching --------
+
+    def test_vlan_qinq_role_create_applies_and_converges(self):
+        """A VLAN naming a service role with an svlan applies once, then plans nothing."""
+        # qinq_svlan is an ipam.vlan MATCH criterion (unique_qinq_svlan_vid, and the
+        # "qinq_svlan IS NULL" condition on the logical vid criteria). Dropping it after
+        # the existing-object lookup left the entity unmatchable, so it re-planned a
+        # CREATE and duplicated the row on every ingest. The policy runs before matching.
+        payload = {"timestamp": 1, "object_type": "ipam.vlan", "entity": {"vlan": {
+            "vid": 3971, "name": "n2-cvlan", "qinq_role": "svlan",
+            "qinq_svlan": {"vid": 3970, "name": "n2-svlan"},
+        }}}
+        cs = self._plan(payload)
+        self.assertIn("qinq_svlan", cs.get("warnings", {}).get("ipam.vlan", {}))
+        for change in cs["changes"]:
+            self.assertNotIn("qinq_svlan", change.get("data", {}))
+            self.assertNotIn("qinq_svlan", change.get("new_refs", []))
+        self._apply(cs)
+
+        from ipam.models import VLAN
+        vlan = VLAN.objects.get(vid=3971)
+        self.assertEqual(vlan.qinq_role, "svlan")
+        self.assertIsNone(vlan.qinq_svlan)
+
+        for quiet in range(1, 5):
+            self.assertEqual(self._plan(payload).get("changes", []), [],
+                             f"re-planned on quiet round {quiet}")
+        self.assertEqual(VLAN.objects.filter(vid=3971).count(), 1)  # no duplicate rows
+
+    def test_vlan_customer_role_keeps_its_service_vlan_and_converges(self):
+        """qinq_role 'cvlan' permits qinq_svlan: it is kept, applied and converges."""
+        payload = {"timestamp": 1, "object_type": "ipam.vlan", "entity": {"vlan": {
+            "vid": 3973, "name": "n2-cust", "qinq_role": "cvlan",
+            "qinq_svlan": {"vid": 3972, "name": "n2-svc"},
+        }}}
+        cs = self._plan(payload)
+        self.assertNotIn("ipam.vlan", cs.get("warnings", {}))
+        self._apply(cs)
+        from ipam.models import VLAN
+        vlan = VLAN.objects.get(vid=3973)
+        self.assertEqual(vlan.qinq_svlan.vid, 3972)   # allowed -> kept verbatim
+        for quiet in range(1, 5):
+            self.assertEqual(self._plan(payload).get("changes", []), [],
+                             f"re-planned on quiet round {quiet}")
+
+    # --- the whole mode rule map, end to end, over four quiet rounds ----------
+
+    def test_interface_mode_matrix_applies_and_converges(self):
+        """Every mode in the rule map applies with all three VLAN fields submitted, then converges."""
+        modes = list(_DRIVER_FIELD_RULES["dcim.interface"]["mode"])
+        self.assertEqual(len(modes), 5)
+        for i, mode in enumerate(modes):
+            with self.subTest(mode=mode):
+                payload = self._iface_payload(
+                    name=f"EthM{i}", type="1000base-t", mode=mode,
+                    untagged_vlan={"vid": 3700 + i, "name": f"u{i}"},
+                    tagged_vlans=[{"vid": 3710 + i, "name": f"t{i}"}],
+                    qinq_svlan={"vid": 3720 + i, "name": f"s{i}"},
+                )
+                self._converge(payload, f"dcim.interface mode {mode!r}")
+                iface = Interface.objects.get(name=f"EthM{i}")
+                forbidden = _DRIVER_FIELD_RULES["dcim.interface"]["mode"][mode]
+                if "tagged_vlans" in forbidden:
+                    self.assertEqual(iface.tagged_vlans.count(), 0)
+                else:
+                    self.assertEqual([v.vid for v in iface.tagged_vlans.all()], [3710 + i])
+                if "untagged_vlan" in forbidden:
+                    self.assertIsNone(iface.untagged_vlan)
+                else:
+                    self.assertEqual(iface.untagged_vlan.vid, 3700 + i)
+                if "qinq_svlan" in forbidden:
+                    self.assertIsNone(iface.qinq_svlan)
+                else:
+                    self.assertEqual(iface.qinq_svlan.vid, 3720 + i)
+
+    def test_vminterface_mode_matrix_applies_and_converges(self):
+        """Every mode in the rule map converges for vminterface too, where no serializer polices it."""
+        modes = list(_DRIVER_FIELD_RULES["virtualization.vminterface"]["mode"])
+        for i, mode in enumerate(modes):
+            with self.subTest(mode=mode):
+                payload = self._vm_payload(
+                    name=f"vmethM{i}", mode=mode,
+                    untagged_vlan={"vid": 3730 + i, "name": f"vu{i}"},
+                    tagged_vlans=[{"vid": 3740 + i, "name": f"vt{i}"}],
+                    qinq_svlan={"vid": 3750 + i, "name": f"vs{i}"},
+                )
+                self._converge(payload, f"virtualization.vminterface mode {mode!r}")
+                from virtualization.models import VMInterface
+                vmi = VMInterface.objects.get(name=f"vmethM{i}")
+                forbidden = _DRIVER_FIELD_RULES["virtualization.vminterface"]["mode"][mode]
+                if "tagged_vlans" in forbidden:
+                    self.assertEqual(vmi.tagged_vlans.count(), 0)
+                if "qinq_svlan" in forbidden:
+                    self.assertIsNone(vmi.qinq_svlan)
+
+    def test_interface_type_rf_matrix_applies_and_converges(self):
+        """Representative non-wireless types with all four rf_* fields submitted converge."""
+        # The type rule map is generated as the complement of the wireless allow-set, so
+        # every non-wireless value shares one code path; the exhaustive sweep over all of
+        # them is the unit test above. These are the shapes a producer actually sends.
+        for i, iface_type in enumerate(("1000base-t", "virtual", "lag")):
+            with self.subTest(type=iface_type):
+                payload = self._iface_payload(
+                    name=f"EthT{i}", type=iface_type, rf_role="ap",
+                    rf_channel="2.4g-1-2412-22", rf_channel_frequency=2412, rf_channel_width=22,
+                )
+                self._converge(payload, f"dcim.interface type {iface_type!r}")
+                iface = Interface.objects.get(name=f"EthT{i}")
+                self.assertEqual(iface.type, iface_type)
+                # Measured: a field the payload never carries lands as NULL, while a
+                # field submitted as null lands as '' (see the update case above) — the
+                # SAME CharField, two empty representations. No single blank a planner
+                # could write matches both, which is why the drop removes the field.
+                self.assertFalse(iface.rf_role)
+                self.assertFalse(iface.rf_channel)
+                self.assertIsNone(iface.rf_channel_frequency)
+                self.assertIsNone(iface.rf_channel_width)
+
+    def test_wireless_type_keeps_all_four_rf_fields_and_converges(self):
+        """A wireless type permits the rf fields: they are kept, applied and converge."""
+        payload = self._iface_payload(
+            name="EthW", type="ieee802.11ac", rf_role="ap", rf_channel="2.4g-1-2412-22",
+        )
+        cs = self._plan(payload)
+        self.assertNotIn("dcim.interface", cs.get("warnings", {}))
+        self._apply(cs)
+        iface = Interface.objects.get(name="EthW")
+        self.assertEqual(iface.rf_role, "ap")
+        self.assertEqual(iface.rf_channel, "2.4g-1-2412-22")
+        for quiet in range(1, 5):
+            self.assertEqual(self._plan(payload).get("changes", []), [],
+                             f"re-planned on quiet round {quiet}")

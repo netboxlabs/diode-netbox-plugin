@@ -27,6 +27,7 @@ from .common import (
     sort_ints_first,
 )
 from .compat import apply_entity_migrations
+from .field_policy import apply_submitted_driver_field_policy
 from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -138,6 +139,11 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     deduplicated = _topo_sort(deduplicated)
     _set_auto_slugs(deduplicated, supported_models)
     _handle_cached_scope(deduplicated, supported_models)
+    # Let a submitted driver value win over the fields it forbids BEFORE existing
+    # objects are matched: a dropped field can itself be a match criterion (ipam.vlan
+    # matches on qinq_svlan), and dropping it after the lookup strands the entity as
+    # an unmatchable CREATE that re-plans on every ingest.
+    apply_submitted_driver_field_policy(deduplicated)
     resolved = _resolve_existing_references(deduplicated)
     _strip_cached_scope(resolved)
     defaulted = _set_defaults(resolved, supported_models)

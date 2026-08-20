@@ -8,8 +8,6 @@ import datetime
 import logging
 from collections import defaultdict
 
-from dcim.choices import InterfaceTypeChoices
-from dcim.constants import WIRELESS_IFACE_TYPES
 from django.contrib.contenttypes.models import ContentType
 from extras.choices import CustomFieldTypeChoices
 from rest_framework import serializers
@@ -26,135 +24,14 @@ from .common import (
     harmonize_formats,
     sort_ints_first,
 )
+from .field_policy import normalize_changeset
 from .matcher import _get_active_branch_schema
-from .plugin_utils import get_json_ref_info, get_primary_value, legal_fields
+from .plugin_utils import get_primary_value, legal_fields
 from .profile import profiled
 from .supported_models import extract_supported_models
 from .transformer import _get_custom_fields_for_model, cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
 
 logger = logging.getLogger(__name__)
-
-
-# --- Changeset normalization ------------------------------------------------
-# Mirror NetBox model save()-time normalization that the DRF serializer validates
-# against: when a driver field takes a value that forbids a dependent field, the
-# stale dependent value must be cleared so the merged partial-update state is legal.
-#
-# object_type -> driver_field -> { driver_value : [dependent fields to clear] }
-# Values verified against NetBox model clean() / serializer validate() (v4.4 / v4.5.5 / v4.6.0).
-_INTERFACE_MODE_VLAN_RULES = {
-    "": ["untagged_vlan", "tagged_vlans", "qinq_svlan"],  # routed / no 802.1Q
-    "access": ["tagged_vlans", "qinq_svlan"],
-    "tagged": ["qinq_svlan"],
-    "tagged-all": ["tagged_vlans", "qinq_svlan"],
-    "q-in-q": [],
-}
-
-# rf_channel / rf_channel_frequency / rf_channel_width / rf_role may be set only on
-# wireless interface types (Interface.clean(); is_wireless == type in WIRELESS_IFACE_TYPES).
-# Keyed on every non-wireless type (complement of the wireless allow-set) so a type
-# change away from wireless clears the stale rf fields. All four are null=True -> None.
-_RF_FIELDS = ["rf_channel", "rf_channel_frequency", "rf_channel_width", "rf_role"]
-_INTERFACE_TYPE_RF_RULES = {
-    t: _RF_FIELDS for t in InterfaceTypeChoices.values() if t not in WIRELESS_IFACE_TYPES
-}
-
-# ipam.vlan: qinq_svlan may be set only on a Q-in-Q customer VLAN (qinq_role == 'cvlan');
-# VLAN.clean() rejects a stale qinq_svlan for any other role. (The reciprocal
-# "customer VLAN requires an svlan" is a presence rule, not ours -> 'cvlan' maps to [].)
-_VLAN_QINQ_RULES = {
-    "": ["qinq_svlan"],
-    "svlan": ["qinq_svlan"],
-    "cvlan": [],
-}
-
-# One policy for the whole registry, deliberately: the driver value wins over the
-# dependent fields it forbids for every entry below, with no per-driver scoping.
-# The rules encode NetBox's data model (Interface.clean() / VLAN.clean() and the
-# dcim serializer's validate()), not which serializer happens to police it, and
-# NetBox rejects the WHOLE entity where it does police it.
-#
-# Measured cost of that uniformity: virtualization.vminterface is the one entry
-# whose serializer does NO mode/VLAN validation, so a CREATE naming mode "access"
-# with tagged VLANs used to be stored as submitted. It now loses the tagged VLANs.
-# That is intended, not incidental: mode "access" with tagged VLANs is meaningless
-# either way, and the shared BaseInterface.save() clears tagged_vlans for any
-# non-tagged mode on every later save anyway (`not self._state.adding`), so the
-# stored state was one ordinary NetBox save away from disappearing.
-_CHANGESET_NORMALIZERS = {
-    "dcim.interface": {"mode": _INTERFACE_MODE_VLAN_RULES, "type": _INTERFACE_TYPE_RF_RULES},
-    "virtualization.vminterface": {"mode": _INTERFACE_MODE_VLAN_RULES},
-    "ipam.vlan": {"qinq_role": _VLAN_QINQ_RULES},
-}
-
-
-def normalize_changeset(object_type: str, prechange: dict, entity: dict) -> dict[str, str]:
-    """
-    Clear the dependent fields the effective driver value forbids.
-
-    Mutates ``entity`` in place. No-op unless ``object_type`` is registered.
-
-    The effective driver value WINS over every dependent field it forbids: the
-    field is cleared on a create (empty ``prechange``) as well as on an update,
-    and whether or not the producer submitted it explicitly. A payload naming
-    ``mode: access`` while also naming tagged VLANs is self-contradictory, and
-    NetBox answers it by rejecting the WHOLE entity (400 ``tagged_vlans:
-    "Interface mode does not support tagged vlans"``); dropping the one field the
-    mode forbids costs less than losing the entity. This is deliberately the
-    opposite of respecting producer intent for a forbidden field.
-
-    Producer intent still governs everything the driver value permits: a field a
-    driver value ALLOWS is never touched (explicit ``tagged_vlans`` under ``mode:
-    tagged`` survives), and an unrecognised driver value forbids nothing at all
-    (fail open). A value that is already empty is left exactly as submitted, so
-    clearing can never turn a no-change into a change. Clearing uses ``[]`` for
-    many-valued refs and ``None`` for single refs.
-
-    Returns ``{field: reason}`` for the submitted values it discarded — empty
-    when nothing was submitted, so the caller can tell an actual drop of producer
-    data from the injection of a clear for a stale stored value.
-    """
-    rules_by_driver = _CHANGESET_NORMALIZERS.get(object_type)
-    if not rules_by_driver:
-        return {}
-    dropped = {}
-    for driver_field, value_map in rules_by_driver.items():
-        effective = entity.get(driver_field, prechange.get(driver_field)) or ""
-        for dependent in value_map.get(effective, ()):
-            submitted = dependent in entity
-            if submitted:
-                # An already-empty submitted value needs no clearing, and
-                # rewriting it could only manufacture a spurious change.
-                if not entity[dependent]:
-                    continue
-            elif not prechange.get(dependent):
-                continue  # nothing stored, nothing stale to clear
-            ref = get_json_ref_info(object_type, dependent)
-            entity[dependent] = [] if (ref and ref.is_many) else None
-            if submitted:
-                dropped[dependent] = (
-                    f"Dropped: {driver_field} '{effective}' does not support this field."
-                )
-    return dropped
-
-
-def _apply_driver_field_policy(
-    object_type: str, prechange_data: dict, entity: dict, new_refs: list[str], warnings: dict,
-) -> list[str]:
-    """
-    Let the submitted driver value win over the dependent fields it forbids.
-
-    Returns ``new_refs`` with the dropped fields' unresolved-reference paths
-    removed: a dropped field is gone from the payload — a create strips the
-    emptied value out of ``change.data`` altogether — so the applier must not
-    walk a path the payload no longer carries. Every discarded submitted value
-    is reported as a change set warning rather than dropped silently.
-    """
-    dropped = normalize_changeset(object_type, prechange_data, entity)
-    if not dropped:
-        return new_refs
-    _merge_warnings(warnings, object_type, {k: [v] for k, v in dropped.items()})
-    return [r for r in new_refs if r.split(".", 1)[0] not in dropped]
 
 
 _prechange_cache = contextvars.ContextVar("diode_prechange_cache", default=None)
@@ -394,13 +271,7 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
                 entity = _partially_merge(prechange_data, entity, instance)
                 _align_cable_ends(prechange_data, entity)
                 _apply_merge_semantics(object_type, prechange_data, entity)
-        # Outside the "existing row" branch on purpose: a submitted driver value
-        # forbids its dependent fields on a create too, and NetBox rejects the
-        # whole entity for the contradiction rather than just the field.
-        new_refs = _apply_driver_field_policy(
-            object_type, prechange_data, entity, new_refs, warnings,
-        )
-        if instance:
+                normalize_changeset(object_type, prechange_data, entity)
             changed_data = shallow_compare_dict(
                 prechange_data, entity,
             )
