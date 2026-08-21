@@ -27,6 +27,13 @@ from .common import (
     sort_ints_first,
 )
 from .compat import apply_entity_migrations
+from .field_policy import (
+    apply_submitted_driver_field_policy,
+    droppable_dependent_fields,
+    prune_orphaned_nodes,
+    referenced_uuids,
+    release_rejected_edges,
+)
 from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -134,8 +141,22 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     entities = _transform_proto_json_1(proto_json, object_type, supported_models)
 
     entities = _topo_sort(entities)
-    deduplicated = _fingerprint_dedupe(entities)
+    # Phase 1 of the driver field policy. It runs before _resolve_existing_references
+    # because a dropped field can itself be a match criterion, and dropping it after the
+    # lookup strands the entity as a CREATE that re-plans on every ingest. This pass
+    # settles nodes that carry the contradiction on their own; duplicates that SPLIT it
+    # only become contradictory as they merge, which _fingerprint_dedupe handles.
+    # `referenced_before` is the reference graph before any drop, which the prune sweep
+    # needs to tell a nested child from a root.
+    referenced_before = referenced_uuids(entities)
+    released = apply_submitted_driver_field_policy(entities)
+    deduplicated, merge_released = _fingerprint_dedupe(entities)
+    # Everything is merged and normalized, so a conflict dedupe held back is real.
+    raise_unsettled_conflicts(deduplicated)
     deduplicated = _topo_sort(deduplicated)
+    # ONE sweep, never inside a pass: see prune_orphaned_nodes.
+    if released or merge_released:
+        deduplicated = prune_orphaned_nodes(deduplicated, referenced_before)
     _set_auto_slugs(deduplicated, supported_models)
     _handle_cached_scope(deduplicated, supported_models)
     resolved = _resolve_existing_references(deduplicated)
@@ -574,16 +595,20 @@ def _generate_slug(object_type, data):
     return None
 
 @profiled("fingerprint_dedupe")
-def _fingerprint_dedupe(entities: list[dict]) -> list[dict]: # noqa: C901
+def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa: C901
     """
     Deduplicates/merges entities by fingerprint.
 
     *list must be in topo order by reference already*
+
+    Also returns whether normalizing a merged node released any reference edge, i.e.
+    whether the caller's prune sweep has anything to do.
     """
     by_uuid = {}
     by_fp = {}
     deduplicated = []
     new_refs = {} # uuid -> uuid
+    refs_released = False
 
     for entity in entities:
         if entity.get('_is_post_create'):
@@ -608,14 +633,24 @@ def _fingerprint_dedupe(entities: list[dict]) -> list[dict]: # noqa: C901
         else:
             existing = by_uuid[existing_uuid]
             new_refs[entity['_uuid']] = existing['_uuid']
+            refs_before = existing['_refs'] | entity['_refs']
             merged = _merge_nodes(existing, entity)
+            # A deferred conflict releases the rejected value's edges, which the caller's
+            # prune sweep must hear about too -- not only the drops below.
+            if merged['_refs'] != refs_before:
+                refs_released = True
             _update_unresolved_refs(merged, new_refs)
+            # Normalize NOW, before the next duplicate is compared against this node. A
+            # merge is where duplicates each carrying half a contradiction become
+            # contradictory, and leaving it there makes the outcome depend on how many
+            # duplicates follow. Drops only: the prune is the caller's one sweep.
+            refs_released = apply_submitted_driver_field_policy([merged]) or refs_released
             for fp in fps:
                 by_fp[fp] = existing_uuid
             by_uuid[existing_uuid] = merged
             deduplicated.append(existing_uuid)
 
-    return [by_uuid[u] for u in deduplicated]
+    return [by_uuid[u] for u in deduplicated], refs_released
 
 def _merge_nodes(a: dict, b: dict) -> dict:
     """
@@ -627,22 +662,74 @@ def _merge_nodes(a: dict, b: dict) -> dict:
     """
     merged = copy.deepcopy(a)
     merged['_refs'] = a['_refs'] | b['_refs']
+    _union_warnings(merged, a, b)
 
+    deferred = dict(a.get('_deferred_conflicts') or {})
+    rejected = []
     for k, v in b.items():
         if k.startswith("_"):
             continue
         if k in merged and merged[k] != v:
-            ov = {
-                ok: v for ok, v in a.items()
-                if ok != k and not ok.startswith("_")
-            }
-            raise serializers.ValidationError({
-                NON_FIELD_ERRORS: [
-                    f"Conflicting values for '{k}' merging duplicate {a.get('_object_type')},"
-                    f" `{merged[k]}` != `{v}` other values : {ov}"]
-            })
+            error = _conflict_error(a, k, merged[k], v)
+            # Consulted only on an actual conflict: the gate reads the content-type
+            # table, and a conflict-free duplicate merge must not depend on it.
+            if k not in droppable_dependent_fields(a.get('_object_type') or ''):
+                raise serializers.ValidationError(error)
+            # A driver value on a duplicate not reached yet can delete this field and
+            # settle the disagreement, so raising now would make the outcome depend on
+            # the order the duplicates arrive in. See raise_unsettled_conflicts.
+            deferred.setdefault(k, error)
+            rejected.append(v)
+            continue
         merged[k] = v
+    if rejected:
+        release_rejected_edges(merged, rejected)
+    if deferred:
+        merged['_deferred_conflicts'] = deferred
     return merged
+
+
+def _union_warnings(merged: dict, a: dict, b: dict) -> None:
+    """Union both nodes' _warnings per field instead of preferring a's."""
+    # Underscore keys are otherwise "prefer a's value", which would discard a drop b
+    # recorded before dedupe -- and a drop nobody hears about defeats the warning.
+    merged_warnings = copy.deepcopy(a.get('_warnings') or {})
+    for field, msgs in (b.get('_warnings') or {}).items():
+        for msg in msgs:
+            if msg not in merged_warnings.setdefault(field, []):
+                merged_warnings[field].append(msg)
+    if merged_warnings:
+        merged['_warnings'] = merged_warnings
+
+
+def _conflict_error(a: dict, field: str, mine, theirs) -> dict:
+    """The error body for two duplicate nodes disagreeing about ``field``."""
+    ov = {
+        ok: v for ok, v in a.items()
+        if ok != field and not ok.startswith("_")
+    }
+    return {
+        NON_FIELD_ERRORS: [
+            f"Conflicting values for '{field}' merging duplicate {a.get('_object_type')},"
+            f" `{mine}` != `{theirs}` other values : {ov}"]
+    }
+
+
+def raise_unsettled_conflicts(entities: list[dict]) -> None:
+    """
+    Raise the duplicate-merge conflicts no driver value settled.
+
+    A conflict on a droppable field is held during dedupe; by here the graph is merged
+    and normalized, so a field still present was never dropped and the disagreement was
+    real after all.
+    """
+    for entity in entities:
+        deferred = entity.pop('_deferred_conflicts', None)
+        if not deferred:
+            continue
+        for field, error in deferred.items():
+            if field in entity:
+                raise serializers.ValidationError(error)
 
 
 def _update_unresolved_refs(entity, new_refs):
