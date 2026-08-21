@@ -616,7 +616,12 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     update_data = dict(data)
     snapshot_for_apply(existing)
     if not existing.members.filter(pk=master_pk).exists():
-        match _attach_master_to_virtualchassis(existing, master_pk, request):
+        # A device change in this same changeset asserting this chassis IS authority
+        # for the membership; without it, a VC payload is not.
+        move_is_planned = _changeset_plans_membership(change, change_set, created, master_pk)
+        match _attach_master_to_virtualchassis(
+            existing, master_pk, request, move_is_planned=move_is_planned
+        ):
             case _MasterAttach.ATTACHED:
                 # The attach bumped VirtualChassis.member_count through a direct
                 # UPDATE (utilities.counters), invisible to this instance. Re-read
@@ -687,7 +692,9 @@ def _master_in_other_chassis_error(virtual_chassis, master_pk):
     )
 
 
-def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> _MasterAttach:
+def _attach_master_to_virtualchassis(
+    virtual_chassis, master_pk, request, move_is_planned: bool = False
+) -> _MasterAttach:
     """
     Make an adopted VC's named master a member of it. Reports which case this was.
 
@@ -700,11 +707,20 @@ def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> _Ma
     apply-time dedupe decision.
 
     Refuses (IN_OTHER_CHASSIS) when the device is a plain member of another
-    chassis. Membership is asserted by the DEVICE payload
-    (Device.virtual_chassis); a VC payload naming a master is not authority to
-    pull a device out of a chassis it is already in. The caller turns that
-    refusal into a reported conflict rather than a quiet drop of master --
-    _try_adopt_masterless_virtualchassis, and _MasterAttach on why.
+    chassis and ``move_is_planned`` is false. Membership is asserted by the
+    DEVICE payload (Device.virtual_chassis); a VC payload naming a master is not
+    authority to pull a device out of a chassis it is already in. The caller
+    turns that refusal into a reported conflict rather than a quiet drop of
+    master -- _try_adopt_masterless_virtualchassis, and _MasterAttach on why.
+
+    ``move_is_planned`` says this changeset already carries the device change
+    that asserts the membership (_changeset_plans_membership). Then the move is
+    not this payload's invention and refusing it is wrong: the device change is
+    in the preview, it is ordered after the chassis it names, and rejecting the
+    apply rolls it back so every identical re-ingest fails the same way. The
+    membership write still has to happen here rather than being left to that
+    deferred update, because NetBox makes membership a precondition of setting
+    VirtualChassis.master.
 
     Reports separately (MASTERS_OTHER_CHASSIS) when the device already MASTERS
     another chassis. That is not "a membership the payload may not assert" but
@@ -737,7 +753,7 @@ def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> _Ma
         pk=virtual_chassis.pk
     ).exists():
         return _MasterAttach.MASTERS_OTHER_CHASSIS
-    if device.virtual_chassis_id is not None:
+    if device.virtual_chassis_id is not None and not move_is_planned:
         return _MasterAttach.IN_OTHER_CHASSIS
     device_serializer_class = get_serializer_for_model(device_model)
     snapshot_for_apply(device)

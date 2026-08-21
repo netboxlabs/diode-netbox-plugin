@@ -1306,6 +1306,39 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self._assert_single_vc("vce-stack", master_name="vce-sw1",
                               members={"vce-sw1": 2, "vce-sw2": 1, "vce-sw3": 3})
 
+    def test_a_device_payload_may_move_itself_into_the_chassis_it_names(self):
+        """A device that carries its own membership change IS authority for the move."""
+        # The sibling test above refuses this move for a STANDALONE chassis payload,
+        # and that refusal was right. Applied to a device payload it was wrong: the
+        # plan contains `update dcim.device` asserting this chassis, ordered after the
+        # create it names, so the move is the producer's request and is in the preview.
+        # Refusing it rejected the apply before that update ran, rolled it back, and
+        # every identical re-ingest failed the same way -- a permanent 400 on the
+        # member-first shape this feature exists for.
+        old = VirtualChassis.objects.create(name="vcm-old")
+        mover = Device.objects.create(
+            name="vcm-d1", site=self.site, device_type=self.dt, role=self.role
+        )
+        Device.objects.filter(pk=mover.pk).update(virtual_chassis=old, vc_position=1)
+        target = VirtualChassis.objects.create(name="vcm-new")
+
+        payload = self._device_payload("vcm-d1", extra={
+            "virtual_chassis": {
+                "name": "vcm-new",
+                "master": self._device_payload("vcm-d1")["entity"]["device"],
+            },
+            "vc_position": 1,
+        })
+        self._diff_apply(payload)
+
+        mover.refresh_from_db()
+        target.refresh_from_db()
+        self.assertEqual(mover.virtual_chassis_id, target.pk)
+        self.assertEqual(target.master_id, mover.pk)
+        self.assertEqual(VirtualChassis.objects.filter(name="vcm-new").count(), 1)
+        self.assertEqual(target.member_count, target.members.count())
+        self._assert_noop_rediff(payload)
+
     def test_standalone_vc_payload_will_not_move_master_out_of_another_chassis(self):
         """
         Adoption attaches a chassis-less device; it does not relocate one -- and says so.
