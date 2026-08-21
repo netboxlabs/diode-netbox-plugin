@@ -620,6 +620,19 @@ class VCPartitionKeyScopeTests(TestCase):
     """The group qualifier must not reach the keys that are not the name."""
 
     @staticmethod
+    def _distinct(result):
+        """
+        How many distinct nodes survived, which is NOT len(result).
+
+        _fingerprint_dedupe appends to its output once per INPUT entity, and a
+        merge appends the survivor's uuid again -- so a merged pair comes back
+        as a two-element list holding the same node twice. Counting the list
+        was the vacuous assertion this helper exists to stop: it reports the
+        input count either way.
+        """
+        return len({entity["_uuid"] for entity in result})
+
+    @staticmethod
     def _vc(uuid, name, master_uuid):
         return {
             "_uuid": uuid,
@@ -661,6 +674,44 @@ class VCPartitionKeyScopeTests(TestCase):
         self.assertIn("fpr-stack", message)
         self.assertIn("fpr-other", message)
 
+    @staticmethod
+    def _addressed(uuid, name, netbox_id):
+        return {
+            "_uuid": uuid,
+            "_object_type": "dcim.virtualchassis",
+            "_refs": set(),
+            "name": name,
+            "_netbox_id": netbox_id,
+        }
+
+    def test_two_nodes_addressing_different_rows_do_not_merge(self):
+        """
+        An explicit row id is identity, and dedupe is where it has to be read.
+
+        _resolve_existing_references is the only other place that consults
+        _netbox_id, and it runs AFTER _fingerprint_dedupe. So two same-named
+        nodes explicitly addressing two DIFFERENT rows were merged into one
+        before anything looked at their ids, and one addressed row was silently
+        dropped. An id outranks even master here: it names the row itself.
+        """
+        nodes = [
+            self._addressed("vc-1", "fpi-stack", 4001),
+            self._addressed("vc-2", "fpi-stack", 4002),
+        ]
+        result, _ = transformer._fingerprint_dedupe(nodes)
+        self.assertEqual(self._distinct(result), 2, "two separately addressed rows merged")
+        self.assertEqual({e["_netbox_id"] for e in result}, {4001, 4002})
+
+    def test_two_nodes_addressing_the_same_row_still_merge(self):
+        """The other direction: one id named twice is one node, as before."""
+        nodes = [
+            self._addressed("vc-1", "fpi-same", 4003),
+            self._addressed("vc-2", "fpi-same", 4003),
+        ]
+        result, _ = transformer._fingerprint_dedupe(nodes)
+        self.assertEqual(self._distinct(result), 1, "one addressed row became two nodes")
+        self.assertEqual(result[0]["_netbox_id"], 4003)
+
     def test_the_split_itself_still_holds_under_the_narrowed_qualifier(self):
         """Narrowing the qualifier to the name key must not un-split a bucket."""
         nodes = [
@@ -668,5 +719,6 @@ class VCPartitionKeyScopeTests(TestCase):
             self._vc("vc-b", "fpr-two", "dev-m2"),
         ]
         result, _ = transformer._fingerprint_dedupe(nodes)
-        self.assertEqual(len(result), 2, "the two masters were merged into one chassis")
+        self.assertEqual(self._distinct(result), 2,
+                         "the two masters were merged into one chassis")
         self.assertEqual({e["name"] for e in result}, {"fpr-two"})

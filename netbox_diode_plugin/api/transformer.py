@@ -40,7 +40,7 @@ from .matcher import (
     find_existing_object,
     fingerprints,
     partition_vc_identities,
-    vc_name_fingerprint,
+    vc_unique_master_fingerprint,
 )
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -854,23 +854,25 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
             fps = fingerprints(entity, entity['_object_type'])
             group = partition.get(entity['_uuid'])
             if group is not None:
-                # Keep the groups apart under the NAME key only, rather than teaching
-                # this loop a second, type-aware notion of "is this the same node".
-                # Two nodes in one group are qualified identically and merge exactly as
-                # before; two in different groups no longer meet on the name.
+                # Keep the groups apart, rather than teaching this loop a second,
+                # type-aware notion of "is this the same node". Two nodes in one
+                # group are qualified identically and merge exactly as before; two
+                # in different groups no longer meet.
                 #
-                # Only the name key. This qualifier is bucket-local -- a node gets one
-                # only inside a name bucket that actually splits -- so qualifying every
-                # key separated a partitioned node from every UNPARTITIONED one under
-                # all of them, and two nodes naming ONE master under DIFFERENT names
-                # stopped merging: two creates, both claiming a master the DB holds
-                # unique. The other keys need no qualifier anyway. unique_master is a DB
-                # unique constraint, so nodes agreeing there are the same row whatever
-                # their names say, and a split always means some asserted field differs,
-                # which the whole-payload key already sees.
-                name_fp = vc_name_fingerprint(entity)
-                if name_fp is not None:
-                    fps = [(fp, group) if fp == name_fp else fp for fp in fps]
+                # Every key EXCEPT unique_master. That one is a DB unique
+                # constraint, so two nodes naming one master are one row whatever
+                # their names or groups say and must still meet -- qualifying it
+                # separated a partitioned node from every UNPARTITIONED one (the
+                # qualifier is bucket-local, assigned only inside a name bucket
+                # that actually splits), so two nodes naming ONE master under
+                # DIFFERENT names stopped merging and the second create bound the
+                # first row. Qualifying ONLY the name key was equally wrong the
+                # other way: the whole-payload key ignores private fields, so two
+                # nodes differing only in _netbox_id hashed identically and merged
+                # straight back together, dropping one addressed row.
+                keep = vc_unique_master_fingerprint(entity)
+                fps = [fp if keep is not None and fp == keep else (fp, group)
+                       for fp in fps]
             for fp in fps:
                 existing_uuid = by_fp.get(fp)
                 if existing_uuid is not None:

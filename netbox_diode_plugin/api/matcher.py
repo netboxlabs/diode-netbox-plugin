@@ -478,10 +478,18 @@ def asserted_vc_identity(data: dict) -> dict:
     and nodes not apart, or the other way round -- two notions of VC identity
     that can disagree is how this branch earned several of its earlier bugs.
 
+    ``_netbox_id`` is the strongest identity of all and is read first: it names
+    a database row outright, so two nodes carrying different ones are different
+    chassis whatever else they agree on. It has to be read HERE because dedupe
+    runs before _resolve_existing_references, which is the only other place
+    that looks at it -- without it, two same-named nodes explicitly addressing
+    two different rows merged into one before anything consulted their ids.
+
     master is here and NOT in _VC_DISCRIMINATORS, and the split is about where
     the comparison happens rather than about what identity means.
-    VirtualChassis.master is a DB UNIQUE constraint, so it is the STRONGEST
-    identity there is: two nodes naming different masters are different stacks
+    VirtualChassis.master is a DB UNIQUE constraint, so it is the strongest
+    identity a payload can carry that is not simply the row's own id: two nodes
+    naming different masters are different stacks
     even with no domain anywhere, and two naming the same master are one stack
     whatever else they say. But it cannot narrow live rows the way a
     discriminator does -- at transform time it is an UnresolvedReference to a
@@ -496,6 +504,9 @@ def asserted_vc_identity(data: dict) -> dict:
     for a member-only payload, which claims nothing about which stack this is.
     """
     identity = {}
+    netbox_id = data.get("_netbox_id")
+    if netbox_id is not None:
+        identity["_netbox_id"] = netbox_id
     master = data.get("master")
     if master is not None:
         identity["master"] = master
@@ -524,10 +535,18 @@ def vc_identities_conflict(a: dict, b: dict) -> bool:
     that could not be inserted. Different masters mean different chassis even if
     the domains agree.
     """
+    if "_netbox_id" in a and "_netbox_id" in b:
+        # An explicit row id outranks everything, including master. Two nodes
+        # naming ONE row are one chassis and any other disagreement between
+        # them is a field conflict; two naming DIFFERENT rows are different
+        # chassis even if they also claim one master, and letting that reach
+        # the unique constraint reports it, where merging them would silently
+        # drop one node's addressed row.
+        return a["_netbox_id"] != b["_netbox_id"]
     if "master" in a and "master" in b:
         return a["master"] != b["master"]
     for field, value in a.items():
-        if field == "master":
+        if field in ("master", "_netbox_id"):
             continue
         if field in b and b[field] != value:
             return True
@@ -646,27 +665,29 @@ def _place_unseeded_vc_nodes(
             _absorb_vc_identity(groups[group_id], identities[index])
 
 
-def vc_name_fingerprint(data: dict):
+def vc_unique_master_fingerprint(data: dict):
     """
-    The name-keyed VirtualChassis fingerprint, the only one a partition qualifies.
+    The one VirtualChassis fingerprint an identity partition must NOT qualify.
 
-    The partition exists to stop two same-NAME nodes with incompatible identity
-    from merging, and this is the fingerprint that merges them. Every other
-    fingerprint VirtualChassis has is either the auto-derived unique_master key
-    or the whole-payload one, and two nodes agreeing on those ARE the same row
-    whatever their names say: master is a DB unique constraint, and a split
-    always implies some asserted field differs, so the whole-payload key
-    already tells split nodes apart on its own.
+    Qualifying a split node's fingerprints keeps the groups from meeting, and
+    every key has to be qualified except this one -- the inverse of the first
+    attempt, which qualified only the name key and let two groups meet on the
+    whole-payload key instead. That key ignores private fields, so two nodes
+    differing ONLY in ``_netbox_id`` hash identically and merged straight back
+    together, silently dropping one addressed row.
 
-    Qualifying all of them instead separated a partitioned node from every
-    UNPARTITIONED node under every key -- the qualifier is bucket-local and is
-    only assigned inside a name bucket that actually splits -- so two nodes
+    unique_master is the exception because it is a DB unique constraint:
+    VirtualChassis.master is unique, so two nodes naming one master ARE one row
+    whatever their names or groups say, and they must still meet. Qualifying it
+    too was the other half of the same bug in the other direction -- two nodes
     naming one master under DIFFERENT names stopped merging, and the second
-    create then bound the first row while claiming a master the DB holds
-    unique. Qualify the name key alone.
+    create bound the first row while claiming a master the DB holds unique.
+
+    Returns None when the payload asserts no master, in which case nothing is
+    exempt and every fingerprint is qualified.
     """
     for matcher in get_model_matchers(get_object_type_model("dcim.virtualchassis")):
-        if isinstance(matcher, VirtualChassisNameMatcher):
+        if getattr(matcher, "name", None) == "unique_master":
             return matcher.fingerprint(data)
     return None
 
