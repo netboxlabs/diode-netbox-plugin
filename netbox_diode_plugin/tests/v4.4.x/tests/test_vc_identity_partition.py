@@ -1,14 +1,384 @@
-"""The rule that decides whether two same-named VirtualChassis nodes are one chassis."""
+"""Two same-named VirtualChassis nodes in ONE entity graph: merged, or kept apart."""
 from itertools import permutations
+from types import SimpleNamespace
+from unittest import mock
 
+from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
 from django.test import SimpleTestCase
+from utilities.testing import APITestCase
 
+from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.api.common import UnresolvedReference
 from netbox_diode_plugin.api.matcher import (
     asserted_vc_identity,
     partition_vc_identities,
     vc_identities_conflict,
 )
+from netbox_diode_plugin.plugin_config import get_diode_user
+
+
+class VirtualChassisIdentityPartitionTests(APITestCase):
+    """
+    Same name, one graph: what the payload asserts decides one chassis or two.
+
+    VirtualChassisNameMatcher.fingerprint is keyed on the name ALONE, and
+    deliberately, so that a member's name-only chassis node and the
+    master-bearing one merge into a single create (issue #183). The cost, not
+    measured until this file existed, is that two same-named nodes asserting
+    DIFFERENT identity merged too -- and _merge_nodes then rejected the whole
+    entity, identically on every retry, so the payload could never be ingested
+    at all.
+
+    Scope, measured rather than assumed: it only ever happened INSIDE one entity
+    graph. Separate entities of one bulk request are transformed separately and
+    were never affected (test_separate_entities_were_never_affected).
+
+    The cross-device graphs here are built with a CABLE between two switches,
+    which is how two unrelated stacks legitimately end up in one entity graph
+    and is the one device-to-device edge NetBox does not second-guess. (A device
+    reaching another through primary_ip4 plans fine and then fails NetBox's own
+    "the specified IP address is not assigned to this device" on apply, so it
+    cannot show what happens after the plan.)
+    """
+
+    def setUp(self):
+        """Mock OAuth2 introspection so the Diode API endpoints accept requests."""
+        super().setUp()
+        self.diff_url = "/netbox/api/plugins/diode/generate-diff/"
+        self.apply_url = "/netbox/api/plugins/diode/apply-change-set/"
+        self.bulk_plan_apply_url = "/netbox/api/plugins/diode/bulk-plan-apply/"
+        self.auth = {"HTTP_AUTHORIZATION": "Bearer mocked_oauth_token"}
+        diode_user = SimpleNamespace(
+            user=get_diode_user(),
+            token_scopes=["netbox:read", "netbox:write"],
+            token_data={"scope": "netbox:read netbox:write"},
+        )
+        p = mock.patch.object(
+            DiodeOAuth2Authentication, "_introspect_token", return_value=diode_user
+        )
+        p.start()
+        self.addCleanup(p.stop)
+
+        self.site = Site.objects.create(name="fp-site", slug="fp-site")
+        mfr = Manufacturer.objects.create(name="fp-mfr", slug="fp-mfr")
+        self.dt = DeviceType.objects.create(manufacturer=mfr, model="fp-dt", slug="fp-dt")
+        self.role = DeviceRole.objects.create(name="fp-role", slug="fp-role")
+
+    # ---- payload builders -------------------------------------------------
+
+    def _device(self, name, **extra):
+        """A complete dcim.device entity, so every nested device can be created."""
+        return dict({
+            "name": name,
+            "site": {"name": "fp-site"},
+            "role": {"name": "fp-role"},
+            "device_type": {"manufacturer": {"name": "fp-mfr"}, "model": "fp-dt"},
+        }, **extra)
+
+    def _cabled(self, a, b, iface="Gi0/1"):
+        """One dcim.cable entity whose two ends land on two different devices."""
+        def termination(device):
+            return [{"object_interface": {
+                "device": device, "name": iface, "type": "1000base-t",
+            }}]
+
+        return {"timestamp": 1, "object_type": "dcim.cable", "entity": {"cable": {
+            "a_terminations": termination(a),
+            "b_terminations": termination(b),
+            "status": "connected", "type": "cat6",
+        }}}
+
+    def _seed_labelled_stack(self, name, domain, member):
+        """ORM-seed a converged one-member stack carrying a domain."""
+        vc = VirtualChassis.objects.create(name=name, domain=domain)
+        device = Device.objects.create(
+            name=member, site=self.site, device_type=self.dt, role=self.role
+        )
+        Device.objects.filter(pk=device.pk).update(virtual_chassis=vc, vc_position=2)
+        vc.refresh_from_db()
+        vc.master = device
+        vc.save()
+        return vc
+
+    # ---- helpers ----------------------------------------------------------
+
+    def _plan(self, payload):
+        r = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()["change_set"]
+
+    def _apply(self, change_set):
+        r = self.client.post(self.apply_url, data=change_set, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+
+    def _refused(self, payload):
+        """The whole entity rejected, with the merge conflict as the reason."""
+        r = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        return str(r.json()["errors"])
+
+    def _vc_changes(self, change_set):
+        return [c for c in change_set["changes"]
+                if c["object_type"] == "dcim.virtualchassis"]
+
+    def _non_noop(self, payload):
+        return [c for c in self._plan(payload)["changes"] if c["change_type"] != "noop"]
+
+    def _assert_noop_rediff(self, payload):
+        self.assertEqual(self._non_noop(payload), [])
+
+    # ---- the payload that could never be ingested -------------------------
+
+    def test_different_masters_in_one_graph_plan_two_chassis_and_apply(self):
+        """
+        The strong case: two switches in different stacks that share a chassis name.
+
+        VirtualChassis.master is a DB UNIQUE constraint, so two nodes naming
+        DIFFERENT masters cannot be one row: they are two stacks, and since
+        VirtualChassis.name is not unique in NetBox, two rows is a state NetBox
+        permits and an operator can already be in. Merging them produced
+        "Conflicting values for 'master' merging duplicate dcim.virtualchassis"
+        and rejected the entity -- cable, interfaces, devices and all -- on
+        every attempt.
+
+        Measured here end to end: two creates planned, applied, each member in
+        the stack its OWN reference named, and an empty re-diff. A merge would
+        have put both members in one stack; a fingerprint keyed on master
+        instead of name would have split the intended merge below.
+        """
+        near = self._device("fpm-d1", vc_position=2, virtual_chassis={
+            "name": "fpm-stack", "master": self._device("fpm-a1"),
+        })
+        far = self._device("fpm-d2", vc_position=2, virtual_chassis={
+            "name": "fpm-stack", "master": self._device("fpm-b1"),
+        })
+        payload = self._cabled(near, far)
+
+        cs = self._plan(payload)
+        chassis = self._vc_changes(cs)
+        self.assertEqual([c["change_type"] for c in chassis], ["create", "create"], cs)
+        self.assertEqual({c["data"]["name"] for c in chassis}, {"fpm-stack"})
+        self._apply(cs)
+
+        rows = VirtualChassis.objects.filter(name="fpm-stack")
+        self.assertEqual(rows.count(), 2)
+        by_master = {row.master.name: row for row in rows}
+        self.assertEqual(set(by_master), {"fpm-a1", "fpm-b1"},
+                         "the two stacks did not keep their own masters")
+        self.assertEqual(
+            {d.name for d in by_master["fpm-a1"].members.all()}, {"fpm-a1", "fpm-d1"})
+        self.assertEqual(
+            {d.name for d in by_master["fpm-b1"].members.all()}, {"fpm-b1", "fpm-d2"})
+        self._assert_noop_rediff(payload)
+
+    def test_two_labelled_stacks_that_exist_are_each_matched_by_their_domain(self):
+        """
+        Same name, different domains, and both rows already in NetBox: two noops.
+
+        This is the reading the fix takes on domain, and the measurement that
+        chose it. matcher._VC_DISCRIMINATORS already commits to a domain telling
+        same-named chassis APART -- narrow_vc_candidates uses exactly these two
+        rows to resolve exactly this reference. Merging the nodes first denied
+        the matcher the chance: the entity was rejected with "Conflicting values
+        for 'domain'" before any lookup ran, even though NetBox held an
+        unambiguous answer for each node. Treating the two domains as ONE
+        contradictory description would have kept it that way, and would leave
+        the plugin with two notions of VC identity that disagree.
+        """
+        row_a = self._seed_labelled_stack("fpl-stack", "building-a", "fpl-a1")
+        row_b = self._seed_labelled_stack("fpl-stack", "building-b", "fpl-b1")
+        near = self._device("fpl-a1", vc_position=2, virtual_chassis={
+            "name": "fpl-stack", "domain": "building-a",
+        })
+        far = self._device("fpl-b1", vc_position=2, virtual_chassis={
+            "name": "fpl-stack", "domain": "building-b",
+        })
+        payload = self._cabled(near, far, iface="Gi0/2")
+
+        cs = self._plan(payload)
+        planned = {c["object_id"] for c in self._vc_changes(cs)}
+        self.assertEqual(planned, {row_a.pk, row_b.pk},
+                         "each node must match its own row")
+        self.assertEqual(
+            [c["change_type"] for c in self._vc_changes(cs)], ["noop", "noop"], cs)
+        self._apply(cs)
+        self._assert_noop_rediff(payload)
+        for row, domain, member in ((row_a, "building-a", "fpl-a1"),
+                                    (row_b, "building-b", "fpl-b1")):
+            row.refresh_from_db()
+            self.assertEqual(row.domain, domain)
+            self.assertEqual([d.name for d in row.members.all()], [member])
+
+    def test_the_reported_domain_payload_is_ingested_and_what_is_left_over(self):
+        """
+        The reported repro, and the honest bound on what the fix buys it.
+
+        Shape: a member names its chassis with a domain and a master, and the
+        MASTER's own chassis reference names the same chassis with a different
+        domain. Two nodes, two groups, two creates planned -- so the entity is
+        ingested where it used to be rejected outright.
+
+        Only ONE row results, and that is the applier, not the partition: the
+        second group's create carries no master, so it takes the pre-save match
+        (matcher._virtualchassis_pre_save_match_applies) and
+        VirtualChassisNameMatcher.resolve rule 0 binds a lone same-named
+        candidate on the strength of the name, deliberately and regardless of
+        the domain asserted. The match is bind-only, so building-b is not
+        written, and the deviation re-plans as an update on every pass. Pinned
+        rather than glossed: a masterless chassis CREATE can never become a row
+        of its own beside a same-named one, so the domain split only reaches a
+        stable state where the rows already exist (the test above) or where each
+        group carries a master.
+        """
+        payload = {"timestamp": 1, "object_type": "dcim.device", "entity": {"device":
+            self._device("fpd-d1", vc_position=2, virtual_chassis={
+                "name": "fpd-stack",
+                "domain": "building-a",
+                "master": self._device("fpd-m1", virtual_chassis={
+                    "name": "fpd-stack", "domain": "building-b",
+                }),
+            })}}
+
+        cs = self._plan(payload)
+        self.assertEqual([c["change_type"] for c in self._vc_changes(cs)],
+                         ["create", "create"], cs)
+        self._apply(cs)
+
+        rows = VirtualChassis.objects.filter(name="fpd-stack")
+        self.assertEqual(rows.count(), 1)
+        row = rows.first()
+        self.assertEqual(row.master.name, "fpd-m1")
+        self.assertEqual(row.domain, "building-a")
+        self.assertEqual({d.name for d in row.members.all()}, {"fpd-d1", "fpd-m1"})
+        self.assertEqual(
+            [(c["change_type"], c["object_type"], c["data"].get("domain"))
+             for c in self._non_noop(payload)],
+            [("update", "dcim.virtualchassis", "building-b")],
+            "the leftover deviation is not the one the docstring describes",
+        )
+
+    # ---- what must keep merging -------------------------------------------
+
+    def test_the_name_only_node_still_merges_into_the_master_bearing_one(self):
+        """Issue #183's merge, inside one graph: one chassis, not a split one."""
+        payload = {"timestamp": 1, "object_type": "dcim.device", "entity": {"device":
+            self._device("fpi-d1", vc_position=2, virtual_chassis={
+                "name": "fpi-stack",
+                "master": self._device("fpi-m1", virtual_chassis={"name": "fpi-stack"}),
+            })}}
+
+        cs = self._plan(payload)
+        self.assertEqual(len(self._vc_changes(cs)), 1, cs)
+        self._apply(cs)
+        rows = VirtualChassis.objects.filter(name="fpi-stack")
+        self.assertEqual(rows.count(), 1)
+        self.assertEqual(rows.first().master.name, "fpi-m1")
+        self._assert_noop_rediff(payload)
+
+    def test_the_same_master_stub_twice_still_plans_one_chassis(self):
+        """
+        The orb shape: every reference carries the SAME master stub, one create.
+
+        This is what forces the partition to compare CANONICAL references
+        (transformer._canonical_uuids). One device mentioned twice in a graph is
+        two nodes with two uuids until dedupe merges them, so comparing the
+        references as they arrive would read two identical stubs as two
+        different masters and split the very chassis this branch exists to keep
+        whole.
+        """
+        stub = self._device("fpo-m1")
+        near = self._device("fpo-d1", vc_position=2, virtual_chassis={
+            "name": "fpo-stack", "master": dict(stub),
+        })
+        far = self._device("fpo-d2", vc_position=3, virtual_chassis={
+            "name": "fpo-stack", "master": dict(stub),
+        })
+        payload = self._cabled(near, far, iface="Gi0/3")
+
+        cs = self._plan(payload)
+        self.assertEqual(len(self._vc_changes(cs)), 1, cs)
+        self._apply(cs)
+        rows = VirtualChassis.objects.filter(name="fpo-stack")
+        self.assertEqual(rows.count(), 1)
+        row = rows.first()
+        self.assertEqual(row.master.name, "fpo-m1")
+        self.assertEqual(
+            {d.name for d in row.members.all()}, {"fpo-m1", "fpo-d1", "fpo-d2"},
+            "the one stack lost a member",
+        )
+        self._assert_noop_rediff(payload)
+
+    # ---- conflicts that are still conflicts -------------------------------
+
+    def test_one_master_and_two_domains_is_a_conflict_not_two_rows(self):
+        """
+        The unique key outranks the discriminator, in BOTH directions.
+
+        Two nodes naming the SAME master are one row -- the constraint says so
+        -- so their disagreement about domain is a field conflict to report,
+        not licence to plan a second row whose insert could not succeed.
+        """
+        stub = self._device("fpc-m1")
+        near = self._device("fpc-d1", vc_position=2, virtual_chassis={
+            "name": "fpc-stack", "domain": "building-a", "master": dict(stub),
+        })
+        far = self._device("fpc-d2", vc_position=3, virtual_chassis={
+            "name": "fpc-stack", "domain": "building-b", "master": dict(stub),
+        })
+
+        errors = self._refused(self._cabled(near, far, iface="Gi0/4"))
+        self.assertIn("Conflicting values for 'domain'", errors)
+        self.assertEqual(VirtualChassis.objects.count(), 0)
+
+    def test_a_non_identity_field_disagreement_is_still_a_conflict(self):
+        """
+        The control: the partition splits on IDENTITY, never on disagreement.
+
+        Neither node asserts a master or a domain, so both describe the one
+        unidentified chassis, and their descriptions genuinely disagree. That is
+        two sources contradicting each other about real data, which nothing can
+        discard -- it must stay a reported conflict rather than quietly becoming
+        two rows.
+        """
+        near = self._device("fpn-d1", vc_position=2, virtual_chassis={
+            "name": "fpn-stack", "description": "from the near device",
+        })
+        far = self._device("fpn-d2", vc_position=3, virtual_chassis={
+            "name": "fpn-stack", "description": "from the far device",
+        })
+
+        errors = self._refused(self._cabled(near, far, iface="Gi0/5"))
+        self.assertIn("Conflicting values for 'description'", errors)
+        self.assertEqual(VirtualChassis.objects.count(), 0)
+
+    # ---- the bound of the finding ------------------------------------------
+
+    def test_separate_entities_were_never_affected(self):
+        """
+        Two entities, same chassis name, different masters: always planned fine.
+
+        Each entity of a bulk request is transformed on its own, so these two
+        nodes never met in one graph and neither plan ever saw a conflict. It is
+        pinned so the fix is not read as having rescued this, and so the
+        single-entity and bulk paths cannot silently diverge.
+        """
+        bulk = {"entities": [
+            {"id": "a", "object_type": "dcim.device", "entity": {"device": self._device(
+                "fps-d1", vc_position=2, virtual_chassis={
+                    "name": "fps-stack", "master": self._device("fps-a1")})}},
+            {"id": "b", "object_type": "dcim.device", "entity": {"device": self._device(
+                "fps-d2", vc_position=2, virtual_chassis={
+                    "name": "fps-stack", "master": self._device("fps-b1")})}},
+        ]}
+        r = self.client.post(self.bulk_plan_apply_url, data=bulk, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        for result in r.json()["results"]:
+            self.assertIsNone(result.get("errors"), result)
+        self.assertEqual(
+            {row.master.name for row in VirtualChassis.objects.filter(name="fps-stack")},
+            {"fps-a1", "fps-b1"},
+        )
 
 
 class VCIdentityPartitionRuleTests(SimpleTestCase):

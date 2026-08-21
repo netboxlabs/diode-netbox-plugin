@@ -35,7 +35,12 @@ from .field_policy import (
     referenced_uuids,
     release_rejected_edges,
 )
-from .matcher import find_existing_object, fingerprints
+from .matcher import (
+    asserted_vc_identity,
+    find_existing_object,
+    fingerprints,
+    partition_vc_identities,
+)
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
     apply_format_transformations,
@@ -714,6 +719,101 @@ def _generate_slug(object_type, data):
         return slugify(str(source_value))
     return None
 
+def _canonical_uuids(entities: list[dict]) -> dict[str, str]:
+    """
+    Replay the dedupe's IDENTITY decisions only, merging nothing. uuid -> survivor uuid.
+
+    _vc_identity_partition has to compare two chassis nodes' master references,
+    and a reference is only comparable once it is CANONICAL: one device
+    mentioned twice in a graph is two nodes with two uuids until dedupe merges
+    them, so the real orb-agent shape -- the top-level chassis and every member
+    reference carrying the SAME master stub -- would otherwise read as several
+    different masters and split a chassis that must stay one. The main loop
+    canonicalises as it goes (``_update_unresolved_refs`` before ``fingerprints``),
+    which is exactly why the partition cannot be computed from the raw list.
+
+    This is a faithful replay rather than an approximation of one: it rewrites
+    refs, computes the same fingerprints from the same incoming node, takes the
+    first fingerprint that has been seen, and registers every fingerprint onto
+    the survivor -- the four things the loop's identity decision consists of.
+    The loop never recomputes a survivor's fingerprints after merging (it keys
+    off the INCOMING node's), so not merging payloads here costs no accuracy.
+    Post-create nodes are skipped because they neither merge nor register.
+
+    It runs on deepcopies: ``_update_dict_refs`` rewrites reference objects in
+    place, and the shared UnresolvedReference instances belong to the caller.
+    """
+    by_fp = {}
+    canonical = {}
+    for entity in copy.deepcopy(entities):
+        if entity.get('_is_post_create'):
+            continue
+        _update_unresolved_refs(entity, canonical)
+        fps = fingerprints(entity, entity['_object_type'])
+        uuid = entity['_uuid']
+        primary = next((by_fp[fp] for fp in fps if fp in by_fp), uuid)
+        if primary != uuid:
+            canonical[uuid] = primary
+        for fp in fps:
+            by_fp[fp] = primary
+    return canonical
+
+
+def _canonical_vc_identity(entity: dict, canonical: dict[str, str]) -> dict:
+    """The identity a VC node asserts, with its master reference canonicalised."""
+    identity = asserted_vc_identity(entity)
+    master = identity.get("master")
+    if isinstance(master, UnresolvedReference):
+        identity["master"] = UnresolvedReference(
+            master.object_type, canonical.get(master.uuid, master.uuid)
+        )
+    return identity
+
+
+def _vc_identity_partition(entities: list[dict]) -> dict[str, int]:
+    """
+    Which same-named dcim.virtualchassis nodes are DIFFERENT chassis. uuid -> group.
+
+    VirtualChassisNameMatcher.fingerprint is keyed on the name alone, and
+    deliberately: within one graph a member's name-only chassis node and the
+    master-bearing one have to merge into a single create, and gating that
+    fingerprint on master leaves two nodes and the split chassis of issue #183.
+    The cost of the name-only key, unmeasured until now, is that two same-named
+    nodes asserting DIFFERENT identity also merge -- and then _merge_nodes
+    rejects the whole entity, so a payload with two same-named stacks in one
+    graph (VirtualChassis.master is unique, so different masters prove they are
+    two) could never be ingested at all, on any retry.
+
+    So the name bucket keeps its name key and is partitioned INSIDE, by
+    matcher.partition_vc_identities. This returns a group index only for buckets
+    that actually split; everything else, which is every payload without a
+    duplicated chassis name, is untouched and pays for one dict pass.
+    """
+    buckets: dict[str, list[dict]] = {}
+    for entity in entities:
+        if entity.get('_object_type') != 'dcim.virtualchassis':
+            continue
+        if entity.get('_is_post_create'):
+            continue
+        name = entity.get('name')
+        if isinstance(name, str) and name:
+            buckets.setdefault(name, []).append(entity)
+    buckets = {name: nodes for name, nodes in buckets.items() if len(nodes) > 1}
+    if not buckets:
+        return {}
+
+    canonical = _canonical_uuids(entities)
+    partition = {}
+    for nodes in buckets.values():
+        identities = [_canonical_vc_identity(node, canonical) for node in nodes]
+        groups = partition_vc_identities(identities)
+        if len(set(groups)) < 2:
+            continue
+        for node, group in zip(nodes, groups, strict=True):
+            partition[node['_uuid']] = group
+    return partition
+
+
 @profiled("fingerprint_dedupe")
 def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa: C901
     """
@@ -729,6 +829,7 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
     deduplicated = []
     new_refs = {} # uuid -> uuid
     refs_released = False
+    partition = _vc_identity_partition(entities)
 
     for entity in entities:
         if entity.get('_is_post_create'):
@@ -740,6 +841,16 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
         else:
             _update_unresolved_refs(entity, new_refs)
             fps = fingerprints(entity, entity['_object_type'])
+            group = partition.get(entity['_uuid'])
+            if group is not None:
+                # Keep the groups' fingerprint spaces apart, rather than teaching this
+                # loop a second, type-aware notion of "is this the same node". Every
+                # fingerprint is qualified, not just the name one: two nodes in one group
+                # are qualified identically and merge exactly as before, and nodes in
+                # different groups must not meet under ANY key -- two chassis nodes with
+                # one master are always one group, so no group boundary can hide a
+                # duplicate the unique-master key would otherwise have caught.
+                fps = [(fp, group) for fp in fps]
             for fp in fps:
                 existing_uuid = by_fp.get(fp)
                 if existing_uuid is not None:
