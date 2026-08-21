@@ -9,6 +9,7 @@ from dcim.choices import InterfaceTypeChoices
 from dcim.constants import WIRELESS_IFACE_TYPES
 from django.db.models import Q
 
+from .common import UnresolvedReference
 from .matcher import get_model_matchers
 from .plugin_utils import get_json_ref_info, get_object_type_model
 
@@ -74,11 +75,12 @@ _DRIVER_FIELD_RULES = {
 # whole entity graph, twice: once BEFORE fingerprint dedupe and once on the merged
 # nodes after it (see transform_proto_json for why both are needed). A driver value
 # the producer SUBMITTED wins over a field it forbids that the producer also
-# submitted: the dependent field is removed from the payload and the removal is
+# submitted: the dependent field is removed from the payload, the reference edges it
+# created are released, any child node left unreachable is pruned, and the removal is
 # reported as a warning. This is what rescues a self-contradictory payload from a 400
 # that costs the whole entity. The pass is idempotent — once a field is gone there is
 # nothing left to drop and nothing new to warn about — so running it twice reports one
-# warning per field.
+# warning per field and prunes each node once.
 #
 # Phase 2 — normalize_changeset(), run by the differ once an existing row has been
 # matched. It clears a STORED dependent value the effective driver value forbids, so
@@ -164,11 +166,110 @@ def _drop_reason(driver_field: str, driver_value: str) -> str:
     )
 
 
+def _ref_uuids(value) -> set[str]:
+    """Every node uuid an (arbitrarily nested) field value points at."""
+    if isinstance(value, UnresolvedReference):
+        return {value.uuid}
+    if isinstance(value, dict):
+        found = set()
+        for item in value.values():
+            found |= _ref_uuids(item)
+        return found
+    if isinstance(value, list | tuple | set | frozenset):
+        found = set()
+        for item in value:
+            found |= _ref_uuids(item)
+        return found
+    return set()
+
+
+def _node_ref_uuids(node: dict) -> set[str]:
+    """Every uuid the node's payload fields still point at (underscore keys excluded)."""
+    found = set()
+    for key, value in node.items():
+        if key.startswith("_"):
+            continue
+        found |= _ref_uuids(value)
+    return found
+
+
+def _outgoing_edges(node: dict) -> set[str]:
+    """
+    The uuids this node keeps alive.
+
+    A node's ``_refs`` is the set of nodes it depends on, and ``_topo_sort`` orders
+    the graph by it. For a post-create step that set also holds the uuid of the node
+    it completes (its ``_instance``); that edge is excluded here, because a post-create
+    step hangs OFF its object rather than being a reason for the object to exist.
+    """
+    refs = set(node.get("_refs") or ())
+    if node.get("_is_post_create"):
+        refs.discard(node.get("_instance"))
+    return refs
+
+
+def _referenced_uuids(entities) -> set[str]:
+    """Every uuid some node in ``entities`` references."""
+    referenced = set()
+    for entity in entities:
+        referenced |= _outgoing_edges(entity)
+    return referenced
+
+
+def _prune_orphaned_nodes(entities: list[dict], referenced_before: set[str]) -> list[dict]:
+    """
+    Drop child nodes that nothing surviving references any more.
+
+    A dropped dependent field can be a NESTED reference — ``tagged_vlans`` is the
+    motivating one — and by the time the policy runs, ``_transform_proto_json_1`` has
+    already turned each item into its own node and recorded the edge in the parent's
+    ``_refs``. Deleting only the field leaves those nodes and edges in the graph, so
+    resolution still plans a CREATE for them: measured on v4.5.5, an access-mode
+    interface submitting ``tagged_vlans`` [vid 621] applied 200, ended with no tagged
+    VLANs, and left VLAN 621 in NetBox — a VLAN manufactured out of a field the change
+    set said it had dropped.
+
+    Pruning is reference-counted, because over-pruning is worse than the orphan. The
+    same VLAN can be the interface's ``untagged_vlan`` as well as one of its tagged
+    ones, or be tagged by a second interface in the same graph, or belong to a group,
+    and after fingerprint dedupe all of those are edges into ONE node. So a node goes
+    only when:
+
+      * something referenced it BEFORE the drops (``referenced_before``) — that is what
+        makes it a nested child rather than a root. A root is the entity's own primary
+        object or a post-create step, and is never pruned; and
+      * nothing that survives references it now.
+
+    Removal is transitive (a pruned VLAN's group may itself become unreachable) and a
+    post-create step follows the node it completes. Anything left referencing a pruned
+    uuid would surface as an unresolved reference from ``_check_unresolved_refs``, so
+    the two conditions are deliberately conservative: unsure means keep.
+    """
+    by_uuid = {entity["_uuid"]: entity for entity in entities}
+    alive = set(by_uuid)
+    while True:
+        referenced = _referenced_uuids(by_uuid[uuid] for uuid in alive)
+        doomed = set()
+        for uuid in alive:
+            entity = by_uuid[uuid]
+            if entity.get("_is_post_create"):
+                if entity.get("_instance") not in alive:
+                    doomed.add(uuid)
+            elif uuid in referenced_before and uuid not in referenced:
+                doomed.add(uuid)
+        if not doomed:
+            break
+        alive -= doomed
+        logger.debug(f"Pruned {len(doomed)} node(s) orphaned by a driver-field drop")
+    return [entity for entity in entities if entity["_uuid"] in alive]
+
+
 def submitted_driver_field_drops(object_type: str, entity: dict) -> dict[str, str]:
     """
     Remove the submitted fields the SUBMITTED driver value forbids.
 
-    Mutates ``entity`` in place, deleting each forbidden field, and returns
+    Mutates ``entity`` in place, deleting each forbidden field and releasing the
+    reference edges that field contributed to the node's ``_refs``, and returns
     ``{field: reason}`` for what it removed. No-op unless ``object_type`` is
     registered.
 
@@ -188,6 +289,7 @@ def submitted_driver_field_drops(object_type: str, entity: dict) -> dict[str, st
     if not rules_by_driver:
         return {}
     dropped = {}
+    released = set()
     for driver_field, value_map in rules_by_driver.items():
         if driver_field not in entity:
             continue  # nothing submitted -> nothing wins
@@ -208,29 +310,46 @@ def submitted_driver_field_drops(object_type: str, entity: dict) -> dict[str, st
                     f"'{driver_value}' but participates in matching; left for NetBox to reject"
                 )
                 continue
+            released |= _ref_uuids(entity[dependent])
             del entity[dependent]
             dropped[dependent] = _drop_reason(driver_field, driver_value)
+    if released and "_refs" in entity:
+        # Release only the edges NOTHING else on this node needs. The same VLAN node
+        # can be reached from untagged_vlan and from tagged_vlans at once (after
+        # fingerprint dedupe, routinely), and dropping the tagged_vlans edge must not
+        # take the untagged_vlan edge with it.
+        entity["_refs"] = set(entity["_refs"]) - (released - _node_ref_uuids(entity))
     return dropped
 
 
-def apply_submitted_driver_field_policy(entities: list[dict]) -> None:
+def apply_submitted_driver_field_policy(entities: list[dict]) -> list[dict]:
     """
     Phase 1: let each submitted driver value win over the fields it forbids.
 
-    Takes transformed entity nodes and mutates them in place. Every dropped value is
-    recorded in the node's ``_warnings``, which the differ surfaces on the change set,
-    so producer data is never discarded silently.
+    Takes transformed entity nodes and returns the surviving graph: the same list
+    minus any child node a drop left unreachable (see ``_prune_orphaned_nodes``).
+    Nodes are mutated in place, so a caller holding a reference to one still sees the
+    drop. Every dropped value is recorded in the node's ``_warnings``, which the differ
+    surfaces on the change set, so producer data is never discarded silently.
 
     Safe to run more than once over the same graph, which the transformer does: a field
-    that is already gone drops nothing and warns nothing.
+    that is already gone drops nothing, warns nothing and releases nothing.
     """
+    # Snapshot the reference graph BEFORE any drop. A node something referenced then was
+    # created as a nested child of that reference; a node nothing referenced is a root
+    # (the entity's own primary object, or a post-create step) and is never pruned.
+    referenced_before = _referenced_uuids(entities)
+    refs_released = False
     for entity in entities:
         object_type = entity.get("_object_type")
         if object_type not in _DRIVER_FIELD_RULES:
             continue
+        refs_before = set(entity.get("_refs") or ())
         dropped = submitted_driver_field_drops(object_type, entity)
         if not dropped:
             continue
+        if set(entity.get("_refs") or ()) != refs_before:
+            refs_released = True
         entity_warnings = entity.setdefault("_warnings", {})
         for field, reason in dropped.items():
             messages = entity_warnings.setdefault(field, [])
@@ -240,6 +359,9 @@ def apply_submitted_driver_field_policy(entities: list[dict]) -> None:
             if reason not in messages:
                 messages.append(reason)
         logger.debug(f"Dropped {sorted(dropped)} from {object_type}: forbidden by the submitted driver value")
+    if not refs_released:
+        return entities
+    return _prune_orphaned_nodes(entities, referenced_before)
 
 
 def normalize_changeset(object_type: str, prechange: dict, entity: dict) -> None:

@@ -154,7 +154,7 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     #   before _resolve_existing_references, because a dropped field can itself be a
     #   match criterion (ipam.vlan matches on qinq_svlan), and dropping it after the
     #   lookup strands the entity as an unmatchable CREATE that re-plans every ingest.
-    apply_submitted_driver_field_policy(entities)
+    entities = apply_submitted_driver_field_policy(entities)
     deduplicated = _fingerprint_dedupe(entities)
     deduplicated = _topo_sort(deduplicated)
     # ... and AFTER dedupe, because duplicates can also SPLIT the contradiction instead
@@ -168,7 +168,7 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     # support tagged vlans". Both passes are needed and neither is redundant; the
     # policy is idempotent, so the field a pre-dedupe drop already removed is not
     # dropped or warned about twice.
-    apply_submitted_driver_field_policy(deduplicated)
+    deduplicated = apply_submitted_driver_field_policy(deduplicated)
     _set_auto_slugs(deduplicated, supported_models)
     _handle_cached_scope(deduplicated, supported_models)
     resolved = _resolve_existing_references(deduplicated)

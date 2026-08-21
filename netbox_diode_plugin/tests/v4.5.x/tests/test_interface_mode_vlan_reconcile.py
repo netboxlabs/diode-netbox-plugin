@@ -8,9 +8,11 @@ from utilities.data import shallow_compare_dict
 from utilities.testing import APITestCase
 
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
+from netbox_diode_plugin.api.common import UnresolvedReference
 from netbox_diode_plugin.api.differ import normalize_changeset
 from netbox_diode_plugin.api.field_policy import (
     _DRIVER_FIELD_RULES,
+    apply_submitted_driver_field_policy,
     match_participating_fields,
     submitted_driver_field_drops,
 )
@@ -406,6 +408,129 @@ class NormalizeChangesetTests(SimpleTestCase):
                             )
                         pairs += 1
         self.assertGreater(pairs, 100)  # the map is generated; guard against an empty sweep
+
+
+class DriverFieldPolicyPruneTests(SimpleTestCase):
+    """Which graph edges and child nodes a phase 1 drop takes with it -- and which it must not."""
+
+    def _ref(self, uuid, object_type="ipam.vlan"):
+        return UnresolvedReference(object_type=object_type, uuid=uuid)
+
+    def _node(self, object_type, uuid, refs=(), **fields):
+        node = {"_object_type": object_type, "_uuid": uuid, "_refs": set(refs), "_warnings": {}}
+        node.update(fields)
+        return node
+
+    def _uuids(self, entities):
+        return sorted(e["_uuid"] for e in entities)
+
+    def test_a_dropped_nested_reference_takes_its_child_node_with_it(self):
+        """The child node a dropped tagged_vlans created is pruned, and so is its edge."""
+        vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
+        iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
+                           mode="access", tagged_vlans=[self._ref("v1")])
+        out = apply_submitted_driver_field_policy([vlan, iface])
+        self.assertEqual(self._uuids(out), ["i1"])
+        self.assertNotIn("tagged_vlans", iface)
+        self.assertEqual(iface["_refs"], set())
+
+    def test_a_child_the_same_node_still_references_is_kept(self):
+        """One VLAN node reached by BOTH untagged_vlan and tagged_vlans survives the drop."""
+        vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
+        iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1", mode="access",
+                           untagged_vlan=self._ref("v1"), tagged_vlans=[self._ref("v1")])
+        out = apply_submitted_driver_field_policy([vlan, iface])
+        self.assertEqual(self._uuids(out), ["i1", "v1"])
+        self.assertEqual(iface["_refs"], {"v1"})       # the untagged_vlan edge stands
+        self.assertEqual(iface["untagged_vlan"], self._ref("v1"))
+
+    def test_a_child_another_node_still_references_is_kept(self):
+        """A second interface still tagging the VLAN keeps its node alive."""
+        vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
+        dropped = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
+                             mode="access", tagged_vlans=[self._ref("v1")])
+        keeper = self._node("dcim.interface", "i2", refs={"v1"}, name="Eth2",
+                            mode="tagged", tagged_vlans=[self._ref("v1")])
+        out = apply_submitted_driver_field_policy([vlan, dropped, keeper])
+        self.assertEqual(self._uuids(out), ["i1", "i2", "v1"])
+        self.assertEqual(dropped["_refs"], set())
+        self.assertEqual(keeper["_refs"], {"v1"})
+
+    def test_pruning_is_transitive(self):
+        """A pruned child's own children go too, once nothing reaches them."""
+        group = self._node("ipam.vlangroup", "g1", name="g1", slug="g1")
+        vlan = self._node("ipam.vlan", "v1", refs={"g1"}, vid=101, name="v101",
+                          group=self._ref("g1", "ipam.vlangroup"))
+        iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
+                           mode="access", tagged_vlans=[self._ref("v1")])
+        out = apply_submitted_driver_field_policy([group, vlan, iface])
+        self.assertEqual(self._uuids(out), ["i1"])
+
+    def test_a_grandchild_something_surviving_needs_is_kept(self):
+        """Transitivity stops at the first node another survivor still references."""
+        group = self._node("ipam.vlangroup", "g1", name="g1", slug="g1")
+        dropped_vlan = self._node("ipam.vlan", "v1", refs={"g1"}, vid=101, name="v101",
+                                  group=self._ref("g1", "ipam.vlangroup"))
+        kept_vlan = self._node("ipam.vlan", "v2", refs={"g1"}, vid=102, name="v102",
+                               group=self._ref("g1", "ipam.vlangroup"))
+        iface = self._node("dcim.interface", "i1", refs={"v1", "v2"}, name="Eth1", mode="access",
+                           untagged_vlan=self._ref("v2"), tagged_vlans=[self._ref("v1")])
+        out = apply_submitted_driver_field_policy([group, dropped_vlan, kept_vlan, iface])
+        self.assertEqual(self._uuids(out), ["g1", "i1", "v2"])
+        self.assertEqual(iface["_refs"], {"v2"})
+
+    def test_a_post_create_step_and_its_children_are_never_collateral(self):
+        """A post-create node hangs off its object; a drop elsewhere leaves it alone."""
+        vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
+        mac = self._node("dcim.macaddress", "m1", mac_address="00:00:00:00:00:01")
+        iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
+                           mode="access", tagged_vlans=[self._ref("v1")])
+        post_create = self._node(
+            "dcim.interface", "pc1", refs={"i1", "m1"},
+            primary_mac_address=self._ref("m1", "dcim.macaddress"),
+        )
+        post_create["_is_post_create"] = True
+        post_create["_instance"] = "i1"
+        out = apply_submitted_driver_field_policy([vlan, mac, iface, post_create])
+        self.assertEqual(self._uuids(out), ["i1", "m1", "pc1"])
+
+    def test_a_root_node_is_never_pruned(self):
+        """A node nothing referenced is the entity's own object: it survives a drop on itself."""
+        vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
+        iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
+                           mode="access", tagged_vlans=[self._ref("v1")])
+        out = apply_submitted_driver_field_policy([vlan, iface])
+        self.assertIn("i1", self._uuids(out))
+
+    def test_no_drop_prunes_nothing(self):
+        """With nothing to drop the policy is a pure no-op over the graph."""
+        vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
+        iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
+                           mode="tagged", tagged_vlans=[self._ref("v1")])
+        out = apply_submitted_driver_field_policy([vlan, iface])
+        self.assertEqual(self._uuids(out), ["i1", "v1"])
+        self.assertEqual(iface["tagged_vlans"], [self._ref("v1")])
+        self.assertEqual(iface["_warnings"], {})
+
+    def test_a_drop_with_no_nested_reference_prunes_nothing(self):
+        """Dropping a plain scalar (rf_role) releases no edge and no node."""
+        vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
+        iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1", type="1000base-t",
+                           rf_role="ap", mode="tagged", tagged_vlans=[self._ref("v1")])
+        out = apply_submitted_driver_field_policy([vlan, iface])
+        self.assertEqual(self._uuids(out), ["i1", "v1"])
+        self.assertNotIn("rf_role", iface)
+        self.assertEqual(iface["_refs"], {"v1"})
+
+    def test_one_drop_is_reported_once_when_the_policy_runs_twice(self):
+        """The policy is idempotent: a second pass re-reports nothing."""
+        vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
+        iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
+                           mode="access", tagged_vlans=[self._ref("v1")])
+        entities = apply_submitted_driver_field_policy([vlan, iface])
+        again = apply_submitted_driver_field_policy(entities)
+        self.assertEqual(self._uuids(again), ["i1"])
+        self.assertEqual(len(iface["_warnings"]["tagged_vlans"]), 1)
 
 
 class InterfaceModeClearE2ETests(APITestCase):
@@ -1153,3 +1278,121 @@ class InterfaceModeClearE2ETests(APITestCase):
         self._apply(cs)
         iface = Interface.objects.get(name="Gi1/0/22", device__name=dev["name"])
         self.assertEqual(iface.tagged_vlans.count(), 0)
+
+    # --- P2-B: the orphan child nodes a drop leaves behind --------------------
+
+    def test_dropping_tagged_vlans_creates_no_orphan_vlan(self):
+        """A dropped nested reference takes its child node with it: no VLAN is manufactured."""
+        # Measured before the fix: planned non-noop ipam.vlan changes = [("create", 621)],
+        # apply 200, VLAN 621 present in NetBox afterwards while the interface had mode
+        # access and tagged_vlans count 0 -- the payload silently created a VLAN it could
+        # not use, and the warning claimed the field had been dropped.
+        from ipam.models import VLAN
+        payload = self._iface_payload(
+            name="Gi1/0/21", type="1000base-t", mode="access",
+            tagged_vlans=[{"vid": 621, "name": "p2b-orphan", "status": "active"}],
+        )
+        cs = self._plan(payload)
+        vlan_changes = [(c["change_type"], c.get("data", {}).get("vid"))
+                        for c in cs["changes"]
+                        if c["object_type"] == "ipam.vlan" and c["change_type"] != "noop"]
+        self.assertEqual(vlan_changes, [], vlan_changes)
+        self._apply(cs)
+        self.assertFalse(VLAN.objects.filter(vid=621).exists())
+        iface = Interface.objects.get(name="Gi1/0/21")
+        self.assertEqual(iface.mode, "access")
+        self.assertEqual(iface.tagged_vlans.count(), 0)
+        for quiet in range(1, 5):
+            self.assertEqual(self._plan(payload).get("changes", []), [],
+                             f"re-planned on quiet round {quiet}")
+
+    # --- over-pruning: three ways a dropped child is still needed -------------
+
+    def test_a_vlan_that_is_also_the_untagged_vlan_survives_the_drop(self):
+        """The same VLAN named as both untagged_vlan and a tagged VLAN is still created."""
+        from ipam.models import VLAN
+        payload = self._iface_payload(
+            name="Gi1/0/30", type="1000base-t", mode="access",
+            untagged_vlan={"vid": 632, "name": "keep-v632", "status": "active"},
+            tagged_vlans=[{"vid": 632, "name": "keep-v632", "status": "active"}],
+        )
+        self._converge(payload, "shared untagged/tagged VLAN")
+        self.assertTrue(VLAN.objects.filter(vid=632).exists())
+        iface = Interface.objects.get(name="Gi1/0/30")
+        self.assertEqual(iface.untagged_vlan.vid, 632)   # allowed by 'access' -> linked
+        self.assertEqual(iface.tagged_vlans.count(), 0)  # forbidden -> dropped
+
+    def test_a_shared_vlan_survives_a_drop_on_the_merged_node(self):
+        """After the merge one VLAN node is both untagged_vlan and a tagged VLAN: it survives."""
+        # This is the case a per-node reference count exists for. The outer node carries
+        # mode "access" and untagged_vlan 631; the nested duplicate carries tagged_vlans
+        # [631] and no mode. Fingerprint dedupe collapses the two VLAN nodes into ONE, so
+        # the merged interface points at that single node from both fields. Releasing the
+        # tagged_vlans edge must not release the untagged_vlan edge with it -- if it does,
+        # the node is pruned and untagged_vlan is left dangling.
+        from ipam.models import VLAN
+        dev = self._device()
+        dev_with_ip = dict(dev, primary_ip4={
+            "address": "10.9.31.31/24",
+            "assigned_object_interface": {
+                "device": dev, "name": "Gi1/0/31", "type": "1000base-t",
+                "tagged_vlans": [{"vid": 631, "name": "keep-v631", "status": "active"}],
+            },
+        })
+        payload = {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": {
+            "device": dev_with_ip, "name": "Gi1/0/31", "type": "1000base-t", "mode": "access",
+            "untagged_vlan": {"vid": 631, "name": "keep-v631", "status": "active"},
+        }}}
+        self._converge(payload, "shared VLAN node after merge")
+        self.assertTrue(VLAN.objects.filter(vid=631).exists())
+        iface = Interface.objects.get(name="Gi1/0/31", device__name=dev["name"])
+        self.assertEqual(iface.untagged_vlan.vid, 631)
+        self.assertEqual(iface.tagged_vlans.count(), 0)
+
+    def test_a_vlan_a_second_interface_still_tags_survives_the_drop(self):
+        """One VLAN node, two interfaces: the drop on one must not unmake it for the other."""
+        # Gi1/0/40 is named twice (outer node with mode "access", nested duplicate with
+        # tagged_vlans [641]) so the merged node loses tagged_vlans in the post-merge pass.
+        # Gi1/0/42, mode "tagged", legitimately tags the SAME VLAN, and dedupe gives both
+        # interfaces the same VLAN node. Pruning it would strand Gi1/0/42's reference.
+        from ipam.models import VLAN
+        dev = self._device()
+        vlan = {"vid": 641, "name": "keep-v641", "status": "active"}
+        dev_two = dict(
+            dev,
+            primary_ip4={
+                "address": "10.9.40.40/24",
+                "assigned_object_interface": {
+                    "device": dev, "name": "Gi1/0/40", "type": "1000base-t",
+                    "tagged_vlans": [dict(vlan)],
+                },
+            },
+            primary_ip6={
+                "address": "2001:db8:40::42/64",
+                "assigned_object_interface": {
+                    "device": dev, "name": "Gi1/0/42", "type": "1000base-t",
+                    "mode": "tagged", "tagged_vlans": [dict(vlan)],
+                },
+            },
+        )
+        payload = {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": {
+            "device": dev_two, "name": "Gi1/0/40", "type": "1000base-t", "mode": "access",
+        }}}
+        self._converge(payload, "VLAN shared by a second interface")
+        self.assertTrue(VLAN.objects.filter(vid=641).exists())
+        dropped_from = Interface.objects.get(name="Gi1/0/40", device__name=dev["name"])
+        self.assertEqual(dropped_from.mode, "access")
+        self.assertEqual(dropped_from.tagged_vlans.count(), 0)
+        kept_by = Interface.objects.get(name="Gi1/0/42", device__name=dev["name"])
+        self.assertEqual([v.vid for v in kept_by.tagged_vlans.all()], [641])
+
+    def test_an_ipam_vlan_ingested_in_its_own_right_is_untouched(self):
+        """A VLAN that is the entity's own primary object is never pruned."""
+        from ipam.models import VLAN
+        payload = {"timestamp": 1, "object_type": "ipam.vlan", "entity": {"vlan": {
+            "vid": 651, "name": "own-right-v651", "status": "active",
+            "group": {"name": "own-right-group", "slug": "own-right-group"},
+        }}}
+        self._converge(payload, "ipam.vlan on its own")
+        vlan = VLAN.objects.get(vid=651, name="own-right-v651")
+        self.assertEqual(vlan.group.name, "own-right-group")
