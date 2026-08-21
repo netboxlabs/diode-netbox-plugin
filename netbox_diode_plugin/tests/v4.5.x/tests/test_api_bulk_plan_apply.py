@@ -608,9 +608,13 @@ class BulkPlanApplyTestCase(APITestCase):
                     "name": f"sw1-{suffix}",
                     "vc_position": 4,
                     "virtual_chassis": {
+                        # No domain: the point of this test is the bind-only
+                        # contract on a row this payload cannot tell apart from
+                        # its own. Asserting a domain the row does not carry
+                        # identifies a DIFFERENT chassis and correctly gets its
+                        # own row, which would not exercise the bind at all.
                         "name": vc_name,
                         "description": "FROM-A",
-                        "domain": "dom-a",
                     },
                     **common,
                 }},

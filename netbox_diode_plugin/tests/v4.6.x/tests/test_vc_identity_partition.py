@@ -212,26 +212,35 @@ class VirtualChassisIdentityPartitionTests(APITestCase):
             self.assertEqual(row.domain, domain)
             self.assertEqual([d.name for d in row.members.all()], [member])
 
-    def test_the_reported_domain_payload_is_ingested_and_what_is_left_over(self):
+    def test_the_reported_domain_payload_is_rejected_not_half_applied(self):
         """
-        The reported repro, and the honest bound on what the fix buys it.
+        The reported repro: planned in full, then refused, and nothing written.
 
         Shape: a member names its chassis with a domain and a master, and the
-        MASTER's own chassis reference names the same chassis with a different
-        domain. Two nodes, two groups, two creates planned -- so the entity is
-        ingested where it used to be rejected outright.
+        MASTER's own chassis reference names the same chassis with a DIFFERENT
+        domain. The partition does its job -- two nodes, two groups, two creates
+        previewed, where the whole entity used to be rejected at the merge.
 
-        Only ONE row results, and that is the applier, not the partition: the
-        second group's create carries no master, so it takes the pre-save match
-        (matcher._virtualchassis_pre_save_match_applies) and
-        VirtualChassisNameMatcher.resolve rule 0 binds a lone same-named
-        candidate on the strength of the name, deliberately and regardless of
-        the domain asserted. The match is bind-only, so building-b is not
-        written, and the deviation re-plans as an update on every pass. Pinned
-        rather than glossed: a masterless chassis CREATE can never become a row
-        of its own beside a same-named one, so the domain split only reaches a
-        stable state where the rows already exist (the test above) or where each
-        group carries a master.
+        The apply then refuses, and it should. The payload asserts both "fpd-m1
+        masters the building-a stack" and "fpd-m1 belongs to the building-b
+        stack of the same name", and a device is in one chassis at a time, so
+        there is no state that satisfies it. Contradictory input may be
+        rejected; what may NOT happen -- and what happened here before -- is a
+        200 that reports success while re-planning the same domain change on
+        every later pass, forever. That is the whole of the second requirement
+        this change exists to meet: a discriminator is identity, so a payload
+        contradicting the row it names is told so instead of being applied to it
+        and quietly re-proposed.
+
+        Nothing is left behind: the apply is one transaction, so the two rows it
+        planned are rolled back and a producer that fixes its payload starts
+        clean.
+
+        The rough edge, recorded rather than hidden: the message is NetBox's own
+        constraint ("currently designated as its master") rather than a
+        statement about the identity contradiction, so it names a symptom and
+        not the cause. A structured per-entity conflict naming both domains
+        would be the better error; this test pins the refusal, not the wording.
         """
         payload = {"timestamp": 1, "object_type": "dcim.device", "entity": {"device":
             self._device("fpd-d1", vc_position=2, virtual_chassis={
@@ -245,20 +254,52 @@ class VirtualChassisIdentityPartitionTests(APITestCase):
         cs = self._plan(payload)
         self.assertEqual([c["change_type"] for c in self._vc_changes(cs)],
                          ["create", "create"], cs)
-        self._apply(cs)
 
-        rows = VirtualChassis.objects.filter(name="fpd-stack")
-        self.assertEqual(rows.count(), 1)
-        row = rows.first()
-        self.assertEqual(row.master.name, "fpd-m1")
-        self.assertEqual(row.domain, "building-a")
-        self.assertEqual({d.name for d in row.members.all()}, {"fpd-d1", "fpd-m1"})
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn("master", str(r.json().get("errors")).lower())
         self.assertEqual(
-            [(c["change_type"], c["object_type"], c["data"].get("domain"))
-             for c in self._non_noop(payload)],
-            [("update", "dcim.virtualchassis", "building-b")],
-            "the leftover deviation is not the one the docstring describes",
+            VirtualChassis.objects.filter(name="fpd-stack").count(), 0,
+            "a refused apply left rows behind",
         )
+
+    def test_two_domains_arriving_in_sequence_end_as_two_stable_rows(self):
+        """
+        A then B, in separate requests, and BOTH plan nothing afterwards.
+
+        This is the sequential case the domain contract has to answer, and the
+        one the old rule-0 exemption got wrong. Step 1 ingests fps-stack /
+        building-a. Step 2 ingests the same NAME with building-b. A non-empty
+        domain is identity, so step 2 does not bind step 1's row on the strength
+        of the name; it describes a chassis that does not exist yet and gets it.
+
+        Step 3 is the part that used to fail: re-ingesting either payload plans
+        NOTHING. Before, step 2 bound the single existing row and then proposed
+        `domain: building-b` on it again on every pass -- a successful apply that
+        never converged, which is not a contract worth having. Two rows, each
+        holding its own domain and its own master, is.
+        """
+        def stack(device, domain):
+            return {"timestamp": 1, "object_type": "dcim.device", "entity": {"device":
+                self._device(device, vc_position=1, virtual_chassis={
+                    "name": "fps-stack",
+                    "domain": domain,
+                    "master": self._device(device),
+                })}}
+
+        first, second = stack("fps-a1", "building-a"), stack("fps-b1", "building-b")
+        for payload in (first, second):
+            self._apply(self._plan(payload))
+
+        rows = VirtualChassis.objects.filter(name="fps-stack")
+        self.assertEqual(rows.count(), 2, list(rows.values_list("pk", "domain")))
+        self.assertEqual({r.domain for r in rows}, {"building-a", "building-b"})
+        self.assertEqual({r.master.name for r in rows}, {"fps-a1", "fps-b1"})
+        for row in rows:
+            self.assertEqual([d.name for d in row.members.all()], [row.master.name])
+
+        self._assert_noop_rediff(first)
+        self._assert_noop_rediff(second)
 
     # ---- what must keep merging -------------------------------------------
 

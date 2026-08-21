@@ -1877,7 +1877,14 @@ class VirtualChassisIngestE2ETests(APITestCase):
                     name = f"vce-{kind.replace('_', '-')}-{label.replace('_', '-')}"
                     vc = self._seed_row_kind(kind, name)
                     before = self._row_fields([vc.pk])
-                    data = {"name": name, "description": "FROM-A", "domain": "dom-a"}
+                    # No domain asserted on purpose: this payload must stay
+                    # INDISTINGUISHABLE from the row it races, which is what
+                    # makes the bind-only contract the thing under test. A
+                    # payload asserting a domain the row does not carry is a
+                    # different case entirely -- it identifies a different
+                    # chassis and gets its own row (see
+                    # test_a_contradicting_domain_takes_its_own_row).
+                    data = {"name": name, "description": "FROM-A"}
                     data.update(extra)
 
                     r = self.client.post(
@@ -1906,6 +1913,57 @@ class VirtualChassisIngestE2ETests(APITestCase):
                         f"{kind}/{label}: the CREATE left a duplicate row behind",
                     )
                     self._assert_member_count_is_honest(vc)
+
+    def test_a_contradicting_domain_takes_its_own_row(self):
+        """
+        The other half of the bind-only contract: a domain the row lacks is identity.
+
+        The same race as the tests above -- a same-named row already exists,
+        owned by another source, carrying domain "dom-b" -- except this payload
+        asserts "dom-a". A NON-EMPTY discriminator the row does not carry means
+        "not this row" (matcher.contradicting_vc_discriminator), so the pre-save
+        match does not bind it. The payload gets its own row and the other is
+        byte-identical afterwards, last_updated included.
+
+        This is the price of making domain mean ONE thing, and it is a real
+        price: a plan-ahead race with a domain in it now ends in two rows where
+        the name-only race still ends in one, because the match can no longer
+        de-duplicate against a row the payload has just contradicted. It is
+        the better half of the trade -- the alternative bound the row and then
+        re-proposed the contradicted domain onto it on every later pass, forever
+        -- and this one converges: the next pass narrows the two rows by the
+        asserted domain and finds its own.
+        """
+        name = "vce-contradict"
+        vc = self._seed_row_kind("masterless_populated", name)
+        before = self._row_fields([vc.pk])
+
+        r = self.client.post(
+            self.apply_url,
+            data={
+                "id": str(uuid.uuid4()),
+                "changes": [{
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.virtualchassis",
+                    "object_id": None,
+                    "ref_id": "1",
+                    "data": {"name": name, "description": "FROM-A", "domain": "dom-a"},
+                }],
+            },
+            format="json", **self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+
+        self.assertEqual(self._row_fields([vc.pk]), before,
+                         "the contradicted row was written after all")
+        rows = VirtualChassis.objects.filter(name=name)
+        self.assertEqual(rows.count(), 2, list(rows.values_list("pk", "domain")))
+        own = rows.exclude(pk=vc.pk).get()
+        self.assertEqual(own.domain, "dom-a")
+        self.assertEqual(own.description, "FROM-A")
 
     def test_a_masterless_create_on_an_ambiguous_name_is_a_structured_400(self):
         """
@@ -1974,7 +2032,9 @@ class VirtualChassisIngestE2ETests(APITestCase):
                 payload = self._device_payload(dev_name, {
                     "vc_position": 9,
                     "virtual_chassis": {
-                        "name": name, "description": "FROM-A", "domain": "dom-a",
+                        # see the note above: no domain, so the row is not
+                        # contradicted and the bind is what gets exercised
+                        "name": name, "description": "FROM-A",
                     },
                 })
 
@@ -2096,7 +2156,7 @@ class VirtualChassisIngestE2ETests(APITestCase):
         payload = self._device_payload("vce-sw2", {
             "vc_position": 2,
             "virtual_chassis": {
-                "name": "vce-stack", "description": "FROM-A", "domain": "dom-a",
+                "name": "vce-stack", "description": "FROM-A",
             },
         })
 
@@ -2132,7 +2192,9 @@ class VirtualChassisIngestE2ETests(APITestCase):
 
         fresh = VirtualChassis.objects.get(pk=vc.pk)
         self.assertEqual(fresh.description, "FROM-A")
-        self.assertEqual(fresh.domain, "dom-a")
+        # Still empty because this payload never asserted a domain -- it must
+        # not, or it would identify a different chassis and never bind at all.
+        self.assertEqual(fresh.domain, "")
 
         # ...and that is convergence, not a flap: nothing left to plan.
         self._assert_noop_rediff(payload)
@@ -2285,7 +2347,14 @@ class VirtualChassisIngestE2ETests(APITestCase):
                     name = f"vce-val-{kind.replace('_', '-')}-{label.replace('_', '-')}"
                     vc = self._seed_row_kind(kind, name)
                     before = self._row_fields([vc.pk])
-                    data = {"name": name, "description": "FROM-A", "domain": "dom-a"}
+                    # No domain asserted on purpose: this payload must stay
+                    # INDISTINGUISHABLE from the row it races, which is what
+                    # makes the bind-only contract the thing under test. A
+                    # payload asserting a domain the row does not carry is a
+                    # different case entirely -- it identifies a different
+                    # chassis and gets its own row (see
+                    # test_a_contradicting_domain_takes_its_own_row).
+                    data = {"name": name, "description": "FROM-A"}
                     data.update(extra)
 
                     r = self.client.post(

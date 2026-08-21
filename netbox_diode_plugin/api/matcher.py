@@ -722,6 +722,32 @@ def partition_vc_identities(identities: list[dict]) -> list[int]:
     return assigned
 
 
+def contradicting_vc_discriminator(candidate, data) -> str | None:
+    """
+    A NON-EMPTY discriminator this payload asserts that this row does not carry.
+
+    This is identity being read as identity: ``domain: "building-b"`` against a
+    row carrying "building-a" says "not this row", and it has to say it whether
+    the name matches twenty rows or exactly one. Without that, domain meant two
+    different things depending on how many rows happened to exist -- a
+    discriminator when it could narrow a set, a mutable field to be overwritten
+    when it could not -- and a payload asserting a contradicting domain against a
+    lone same-named row bound that row and then re-planned the domain onto it on
+    every later pass, forever.
+
+    An EMPTY assertion is deliberately excluded. ``domain: ""`` narrows but never
+    identifies (see narrow_vc_candidates: every row that never set a domain
+    carries ""), so it must not turn the ordinary single-row match into a
+    duplicate insert -- which is the outcome this matcher exists to prevent.
+    """
+    for field, value in asserted_vc_discriminators(data).items():
+        if not value:
+            continue
+        if _vc_row_value(candidate, field) != value:
+            return field
+    return None
+
+
 def unasserted_vc_discriminators(candidate, data) -> str:
     """
     The values THIS ROW carries that the payload says nothing about.
@@ -1541,20 +1567,43 @@ class VirtualChassisNameMatcher:
         the signature of bug-created duplicates and not of two real stacks --
         two real stacks both have members, which lands on rule 4.
 
-        Rule 0 is NOT subject to rule 2's exclusion, and that is deliberate: a
-        name that matches exactly one row resolves to it even when the payload
-        asserts ``domain: ""`` and the row carries a domain. Excluding there
-        would answer "no match" for the ordinary case and insert a duplicate
-        chassis, which is the outcome this matcher exists to prevent; the ""
-        then reaches that row as a field write like any other field the payload
-        carries. Adoption in the applier decides the opposite way for the same
-        input because it has a lossless alternative -- the CREATE its plan
-        already asked for (see _choose_adoption_candidate).
+        Rule 0 yields to ONE thing: a non-empty discriminator the row does not
+        carry (contradicting_vc_discriminator). A payload asserting
+        ``domain: "building-b"`` against a lone row carrying "building-a" is
+        saying "not this row", and it has to mean that whether the name matched
+        one row or twenty -- otherwise domain is a discriminator when several
+        rows exist and a mutable field to be overwritten when one does, and
+        which one it is depends on the database's history rather than on the
+        payload. Measured with the old exemption: that payload bound the row,
+        applied, and then re-planned ``domain: "building-b"`` onto it on every
+        subsequent pass, forever. A successful apply that never converges is
+        not a contract worth keeping.
+
+        An EMPTY assertion still does not overrule rule 0: a name matching
+        exactly one row resolves to it even when the payload asserts
+        ``domain: ""`` and the row carries a domain. Excluding there would
+        answer "no match" for the ordinary case and insert a duplicate chassis,
+        which is the outcome this matcher exists to prevent; the "" then reaches
+        that row as a field write like any other field the payload carries. That
+        asymmetry is the same one narrow_vc_candidates draws -- "" narrows, but
+        it never identifies, because every row that never set a domain has it.
+
+        Adoption in the applier decides the opposite way for the same input
+        because it has a lossless alternative -- the CREATE its plan already
+        asked for (see _choose_adoption_candidate).
         """
         candidates = list(annotate_vc_member_counts(queryset).order_by("pk"))
         if not candidates:
             return None
         if len(candidates) == 1:
+            # Rule 0, with one thing able to overrule it: a NON-EMPTY
+            # discriminator the row does not carry. That is the payload saying
+            # "not this row", and it means the same thing whether the name
+            # matched one row or twenty. Returning None here creates the
+            # chassis the payload describes instead of binding one it just
+            # contradicted and re-planning the difference forever.
+            if contradicting_vc_discriminator(candidates[0], data):
+                return None
             return candidates[0]
 
         name = data.get("name")
