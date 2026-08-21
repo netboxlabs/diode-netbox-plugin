@@ -726,6 +726,123 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(
             VirtualChassis.objects.filter(name=row.name).count(), 1 + extra_rows)
 
+    # ---- the real producer, transcribed ------------------------------------
+
+    # The chassis-relevant entities of a real orb-agent snmp-discovery capture
+    # of a three-member Cisco 2960X stack, in the order the agent emitted them.
+    # The full run is 154 entities; the 145 interface entities, the two
+    # ip_address and two prefix entities, the master's primary_ip4 sub-tree, the
+    # platform nodes and the free-text descriptions are dropped here because
+    # none of them reaches a VirtualChassis. Everything that does is verbatim,
+    # including two details that matter: the standalone virtual_chassis entity
+    # carries a name and a master stub and NOTHING else (no domain -- orb's
+    # device_name builder emits none, at all, for any device), and vc_position
+    # arrives as a string. The device and the chassis share the name because the
+    # capture's own redaction wrote "<private>" into both.
+    _ORB_MASTER_STUB = {
+        "name": "<private>",
+        "device_type": {"manufacturer": {"name": "Cisco"}, "model": "WS-C2960X-48FPS-L"},
+        "role": {"name": "switch"},
+        "serial": "FCW1929B68S",
+        "site": {"name": "orbvc-lab"},
+    }
+
+    def _orb_capture_payloads(self):
+        """The four entities above, as ingest payloads in producer order."""
+        def device(name, model, serial, extra=None):
+            entity = {
+                "name": name,
+                "device_type": {"manufacturer": {"name": "Cisco"}, "model": model},
+                "role": {"name": "switch"},
+                "serial": serial,
+                "site": {"name": "orbvc-lab"},
+            }
+            entity.update(extra or {})
+            return {"timestamp": 1, "object_type": "dcim.device",
+                    "entity": {"device": entity}}
+
+        return [
+            device("<private>", "WS-C2960X-48FPS-L", "FCW1929B68S"),
+            {"timestamp": 1, "object_type": "dcim.virtualchassis",
+             "entity": {"virtual_chassis": {
+                 "name": "<private>", "master": dict(self._ORB_MASTER_STUB)}}},
+            device("<private>-2", "WS-C2960X-24PS-L", "FCW1931A06Z", {
+                "vc_position": "2",
+                "virtual_chassis": {
+                    "name": "<private>", "master": dict(self._ORB_MASTER_STUB)},
+            }),
+            device("<private>-3", "WS-C2960X-48FPS-L", "FCW1929B6BP", {
+                "vc_position": "3",
+                "virtual_chassis": {
+                    "name": "<private>", "master": dict(self._ORB_MASTER_STUB)},
+            }),
+        ]
+
+    def test_the_real_orb_agent_capture_gets_its_own_chassis_beside_a_same_named_row(self):
+        """
+        THE headline case, and the one that chose decline-and-create over refuse.
+
+        A masterless, populated, same-named VirtualChassis is already in NetBox
+        -- somebody else's stack, or this producer's own earlier member-first
+        pass, indistinguishable from the payload's side. The capture above is
+        then replayed in producer order. Three behaviours were measured on
+        v4.5.5 with the full 154-entity run:
+
+          - develop (08af3fb, no adoption at all): 200, the stack gets its own
+            chassis, members at 1/2/3, empty re-diff.
+          - the branch before this series: adoption took the oldest masterless
+            same-named row, so the master was hijacked into the foreign row --
+            and because that row is not the one the members' own payloads
+            resolve to, members 2 and 3 were left with virtual_chassis NULL and
+            vc_position NULL. 207 forever, silently wrong in NetBox.
+          - refusing the ambiguous adoption: 207 on every pass, forever. The
+            standalone virtual_chassis entity carries name + master and nothing
+            else, so no remedy naming a payload field is one this producer can
+            take, and the identical bytes arrive again every run.
+
+        Declining the adoption and letting the CREATE proceed reproduces
+        develop's outcome exactly, which is the point: this is a branch that
+        adds a mechanism, and the mechanism must not make the branch worse than
+        its own base on its own producer's data.
+
+        Asserted here: the payload's stack ends up in a chassis of its OWN with
+        all three members at 1/2/3, the cached member_count agrees with the real
+        one, the foreign row is byte-identical (last_updated, master, members),
+        and every entity re-diffs empty.
+        """
+        other = Site.objects.create(name="orbvc-other", slug="orbvc-other")
+        foreign = VirtualChassis.objects.create(name="<private>")
+        for name, position in (("orbvc-decoy-1", 1), ("orbvc-decoy-2", 2)):
+            d = Device.objects.create(
+                name=name, site=other, device_type=self.dt, role=self.role)
+            Device.objects.filter(pk=d.pk).update(
+                virtual_chassis=foreign, vc_position=position)
+        foreign.refresh_from_db()
+        before = foreign.last_updated
+        foreign_members = sorted(foreign.members.values_list("name", "vc_position"))
+
+        payloads = self._orb_capture_payloads()
+        for payload in payloads:
+            self._diff_apply(payload, allow_empty=True)
+
+        mine = VirtualChassis.objects.exclude(pk=foreign.pk).get(name="<private>")
+        self.assertEqual(mine.master.name, "<private>")
+        self.assertEqual(
+            sorted(mine.members.values_list("name", "vc_position")),
+            [("<private>", 1), ("<private>-2", 2), ("<private>-3", 3)],
+        )
+        self.assertEqual(mine.member_count, mine.members.count())
+        self.assertEqual(mine.member_count, 3)
+
+        foreign.refresh_from_db()
+        self.assertIsNone(foreign.master_id, "the master was hijacked into the foreign row")
+        self.assertEqual(foreign.last_updated, before, "the foreign row was written")
+        self.assertEqual(
+            sorted(foreign.members.values_list("name", "vc_position")), foreign_members)
+
+        for payload in payloads:
+            self._assert_noop_rediff(payload)
+
     def test_a_second_producers_member_first_stack_lands_on_the_same_row(self):
         """
         The residual bound of name-keyed identity, measured rather than claimed.
