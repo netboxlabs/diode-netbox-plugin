@@ -906,6 +906,56 @@ class InterfaceModeClearE2ETests(APITestCase):
 
     # --- N2: a dropped match criterion must be dropped BEFORE matching --------
 
+    def test_a_duplicate_node_with_a_different_forbidden_value_still_applies(self):
+        """Two nodes for ONE interface, same submitted mode, different forbidden VLANs."""
+        # The policy used to run AFTER _fingerprint_dedupe, so these two nodes reached
+        # _merge_nodes still carrying tagged_vlans and it rejected the whole entity with
+        # "Conflicting values for 'tagged_vlans'" -- the payload the policy exists to
+        # rescue. Running the policy first drops the forbidden field from both, so they
+        # merge cleanly. The graph nests the same interface twice via the device's
+        # primary_ip4 assignment, which is how one entity legitimately names it twice.
+        dev = self._device()
+        dev_with_ip = dict(dev, primary_ip4={
+            "address": "10.9.9.9/24",
+            "assigned_object_interface": {
+                "device": dev, "name": "Gi1/0/9", "type": "1000base-t", "mode": "access",
+                "tagged_vlans": [{"vid": 302, "name": "dup-v302", "status": "active"}],
+            },
+        })
+        payload = {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": {
+            "device": dev_with_ip, "name": "Gi1/0/9", "type": "1000base-t", "mode": "access",
+            "tagged_vlans": [{"vid": 301, "name": "dup-v301", "status": "active"}],
+        }}}
+        cs = self._plan(payload)
+        self.assertIn("tagged_vlans", cs.get("warnings", {}).get("dcim.interface", {}))
+        for change in cs["changes"]:
+            if change["object_type"] == "dcim.interface":
+                self.assertNotIn("tagged_vlans", change.get("data", {}))
+        self._apply(cs)
+        iface = Interface.objects.get(name="Gi1/0/9", device__name=dev["name"])
+        self.assertEqual(iface.mode, "access")
+        self.assertEqual(iface.tagged_vlans.count(), 0)
+
+    def test_a_duplicate_node_with_a_different_ALLOWED_value_still_conflicts(self):
+        """The control: a field the mode PERMITS is a genuine disagreement, still a 400."""
+        # This must NOT be rescued. mode "tagged" allows tagged_vlans, so [401] vs [402]
+        # is two sources disagreeing about real data and nothing can discard either.
+        dev = self._device()
+        dev_with_ip = dict(dev, primary_ip4={
+            "address": "10.9.9.10/24",
+            "assigned_object_interface": {
+                "device": dev, "name": "Gi1/0/10", "type": "1000base-t", "mode": "tagged",
+                "tagged_vlans": [{"vid": 402, "name": "ctl-v402", "status": "active"}],
+            },
+        })
+        payload = {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": {
+            "device": dev_with_ip, "name": "Gi1/0/10", "type": "1000base-t", "mode": "tagged",
+            "tagged_vlans": [{"vid": 401, "name": "ctl-v401", "status": "active"}],
+        }}}
+        r = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn("Conflicting values", str(r.content))
+
     def test_a_contradictory_vlan_payload_never_touches_a_same_vid_row(self):
         """ipam.vlan is exempt from the drop, so a same-vid VLAN is left alone."""
         # The regression this pins: dropping qinq_svlan before matching made the entity

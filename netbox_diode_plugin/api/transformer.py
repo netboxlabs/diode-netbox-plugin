@@ -135,15 +135,26 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     entities = _transform_proto_json_1(proto_json, object_type, supported_models)
 
     entities = _topo_sort(entities)
+    # Let a submitted driver value win over the fields it forbids BEFORE anything else
+    # looks at those fields. Two orderings matter and this position satisfies both:
+    #
+    #   before _fingerprint_dedupe, because two nodes for the SAME object that carry the
+    #   same submitted driver value but DIFFERENT forbidden values are duplicates that
+    #   _merge_nodes would reject outright ("Conflicting values for 'tagged_vlans'"),
+    #   rejecting the whole entity -- the exact payload this policy exists to rescue.
+    #   Measured: one graph nesting Gi1/0/9 twice, mode "access", tagged_vlans [301] and
+    #   [302], was a 400 with the policy running after dedupe and applies with it here.
+    #   A field the driver value ALLOWS still conflicts, and must: mode "tagged" with
+    #   [401] vs [402] is a genuine disagreement nothing can discard.
+    #
+    #   before _resolve_existing_references, because a dropped field can itself be a
+    #   match criterion (ipam.vlan matches on qinq_svlan), and dropping it after the
+    #   lookup strands the entity as an unmatchable CREATE that re-plans every ingest.
+    apply_submitted_driver_field_policy(entities)
     deduplicated = _fingerprint_dedupe(entities)
     deduplicated = _topo_sort(deduplicated)
     _set_auto_slugs(deduplicated, supported_models)
     _handle_cached_scope(deduplicated, supported_models)
-    # Let a submitted driver value win over the fields it forbids BEFORE existing
-    # objects are matched: a dropped field can itself be a match criterion (ipam.vlan
-    # matches on qinq_svlan), and dropping it after the lookup strands the entity as
-    # an unmatchable CREATE that re-plans on every ingest.
-    apply_submitted_driver_field_policy(deduplicated)
     resolved = _resolve_existing_references(deduplicated)
     _strip_cached_scope(resolved)
     defaulted = _set_defaults(resolved, supported_models)
@@ -633,6 +644,17 @@ def _merge_nodes(a: dict, b: dict) -> dict:
     """
     merged = copy.deepcopy(a)
     merged['_refs'] = a['_refs'] | b['_refs']
+    # Underscore keys are otherwise "prefer a's value", which would silently discard
+    # the warnings recorded on b -- including a driver-field drop the policy made
+    # before dedupe. A drop the operator never hears about is the thing the warning
+    # exists to prevent, so warnings are unioned per field like _refs.
+    merged_warnings = copy.deepcopy(a.get('_warnings') or {})
+    for field, msgs in (b.get('_warnings') or {}).items():
+        for msg in msgs:
+            if msg not in merged_warnings.setdefault(field, []):
+                merged_warnings[field].append(msg)
+    if merged_warnings:
+        merged['_warnings'] = merged_warnings
 
     for k, v in b.items():
         if k.startswith("_"):
