@@ -646,6 +646,31 @@ def _place_unseeded_vc_nodes(
             _absorb_vc_identity(groups[group_id], identities[index])
 
 
+def vc_name_fingerprint(data: dict):
+    """
+    The name-keyed VirtualChassis fingerprint, the only one a partition qualifies.
+
+    The partition exists to stop two same-NAME nodes with incompatible identity
+    from merging, and this is the fingerprint that merges them. Every other
+    fingerprint VirtualChassis has is either the auto-derived unique_master key
+    or the whole-payload one, and two nodes agreeing on those ARE the same row
+    whatever their names say: master is a DB unique constraint, and a split
+    always implies some asserted field differs, so the whole-payload key
+    already tells split nodes apart on its own.
+
+    Qualifying all of them instead separated a partitioned node from every
+    UNPARTITIONED node under every key -- the qualifier is bucket-local and is
+    only assigned inside a name bucket that actually splits -- so two nodes
+    naming one master under DIFFERENT names stopped merging, and the second
+    create then bound the first row while claiming a master the DB holds
+    unique. Qualify the name key alone.
+    """
+    for matcher in get_model_matchers(get_object_type_model("dcim.virtualchassis")):
+        if isinstance(matcher, VirtualChassisNameMatcher):
+            return matcher.fingerprint(data)
+    return None
+
+
 def partition_vc_identities(identities: list[dict]) -> list[int]:
     """
     Split same-named VC nodes into the chassis they describe. ONE group index per node.

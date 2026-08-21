@@ -288,9 +288,12 @@ class _MasterAttach(Enum):
       develop's behaviour too (08af3fb relocates in every one of those cells,
       measured), so it is not a regression and it is deliberately not "fixed"
       here -- refusing on the create path would refuse payloads develop
-      accepts. It IS the reason this
-      enum member does not claim more than "adoption will not relocate a
-      device".
+      accepts. It IS the reason this enum member does not claim more than
+      "adoption will not relocate a device THIS CHANGESET HAS NOT ALREADY
+      ASKED TO MOVE" -- the 48 adopting cells counted above are exactly the
+      ones where _changeset_plans_membership licensed the move, and an
+      unqualified "adoption will not relocate a device" would be false for
+      every one of them.
     - MASTERS_OTHER_CHASSIS: the device already MASTERS a different chassis.
       VirtualChassis.master is a DB unique constraint, so that row -- not the
       same-named masterless one this adoption was about to write -- is the row

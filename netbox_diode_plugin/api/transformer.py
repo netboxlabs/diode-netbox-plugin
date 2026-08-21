@@ -40,6 +40,7 @@ from .matcher import (
     find_existing_object,
     fingerprints,
     partition_vc_identities,
+    vc_name_fingerprint,
 )
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -732,13 +733,23 @@ def _canonical_uuids(entities: list[dict]) -> dict[str, str]:
     canonicalises as it goes (``_update_unresolved_refs`` before ``fingerprints``),
     which is exactly why the partition cannot be computed from the raw list.
 
-    This is a faithful replay rather than an approximation of one: it rewrites
-    refs, computes the same fingerprints from the same incoming node, takes the
-    first fingerprint that has been seen, and registers every fingerprint onto
-    the survivor -- the four things the loop's identity decision consists of.
-    The loop never recomputes a survivor's fingerprints after merging (it keys
-    off the INCOMING node's), so not merging payloads here costs no accuracy.
-    Post-create nodes are skipped because they neither merge nor register.
+    It replays four of the loop's five identity steps: it rewrites refs,
+    computes the same fingerprints from the same incoming node, takes the first
+    fingerprint that has been seen, and registers every fingerprint onto the
+    survivor. The loop never recomputes a survivor's fingerprints after merging
+    (it keys off the INCOMING node's), so not merging payloads here costs no
+    accuracy. Post-create nodes are skipped because they neither merge nor
+    register.
+
+    The fifth step it does NOT replay is the identity-partition qualifier the
+    loop puts on a split chassis node's name fingerprint, and it cannot: the
+    partition is what this function is being called to help compute. That costs
+    nothing, because the qualifier is only ever applied to dcim.virtualchassis
+    nodes while the map returned here is consulted only for the DEVICE uuids a
+    master reference points at. Two chassis nodes this replay merges and the
+    real loop keeps apart therefore change no answer any caller reads -- but
+    a future caller that wants a chassis uuid out of this map does not inherit
+    that guarantee, so read it as being about device references.
 
     It runs on deepcopies: ``_update_dict_refs`` rewrites reference objects in
     place, and the shared UnresolvedReference instances belong to the caller.
@@ -843,14 +854,23 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
             fps = fingerprints(entity, entity['_object_type'])
             group = partition.get(entity['_uuid'])
             if group is not None:
-                # Keep the groups' fingerprint spaces apart, rather than teaching this
-                # loop a second, type-aware notion of "is this the same node". Every
-                # fingerprint is qualified, not just the name one: two nodes in one group
-                # are qualified identically and merge exactly as before, and nodes in
-                # different groups must not meet under ANY key -- two chassis nodes with
-                # one master are always one group, so no group boundary can hide a
-                # duplicate the unique-master key would otherwise have caught.
-                fps = [(fp, group) for fp in fps]
+                # Keep the groups apart under the NAME key only, rather than teaching
+                # this loop a second, type-aware notion of "is this the same node".
+                # Two nodes in one group are qualified identically and merge exactly as
+                # before; two in different groups no longer meet on the name.
+                #
+                # Only the name key. This qualifier is bucket-local -- a node gets one
+                # only inside a name bucket that actually splits -- so qualifying every
+                # key separated a partitioned node from every UNPARTITIONED one under
+                # all of them, and two nodes naming ONE master under DIFFERENT names
+                # stopped merging: two creates, both claiming a master the DB holds
+                # unique. The other keys need no qualifier anyway. unique_master is a DB
+                # unique constraint, so nodes agreeing there are the same row whatever
+                # their names say, and a split always means some asserted field differs,
+                # which the whole-payload key already sees.
+                name_fp = vc_name_fingerprint(entity)
+                if name_fp is not None:
+                    fps = [(fp, group) if fp == name_fp else fp for fp in fps]
             for fp in fps:
                 existing_uuid = by_fp.get(fp)
                 if existing_uuid is not None:

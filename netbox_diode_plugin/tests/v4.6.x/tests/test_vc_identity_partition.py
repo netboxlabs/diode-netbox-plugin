@@ -4,9 +4,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
+from rest_framework import serializers
 from utilities.testing import APITestCase
 
+from netbox_diode_plugin.api import transformer
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.api.common import UnresolvedReference
 from netbox_diode_plugin.api.matcher import (
@@ -571,3 +573,59 @@ class VCIdentityPartitionRuleTests(SimpleTestCase):
             with self.subTest(f"{a} vs {b}"):
                 self.assertEqual(vc_identities_conflict(a, b), expected)
                 self.assertEqual(vc_identities_conflict(b, a), expected, "not symmetric")
+
+
+class VCPartitionKeyScopeTests(TestCase):
+    """The group qualifier must not reach the keys that are not the name."""
+
+    @staticmethod
+    def _vc(uuid, name, master_uuid):
+        return {
+            "_uuid": uuid,
+            "_object_type": "dcim.virtualchassis",
+            "_refs": set(),
+            "name": name,
+            "master": UnresolvedReference(object_type="dcim.device", uuid=master_uuid),
+        }
+
+    def test_two_names_one_master_still_meet_on_the_unique_master_key(self):
+        """
+        A partitioned node must still dedupe against an UNPARTITIONED one.
+
+        The group qualifier is bucket-local: a node is given one only inside a
+        name bucket that actually splits. Qualifying EVERY fingerprint with it
+        therefore put partitioned nodes in a different key space from every
+        other node, and two chassis nodes naming ONE master under DIFFERENT
+        names stopped meeting on the auto-derived unique_master key -- two
+        creates, both claiming a master the database holds unique, so the
+        second bound the first row instead of reporting anything.
+
+        Here "fpr-stack" splits (two masters) so its nodes carry a qualifier,
+        while "fpr-other" is alone and carries none. It names the same master
+        as one of them, so the two are the same row by the unique constraint
+        and must meet. Meeting them surfaces the real disagreement -- one row
+        cannot be called two things -- which is a diagnosable refusal rather
+        than a silent wrong write. Measured with the qualifier on every key:
+        three entities out, no error.
+        """
+        nodes = [
+            self._vc("vc-a", "fpr-stack", "dev-m1"),
+            self._vc("vc-b", "fpr-stack", "dev-m2"),
+            self._vc("vc-c", "fpr-other", "dev-m1"),
+        ]
+        with self.assertRaises(serializers.ValidationError) as caught:
+            transformer._fingerprint_dedupe(nodes)
+        message = str(caught.exception)
+        self.assertIn("Conflicting values for 'name'", message)
+        self.assertIn("fpr-stack", message)
+        self.assertIn("fpr-other", message)
+
+    def test_the_split_itself_still_holds_under_the_narrowed_qualifier(self):
+        """Narrowing the qualifier to the name key must not un-split a bucket."""
+        nodes = [
+            self._vc("vc-a", "fpr-two", "dev-m1"),
+            self._vc("vc-b", "fpr-two", "dev-m2"),
+        ]
+        result, _ = transformer._fingerprint_dedupe(nodes)
+        self.assertEqual(len(result), 2, "the two masters were merged into one chassis")
+        self.assertEqual({e["name"] for e in result}, {"fpr-two"})

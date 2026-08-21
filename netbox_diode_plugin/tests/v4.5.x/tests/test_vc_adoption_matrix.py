@@ -217,13 +217,14 @@ class VirtualChassisAdoptionMatrixTests(TestCase):
     def _cells(self):
         # 0/1/2 candidates, not 0..3. The adoption decision cannot tell three
         # same-named rows from two. narrow_vc_candidates is a per-element filter
-        # with one empty/non-empty check, so it is cardinality-blind; and
-        # _choose_adoption_candidate's only cardinality tests are
-        # len(strong) == 1, len(strong) > 1 (unreachable while
-        # Device.virtual_chassis is a single FK -- at most one row can hold the
-        # master) and len(candidates) != 1. Every branch past narrowing reads
-        # one row, `only`. Two candidates already reach "more than one", so a
-        # third adds cells, not states.
+        # with one empty/non-empty check, so it is cardinality-blind, and every
+        # cardinality test _choose_adoption_candidate makes is a zero-, one- or
+        # more-than-one test -- all five of them: len(strong) == 1,
+        # len(strong) > 1 (unreachable while Device.virtual_chassis is a single
+        # FK, so at most one row can hold the master), `not candidates`,
+        # `identified and len(candidates) == 1`, and len(candidates) != 1.
+        # Every branch past narrowing reads one row, `only`. Two candidates
+        # already reach "more than one", so a third adds cells, not states.
         #
         # Measured, not reasoned: the 4240 length-3 cells produced no behaviour
         # signature the shorter 1824 did not. Dropping them, together with the
