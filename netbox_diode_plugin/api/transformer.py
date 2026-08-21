@@ -775,6 +775,25 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
 
     return [by_uuid[u] for u in deduplicated], refs_released
 
+def _union_private_context(merged: dict, a: dict, b: dict) -> None:
+    """
+    Union the kept private context keys instead of preferring a's.
+
+    Private keys are otherwise "prefer a's value", which for the member-device
+    hint would discard every member but the first. The rule it feeds -- prefer
+    the chassis a referencing member already belongs to -- is only as good as the
+    evidence it can see, and each merged node brought its own.
+    """
+    for key in _PRIVATE_CONTEXT_KEYS_KEPT:
+        if key not in a and key not in b:
+            continue
+        union = list(a.get(key) or [])
+        for item in (b.get(key) or []):
+            if item not in union:
+                union.append(item)
+        merged[key] = union
+
+
 def _merge_nodes(a: dict, b: dict) -> dict:
     """
     Merges two nodes.
@@ -787,18 +806,7 @@ def _merge_nodes(a: dict, b: dict) -> dict:
     merged['_refs'] = a['_refs'] | b['_refs']
     _union_warnings(merged, a, b)
 
-    # Private keys are otherwise "prefer a's value", which for the member-device
-    # hint would silently discard every member but the first. Union them: the
-    # rule it feeds ("prefer the chassis a referencing member already belongs
-    # to") is only as good as the evidence it can see, and each merged node
-    # brought its own.
-    for k in _PRIVATE_CONTEXT_KEYS_KEPT:
-        if k in a or k in b:
-            union = list(a.get(k) or [])
-            for item in (b.get(k) or []):
-                if item not in union:
-                    union.append(item)
-            merged[k] = union
+    _union_private_context(merged, a, b)
     deferred = dict(a.get('_deferred_conflicts') or {})
     rejected = []
     for k, v in b.items():
