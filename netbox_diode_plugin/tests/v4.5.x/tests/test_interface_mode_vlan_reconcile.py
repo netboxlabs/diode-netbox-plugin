@@ -7,6 +7,7 @@ from django.test import SimpleTestCase
 from utilities.data import shallow_compare_dict
 from utilities.testing import APITestCase
 
+from netbox_diode_plugin.api import field_policy
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.api.common import UnresolvedReference
 from netbox_diode_plugin.api.differ import normalize_changeset
@@ -208,6 +209,53 @@ class NormalizeChangesetTests(SimpleTestCase):
                     for dependent in dependents:
                         with self.subTest(object_type=object_type, dependent=dependent):
                             self.assertNotIn(dependent, matched)
+
+    def _flaky_model_lookup(self, fail_calls=1):
+        """A get_object_type_model that fails its first ``fail_calls`` calls, then works."""
+        real = field_policy.get_object_type_model
+        calls = []
+
+        def flaky(object_type):
+            calls.append(object_type)
+            if len(calls) <= fail_calls:
+                raise RuntimeError("content type lookup unavailable")
+            return real(object_type)
+
+        match_participating_fields.cache_clear()
+        self.addCleanup(match_participating_fields.cache_clear)
+        return flaky, calls
+
+    def test_a_model_lookup_failure_refuses_the_drop_instead_of_licensing_it(self):
+        """A failed model lookup propagates; it never answers "nothing participates"."""
+        # The gate answers "which fields decide WHICH row this payload means". An empty
+        # answer means "none of them", which licenses every drop the gate exists to
+        # refuse -- so a lookup failure must not produce one.
+        flaky, calls = self._flaky_model_lookup()
+        entity = {"qinq_role": "svlan", "qinq_svlan": 7}
+        with mock.patch.object(field_policy, "get_object_type_model", flaky):
+            with self.assertRaises(RuntimeError):
+                submitted_driver_field_drops("ipam.vlan", entity)
+            # nothing was dropped on the way out
+            self.assertEqual(entity, {"qinq_role": "svlan", "qinq_svlan": 7})
+            self.assertEqual(calls, ["ipam.vlan"])
+
+    def test_a_model_lookup_failure_is_not_cached_as_nothing_participates(self):
+        """The recovery half: a transient failure must not poison the lru_cache."""
+        # lru_cache does not cache exceptions, so the next call retries. Returning an
+        # empty frozenset instead would be cached until eviction or restart, and every
+        # later request would treat qinq_svlan as droppable after the database had
+        # recovered -- re-enabling the same-vid wrong-row mutation this gate prevents.
+        flaky, calls = self._flaky_model_lookup()
+        with mock.patch.object(field_policy, "get_object_type_model", flaky):
+            with self.assertRaises(RuntimeError):
+                match_participating_fields("ipam.vlan")
+            # the healthy retry sees the truth
+            self.assertIn("qinq_svlan", match_participating_fields("ipam.vlan"))
+            entity = {"qinq_role": "svlan", "qinq_svlan": 7}
+            out, dropped = self._drop("ipam.vlan", {}, entity)
+        self.assertEqual(out["qinq_svlan"], 7)
+        self.assertEqual(dropped, {})
+        self.assertEqual(len(calls), 2)   # retried once, then served from cache
 
     def test_shared_policy_keeps_qinq_svlan_on_a_customer_vlan(self):
         """qinq_role "cvlan" permits qinq_svlan, so an explicit create keeps it."""
@@ -537,6 +585,29 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
         self.assertEqual(self._uuids(out), ["i1", "v1"])
         self.assertNotIn("rf_role", iface)
         self.assertEqual(iface["_refs"], {"v1"})
+
+    def test_a_gate_failure_takes_the_whole_pass_down_instead_of_dropping(self):
+        """The graph-level pass does not swallow a gate failure into a silent drop."""
+        real = field_policy.get_object_type_model
+
+        def broken(object_type):
+            raise RuntimeError("content type lookup unavailable")
+
+        match_participating_fields.cache_clear()
+        self.addCleanup(match_participating_fields.cache_clear)
+        svlan = self._node("ipam.vlan", "s1", vid=900, name="s900")
+        vlan = self._node("ipam.vlan", "v1", refs={"s1"}, vid=101, name="v101",
+                          qinq_role="svlan", qinq_svlan=self._ref("s1"))
+        with mock.patch.object(field_policy, "get_object_type_model", broken):
+            with self.assertRaises(RuntimeError):
+                apply_submitted_driver_field_policy([svlan, vlan])
+        self.assertEqual(vlan["qinq_svlan"], self._ref("s1"))
+        self.assertEqual(vlan["_refs"], {"s1"})
+        self.assertEqual(vlan["_warnings"], {})
+        # and with the lookup healthy again the gate still refuses the drop
+        self.assertEqual(self._uuids(self._policy([svlan, vlan])), ["s1", "v1"])
+        self.assertEqual(vlan["qinq_svlan"], self._ref("s1"))
+        self.assertIs(real, field_policy.get_object_type_model)
 
     def test_one_drop_is_reported_once_when_the_policy_runs_twice(self):
         """The policy is idempotent: a second pass re-reports nothing."""

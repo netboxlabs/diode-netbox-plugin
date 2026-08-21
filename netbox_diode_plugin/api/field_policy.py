@@ -136,12 +136,13 @@ def match_participating_fields(object_type: str) -> frozenset:
     No ``dcim.interface`` or ``virtualization.vminterface`` field in the registry is
     read by any matcher (those match on device/VM plus name), so this costs the
     motivating cases nothing.
+
+    A failed model lookup PROPAGATES. Answering "no field participates" would license
+    every drop this gate exists to refuse, and ``lru_cache`` would keep serving that
+    answer long after the database recovered; ``lru_cache`` does not cache exceptions,
+    so the next call retries a lookup that failed transiently.
     """
-    try:
-        model_class = get_object_type_model(object_type)
-    except Exception:  # unknown/unavailable type -> claim nothing, fail closed below
-        logger.warning(f"match_participating_fields: cannot resolve model for {object_type}")
-        return frozenset()
+    model_class = get_object_type_model(object_type)
     names = set()
     for matcher in get_model_matchers(model_class):
         # ObjectMatchCriteria._get_refs() already unions fields with the names its
