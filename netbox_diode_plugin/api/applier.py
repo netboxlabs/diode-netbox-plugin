@@ -273,6 +273,22 @@ class _MasterAttach(Enum):
       cycles, each 200 with errors null, master never set. Reporting the
       conflict is what makes the deviation visible to the producer instead of
       leaving it to be inferred from a plan that never empties.
+
+      SCOPE, because the sentence above used to overstate it: this is what
+      ADOPTION does, and adoption is only reached when a same-named masterless
+      row was chosen. Where no row is adopted -- no candidate at all, or a
+      candidate whose identity is not strong enough to adopt -- the ordinary
+      create path inserts the payload's own chassis and NetBox's own
+      dcim.signals.assign_virtualchassis_master then moves the named master into
+      it, out of whatever chassis it was in, and answers 200. Enumerated on
+      v4.5.5 and v4.4.10 over the 6064 cells of
+      VirtualChassisAdoptionMatrixTests: 212 cells report this conflict and 1004
+      relocate through the create path. That is develop's behaviour too (08af3fb
+      relocates in every one of those cells, measured), so it is not a
+      regression and it is deliberately not "fixed" here -- refusing on the
+      create path would refuse payloads develop accepts. It IS the reason this
+      enum member does not claim more than "adoption will not relocate a
+      device".
     - MASTERS_OTHER_CHASSIS: the device already MASTERS a different chassis.
       VirtualChassis.master is a DB unique constraint, so that row -- not the
       same-named masterless one this adoption was about to write -- is the row
