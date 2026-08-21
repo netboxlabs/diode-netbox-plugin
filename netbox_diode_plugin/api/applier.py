@@ -410,7 +410,18 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
 
     1. the requested master is ALREADY a member of exactly one candidate. The
        database has already agreed with the payload; nothing moves. This is the
-       convergence path for a member-first ingest whose member landed first.
+       convergence path for a member-first ingest whose member landed first,
+       and it is the ONE rule that may take a row which already has a master
+       (see the candidate query in _try_adopt_masterless_virtualchassis): an
+       operator who re-elects a stack's master leaves a row that no matcher
+       resolves any more -- the name matcher is gated off by the payload's
+       master stub and unique_master looks for a device that no longer masters
+       anything -- and without this the next ingest CREATES a second chassis
+       and splits the stack. Measured on v4.5.5 and v4.4.10 with the full
+       154-entity capture: 200 and one row with it, 207 forever and a stack
+       split 1 + 2 without it (see
+       test_the_capture_reconverges_after_an_operator_re_elects_the_master).
+       Rules 2-4 never see a mastered row; only this one does.
     2. a NON-EMPTY discriminator the payload asserted
        (matcher.narrow_vc_candidates) leaves exactly one candidate. Name plus
        domain is a claim about which row, rather than a guess between rows. A
@@ -474,6 +485,10 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
         # _MasterAttach reports that conflict rather than inventing an answer.
         return None
 
+    candidates = [c for c in candidates if c.master_id is None]
+    if not candidates:
+        return None
+
     candidates, contradicted, identified = narrow_vc_candidates(candidates, data)
     if contradicted:
         return None
@@ -498,11 +513,23 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
 def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_class, request,
                                          change, change_set, created):
     """
-    Adopt a same-named masterless VirtualChassis for a master-bearing CREATE.
+    Adopt a same-named existing VirtualChassis for a master-bearing CREATE.
 
     A member-first ingest ordering (or a replaced master) can leave a VC whose
     master is unset; a later master-bearing CREATE should bind that row rather
-    than create a same-named duplicate. WHICH row, and whether any row may be
+    than create a same-named duplicate.
+
+    Candidates are the same-named rows that are MASTERLESS, plus the one extra
+    shape rule 1 exists for: a row that already holds the requested master as a
+    member while carrying a DIFFERENT master. That is an operator re-election,
+    and it is admitted because the requested master's own membership -- already
+    in the database -- identifies the row without appeal to the name. A row
+    that already carries the requested master is excluded: unique_master
+    resolves that one at plan time, so a CREATE arriving here for it is a stale
+    plan the create path must settle without rewriting the row (see
+    test_master_already_owning_a_chassis_declines_adoption_of_a_decoy). The
+    function keeps its name for now; "masterless" describes every candidate but
+    that one. WHICH row, and whether any row may be
     bound at all, is decided by _choose_adoption_candidate and is the whole
     identity question -- it is not settled by name plus creation order, which is
     what this function used to do (prefer a candidate already containing the
@@ -533,7 +560,9 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     Bounds, stated as bounds rather than as accepted collateral. Adoption can
     bind a row this payload only described: rule 2 (name plus a non-empty
     discriminator the payload asserted), rule 3 (a single EMPTY row) and rule 4
-    (a single populated row whose membership this changeset plans). Rule 4 is
+    (a single populated row whose membership this changeset plans). Rule 1 is
+    not among them -- it binds only a row the requested master is already IN,
+    which the payload does not merely describe. Rule 4 is
     the one that can still land a member-first payload on a same-named row
     another producer owns, and _choose_adoption_candidate says why no narrowing
     of it survived measurement. What adoption never does is bind a row on a
@@ -555,7 +584,10 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
         return None
     candidates = list(
         annotate_vc_member_counts(
-            model_class.objects.filter(name=name, master__isnull=True)
+            model_class.objects.filter(name=name).filter(
+                models.Q(master__isnull=True)
+                | (models.Q(members__pk=master_pk) & ~models.Q(master_id=master_pk))
+            ).distinct()
         ).order_by("pk")
     )
     if not candidates:

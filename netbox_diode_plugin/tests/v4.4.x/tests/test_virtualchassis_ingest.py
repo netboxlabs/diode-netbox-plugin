@@ -8,6 +8,7 @@ from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, Virt
 from django.test import SimpleTestCase
 from utilities.testing import APITestCase
 
+from netbox_diode_plugin.api import matcher
 from netbox_diode_plugin.api.applier import _coerce_pk
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.api.matcher import _PRE_SAVE_MATCH_BIND_ONLY
@@ -857,6 +858,65 @@ class VirtualChassisIngestE2ETests(APITestCase):
 
         for payload in payloads:
             self._assert_noop_rediff(payload)
+
+    def test_the_capture_reconverges_after_an_operator_re_elects_the_master(self):
+        """
+        An operator re-elects the master in NetBox; the next ingest must find the row.
+
+        Measured on v4.5.5 and v4.4.10 with the full 154-entity capture replayed
+        through bulk-plan-apply, after ``vc.master`` was moved to the member at
+        position 2:
+
+          - without the member-holding candidate below: the standalone
+            virtual_chassis entity resolves to nothing (the name matcher is
+            gated off by its master stub, unique_master looks for a row mastered
+            by a device that no longer masters one, and the adopter only
+            considered masterless rows), so it CREATES a second chassis. The
+            three-member stack ends up split 1 + 2 across two rows and the
+            member that is still the old row's master fails forever with
+            NetBox's "Device cannot be removed from virtual chassis ... because
+            it is currently designated as its master" -- 207 on every pass.
+          - with it: 200, one row, the master restored, the members untouched.
+
+        The candidate is admitted on the strongest identity evidence there is
+        (rule 1: the requested master is ALREADY a member of that row, so
+        nothing is moved on the strength of a name) and only when the row does
+        not already carry that master -- a row that does is resolved by
+        unique_master at plan time, and a CREATE that reached the adopter for it
+        is a stale plan the create path must settle without rewriting the row
+        (test_master_already_owning_a_chassis_declines_adoption_of_a_decoy).
+
+        The find-obj lookup cache is disabled for the second pass on purpose.
+        With it warm, develop and the pre-identity branch head appear to
+        converge here -- but only because a 30-second cached pk is served for a
+        payload that no matcher resolves any more, so the apparent convergence
+        expires with the cache and orb-agent's re-run interval is longer than
+        that. The behaviour has to hold without it.
+        """
+        payloads = self._orb_capture_payloads()
+        for payload in payloads:
+            self._diff_apply(payload, allow_empty=True)
+
+        vc = VirtualChassis.objects.get(name="<private>")
+        successor = vc.members.exclude(pk=vc.master_id).order_by("vc_position").first()
+        vc.master = successor
+        vc.save()
+        self.assertEqual(vc.master.name, "<private>-2")
+
+        with mock.patch.object(matcher, "_get_find_obj_cache_ttl", return_value=0):
+            for payload in payloads:
+                self._diff_apply(payload, allow_empty=True)
+
+            self.assertEqual(VirtualChassis.objects.filter(name="<private>").count(), 1)
+            reconverged = self._assert_single_vc(
+                "<private>", master_name="<private>",
+                members={"<private>": 1, "<private>-2": 2, "<private>-3": 3},
+            )
+            self.assertEqual(reconverged.pk, vc.pk, "the stack was split into a second row")
+            self.assertEqual(reconverged.member_count, reconverged.members.count())
+
+            for payload in payloads:
+                self._assert_noop_rediff(payload)
 
     def test_a_second_producers_member_first_stack_lands_on_the_same_row(self):
         """
