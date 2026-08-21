@@ -55,11 +55,35 @@ class VirtualChassisIngestE2ETests(APITestCase):
         entity.update(extra or {})
         return {"timestamp": 1, "object_type": "dcim.device", "entity": {"device": entity}}
 
-    def _vc_payload(self, name, master_name):
-        return {"timestamp": 1, "object_type": "dcim.virtualchassis", "entity": {"virtual_chassis": {
+    def _vc_payload(self, name, master_name, domain=None):
+        vc = {
             "name": name,
             "master": {"name": master_name, "site": {"name": "vce-site"}},
-        }}}
+        }
+        if domain is not None:
+            vc["domain"] = domain
+        return {"timestamp": 1, "object_type": "dcim.virtualchassis",
+                "entity": {"virtual_chassis": vc}}
+
+    def _seed_named_stack(self, vc_name, domain, members):
+        """
+        ORM-seed a converged stack: ``members`` is {device_name: position}, first is master.
+
+        Two of these with the SAME name and different domains are the review's
+        scenario: two legitimately distinct stacks that a name cannot tell apart.
+        """
+        devices = {}
+        vc = VirtualChassis.objects.create(name=vc_name, domain=domain)
+        for name, position in members.items():
+            d = Device.objects.create(
+                name=name, site=self.site, device_type=self.dt, role=self.role
+            )
+            Device.objects.filter(pk=d.pk).update(virtual_chassis=vc, vc_position=position)
+            devices[name] = d
+        vc.refresh_from_db()
+        vc.master = devices[next(iter(members))]
+        vc.save()
+        return vc, devices
 
     def _diff(self, payload):
         r = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
@@ -373,6 +397,125 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 2)
         self._assert_noop_rediff(payload)
 
+    def test_empty_duplicate_loses_to_the_populated_chassis(self):
+        """
+        Recovery that IS safe: an empty same-named row is not a stack anyone owns.
+
+        A bug-created duplicate is empty and masterless; the real chassis has a
+        master and members. A new member's name-only reference resolves to the
+        real one -- not because it is older (it is, and that is irrelevant: the
+        assertions below hold for the POPULATED row whichever order the rows
+        were created in) but because exactly one candidate is a stack at all.
+        No device is moved: vce-sw2 is not in either row to begin with.
+        """
+        vc_dup = VirtualChassis.objects.create(name="vce-stack")  # created FIRST, empty
+        vc_real, master = self._seed_stack()                      # newer, populated
+        self.assertLess(vc_dup.pk, vc_real.pk, "the empty duplicate must be the older row")
+
+        payload = self._device_payload("vce-sw2", {
+            "vc_position": 2, "virtual_chassis": {"name": "vce-stack"},
+        })
+        self._diff_apply(payload)
+        member = Device.objects.get(name="vce-sw2")
+        self.assertEqual(member.virtual_chassis_id, vc_real.pk)
+        self.assertEqual(vc_dup.members.count(), 0)
+        self._assert_noop_rediff(payload)
+
+    def test_two_same_named_stacks_make_a_member_reference_ambiguous(self):
+        """
+        The review's scenario, and the failure mode this whole policy exists for.
+
+        Two legitimately distinct stacks are both called "vce-shared": one in
+        building-a with vce-a1/vce-a2, one in building-b with vce-b1/vce-b2.
+        Ingesting a new member vce-b3 whose virtual_chassis reference carries
+        the name and nothing else USED to bind the older row and place vce-b3
+        into the building-A stack -- silently, with no later diff mentioning it.
+
+        It must now fail, at PLAN time, with an error that names both rows and
+        says what would resolve them. Failing at plan is what makes it a
+        deviation the producer sees rather than a write it has to detect
+        afterwards.
+        """
+        vc_a, _ = self._seed_named_stack(
+            "vce-shared", "building-a", {"vce-a1": 1, "vce-a2": 2})
+        vc_b, _ = self._seed_named_stack(
+            "vce-shared", "building-b", {"vce-b1": 1, "vce-b2": 2})
+        self.assertLess(vc_a.pk, vc_b.pk)
+
+        r = self.client.post(
+            self.diff_url,
+            data=self._device_payload("vce-b3", {
+                "vc_position": 3, "virtual_chassis": {"name": "vce-shared"},
+            }),
+            format="json", **self.auth,
+        )
+        self.assertEqual(r.status_code, 400, r.content)
+        error = r.json()["errors"]["dcim.virtualchassis"]["name"][0]
+        self.assertIn("vce-shared", error)
+        self.assertIn(f"id {vc_a.pk}", error)
+        self.assertIn(f"id {vc_b.pk}", error)
+        self.assertIn("domain", error, "the error must name the discriminator that resolves it")
+
+        # nothing planned means nothing applied: no device, no membership change
+        self.assertFalse(Device.objects.filter(name="vce-b3").exists())
+        self.assertEqual(vc_a.members.count(), 2)
+        self.assertEqual(vc_b.members.count(), 2)
+
+    def test_domain_resolves_a_reference_two_stacks_would_otherwise_share(self):
+        """
+        The discriminator does the work the name cannot: vce-b3 lands in building-b.
+
+        Same two stacks as above. The only difference is that the member's
+        virtual_chassis reference carries domain, which is a claim about WHICH
+        row rather than a guess between rows -- so it resolves, and it resolves
+        to the row the producer named, not the older one.
+        """
+        vc_a, _ = self._seed_named_stack(
+            "vce-shared", "building-a", {"vce-a1": 1, "vce-a2": 2})
+        vc_b, _ = self._seed_named_stack(
+            "vce-shared", "building-b", {"vce-b1": 1, "vce-b2": 2})
+
+        payload = self._device_payload("vce-b3", {
+            "vc_position": 3,
+            "virtual_chassis": {"name": "vce-shared", "domain": "building-b"},
+        })
+        self._diff_apply(payload)
+
+        member = Device.objects.get(name="vce-b3")
+        self.assertEqual(member.virtual_chassis_id, vc_b.pk)
+        self.assertEqual(member.vc_position, 3)
+        self.assertEqual(vc_a.members.count(), 2, "the building-A stack was touched")
+        vc_a.refresh_from_db()
+        self.assertEqual(vc_a.domain, "building-a", "the building-A domain was overwritten")
+        self._assert_noop_rediff(payload)
+
+    def test_an_existing_member_keeps_its_own_stack_when_the_name_is_shared(self):
+        """
+        The member's own membership outranks everything, including the older row.
+
+        vce-b3 is already in the building-B stack, which is the NEWER of the two
+        same-named rows. A name-only reference must resolve to the chassis it is
+        in -- the previous policy resolved to the older row and MOVED it, which
+        is the same defect as the ambiguity above wearing a converged disguise:
+        it looks idempotent and is a relocation.
+        """
+        vc_a, _ = self._seed_named_stack(
+            "vce-shared", "building-a", {"vce-a1": 1, "vce-a2": 2})
+        vc_b, _ = self._seed_named_stack(
+            "vce-shared", "building-b", {"vce-b1": 1, "vce-b2": 2})
+        member = Device.objects.create(
+            name="vce-b3", site=self.site, device_type=self.dt, role=self.role
+        )
+        Device.objects.filter(pk=member.pk).update(virtual_chassis=vc_b, vc_position=3)
+
+        payload = self._device_payload("vce-b3", {
+            "vc_position": 3, "virtual_chassis": {"name": "vce-shared"},
+        })
+        self.assertEqual(self._diff(payload).get("changes"), [])
+        member.refresh_from_db()
+        self.assertEqual(member.virtual_chassis_id, vc_b.pk)
+        self.assertEqual(vc_a.members.count(), 2)
+
     def test_workaround_shape_still_resolves(self):
         """Orb's shipped shape: plain master, top-level VC, member with inline VC."""
         self._diff_apply(self._device_payload("vce-sw1"))
@@ -532,7 +675,215 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self._assert_noop_rediff(master_payload)
         self._assert_noop_rediff(member_payload)
 
-    def test_standalone_vc_payload_adopts_masterless_row_and_attaches_master(self):
+    def _second_producer_payload(self, domain=None):
+        """A site-B device claiming the same chassis NAME, with its own master."""
+        vc = {
+            "name": "vce-shared",
+            "master": {"name": "vce-b3", "site": {"name": "vce-site-b"}},
+        }
+        if domain is not None:
+            vc["domain"] = domain
+        return self._device_payload("vce-b3", {
+            "site": {"name": "vce-site-b"},
+            "vc_position": 3,
+            "virtual_chassis": vc,
+        })
+
+    def _seed_a_producers_member_first_stack(self):
+        """
+        Producer A ingests two members, name-only VC ref: the shape of this PR.
+
+        Leaves exactly the state the member-first convergence tests rely on -- a
+        masterless row nobody has mastered yet -- and it is the same state a
+        SECOND producer's identically named stack presents to adoption. That is
+        the point: the row cannot tell the two apart, so the guard has to.
+        """
+        Site.objects.create(name="vce-site-b", slug="vce-site-b")
+        for name, position in (("vce-a1", 1), ("vce-a2", 2)):
+            self._diff_apply(self._device_payload(name, {
+                "vc_position": position,
+                "virtual_chassis": {"name": "vce-shared"},
+            }))
+        row = VirtualChassis.objects.get(name="vce-shared")
+        self.assertIsNone(row.master_id)
+        self.assertEqual(row.members.count(), 2)
+        return row
+
+    def _assert_producer_a_row_untouched(self, row, before, extra_rows=0):
+        """
+        Producer A's row is byte-identical, and the decline left no mess.
+
+        ``extra_rows`` is how many same-named rows the declining payload created
+        for itself: 0 where the payload was not applied at all, 1 where it
+        declined the adoption and created its own. Asserted rather than left
+        open, because "declined" and "silently did nothing" look alike from
+        producer A's side and only one of them converges.
+        """
+        row.refresh_from_db()
+        self.assertIsNone(row.master_id, "the declined adoption mastered the row anyway")
+        self.assertEqual(row.members.count(), 2, "a device was moved into the row")
+        self.assertEqual(row.last_updated, before, "the declined adoption saved the row")
+        self.assertEqual(
+            VirtualChassis.objects.filter(name=row.name).count(), 1 + extra_rows)
+
+    def test_a_second_producers_member_first_stack_lands_on_the_same_row(self):
+        """
+        The residual bound of name-keyed identity, measured rather than claimed.
+
+        Producer A ingests two site-A devices member-first, leaving a masterless
+        "vce-shared" holding both. Producer B then ingests one site-B device
+        whose nested virtual_chassis carries the same name, its own master, and
+        no domain. generate-diff previews "create dcim.virtualchassis";
+        apply-change-set answers 200; ONE row remains, and producer B's device is
+        now a member of producer A's row and its master.
+
+        That is a real bound and it is stated as one, in
+        applier._choose_adoption_candidate. It is not closable from this data:
+        the payload is byte-for-byte the shape of a legitimate member-first
+        second pass (test_fresh_stack_two_requests_both_orders_converge,
+        member_first), the row is masterless, populated and unlabelled either
+        way, and the two narrowings tried were both worse -- the site veto broke
+        legitimate cross-site stacks (400 forever, see
+        test_a_cross_site_member_first_row_still_converges_to_one_chassis), and
+        refusing outright left the real orb-agent capture at 207 on every pass
+        with no remedy its producer could take. Closing it needs identity the
+        source owns, not another inference from the rows.
+
+        What IS held down here: the outcome CONVERGES (the re-diff is empty, so
+        no pass ever re-plans this) and it is visible -- one row, both stacks in
+        it, which an operator can split. The failure mode this replaced was
+        invisible: adoption reported 200 while leaving the remaining members
+        detached.
+
+        The sibling test below is the escape hatch: a domain makes producer B's
+        payload describe its own chassis and it gets one.
+        """
+        self._seed_a_producers_member_first_stack()
+
+        payload = self._second_producer_payload()
+        cs = self._diff(payload)
+        vc_changes = [c for c in cs["changes"] if c["object_type"] == "dcim.virtualchassis"]
+        self.assertEqual([c["change_type"] for c in vc_changes], ["create"], cs)
+
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+
+        self._assert_single_vc("vce-shared", master_name="vce-b3",
+                              members={"vce-a1": 1, "vce-a2": 2, "vce-b3": 3})
+        self._assert_noop_rediff(payload)
+
+    def test_the_second_producer_gets_its_own_row_once_it_says_which(self):
+        """
+        The escape hatch from the bound above, and it does not touch A's row.
+
+        A domain makes the payload describe ITS chassis rather than share a name
+        with one, and no candidate carries that value -- which is not ambiguity
+        but "a chassis that does not exist yet", so it is created. Two rows share
+        the name afterwards and that is the correct answer: they are two stacks.
+        This is the one lever a producer has over the bound, and it is why the
+        bound is a bound rather than a defect: the ambiguity is in the data.
+        """
+        row = self._seed_a_producers_member_first_stack()
+        before = row.last_updated
+
+        payload = self._second_producer_payload(domain="vce-site-b")
+        self._diff_apply(payload)
+        self._assert_noop_rediff(payload)
+
+        self._assert_producer_a_row_untouched(row, before, extra_rows=1)
+        mine = VirtualChassis.objects.exclude(pk=row.pk).get(name="vce-shared")
+        self.assertEqual(mine.domain, "vce-site-b")
+        self.assertEqual(mine.master.name, "vce-b3")
+        self.assertEqual(
+            list(mine.members.values_list("name", flat=True)), ["vce-b3"])
+
+    def test_bulk_plan_apply_reaches_the_same_answer_for_a_second_producer(self):
+        """
+        Same bound through the other door, and the reason to test it twice.
+
+        /bulk-plan-apply/ plans and applies each entity in turn, sharing the
+        request-scoped caches, so entity 3 is planned against a database that
+        already holds entities 1 and 2 -- a real single-request analogue of the
+        cross-producer sequence. The point of testing it here is that the two
+        doors must not disagree: a 207 at one and a 200 at the other would mean
+        the same three payloads reconcile differently depending on how the
+        reconciler batched them.
+        """
+        Site.objects.create(name="vce-site-b", slug="vce-site-b")
+        entities = [
+            {"id": "a1", "object_type": "dcim.device",
+             "entity": self._device_payload("vce-a1", {
+                 "vc_position": 1, "virtual_chassis": {"name": "vce-shared"}})["entity"]},
+            {"id": "a2", "object_type": "dcim.device",
+             "entity": self._device_payload("vce-a2", {
+                 "vc_position": 2, "virtual_chassis": {"name": "vce-shared"}})["entity"]},
+            {"id": "b3", "object_type": "dcim.device",
+             "entity": self._second_producer_payload()["entity"]},
+        ]
+        r = self.client.post(self.bulk_plan_apply_url, data={"entities": entities},
+                             format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        results = {res["id"]: res for res in r.json()["results"]}
+        for key in ("a1", "a2", "b3"):
+            self.assertIsNone(results[key].get("errors"), results[key])
+
+        self._assert_single_vc("vce-shared", master_name="vce-b3",
+                               members={"vce-a1": 1, "vce-a2": 2, "vce-b3": 3})
+
+    def test_the_differ_drops_an_empty_domain_from_a_planned_create(self):
+        """
+        A producer that sends domain "" is, by the time apply reads it, silent.
+
+        Measured here rather than assumed: the differ DROPS ``domain: ""`` from
+        the CREATE it plans, because it equals the column default for a row that
+        does not exist yet -- so whatever the producer sent, adoption sees no
+        assertion at all and this payload gets exactly the treatment of one that
+        omitted the field. If that ever changes, this test is what notices.
+
+        The other half -- that "" could not IDENTIFY a row even where it does
+        survive, because every chassis that never set a domain carries it -- is
+        pinned at the door where it survives, apply-change-set, whose changes no
+        differ built: test_an_empty_domain_is_not_an_identification_that_
+        licenses_adoption in the matcher suite.
+        """
+        self._seed_a_producers_member_first_stack()
+
+        cs = self._diff(self._second_producer_payload(domain=""))
+        vc_create = [c for c in cs["changes"]
+                     if c["object_type"] == "dcim.virtualchassis"][0]
+        self.assertEqual(vc_create["change_type"], "create")
+        self.assertNotIn("domain", vc_create["data"], vc_create)
+
+    def test_a_labelled_row_survives_a_payload_that_asserts_no_domain(self):
+        """
+        An explicitly empty domain is a value, and it excludes the labelled row.
+
+        Two same-named populated stacks, one labelled "vce-dom" and one not. A
+        member payload carrying domain "" used to have that value DROPPED as if
+        absent: the reference was then ambiguous between both rows, and where it
+        did resolve, "" was written over the matched row's domain -- destroying
+        the one field the ambiguity refusal tells the operator to set. Now ""
+        narrows to the row that carries no domain, and the labelled row is not
+        read, not bound and not written.
+        """
+        labelled, _ = self._seed_named_stack("vce-dup", "vce-dom", {"vce-d1": 1})
+        plain, _ = self._seed_named_stack("vce-dup", "", {"vce-p1": 1})
+        before = labelled.last_updated
+
+        payload = self._device_payload("vce-p2", {
+            "vc_position": 2,
+            "virtual_chassis": {"name": "vce-dup", "domain": ""},
+        })
+        self._diff_apply(payload)
+
+        self.assertEqual(Device.objects.get(name="vce-p2").virtual_chassis_id, plain.pk)
+        labelled.refresh_from_db()
+        self.assertEqual(labelled.domain, "vce-dom", "the payload's '' was written over it")
+        self.assertEqual(labelled.last_updated, before)
+        self.assertEqual(VirtualChassis.objects.filter(name="vce-dup").count(), 2)
+
+    def test_standalone_vc_payload_adopts_a_domain_identified_row_and_attaches_master(self):
         """
         FIRST ingest must converge: adoption has to establish membership itself.
 
@@ -542,6 +893,16 @@ class VirtualChassisIngestE2ETests(APITestCase):
         here leaves the row masterless forever and re-plans the same CREATE on
         every pass.
 
+        THE OLD EXPECTATION HERE WAS UNSAFE in one respect, and the payload is
+        what changed: this test used to adopt a POPULATED masterless row on the
+        strength of its NAME alone, which is exactly the shape that attaches
+        this payload's master to another producer's stack and drags the device
+        into it (see test_standalone_vc_payload_creates_its_own_row_rather_than_
+        taking_one, which now pins the decline). The payload therefore carries
+        domain, so the row is identified rather than guessed -- and every
+        assertion about what adoption then DOES is unchanged, because none of
+        them was the problem.
+
         The master lands at position 1 -- the position NetBox itself assigns
         when it attaches a new chassis's master (dcim.signals.
         assign_virtualchassis_master) -- because the payload carries none.
@@ -549,14 +910,14 @@ class VirtualChassisIngestE2ETests(APITestCase):
         member = Device.objects.create(
             name="vce-sw2", site=self.site, device_type=self.dt, role=self.role
         )
-        vc = VirtualChassis.objects.create(name="vce-stack")
+        vc = VirtualChassis.objects.create(name="vce-stack", domain="vce-dom")
         Device.objects.filter(pk=member.pk).update(virtual_chassis=vc, vc_position=2)
         Device.objects.create(
             name="vce-sw1", site=self.site, device_type=self.dt, role=self.role
         )
         count_before = VirtualChassis.objects.get(pk=vc.pk).member_count
 
-        payload = self._vc_payload("vce-stack", "vce-sw1")
+        payload = self._vc_payload("vce-stack", "vce-sw1", domain="vce-dom")
         self._diff_apply(payload)
 
         adopted = self._assert_single_vc("vce-stack", master_name="vce-sw1",
@@ -583,6 +944,58 @@ class VirtualChassisIngestE2ETests(APITestCase):
             vc_change.prechange_data.get("member_count"), count_before, vc_change.prechange_data
         )
         self.assertEqual(vc_change.postchange_data.get("master"), adopted.master_id)
+        self._assert_noop_rediff(payload)
+
+    def test_standalone_vc_payload_creates_its_own_row_rather_than_taking_one(self):
+        """
+        The measured hazard, and the answer that both avoids it and converges.
+
+        Identical to the adoption test above except that the payload carries no
+        discriminator. The row named "vce-stack" already holds vce-sw2; the
+        payload asks for vce-sw1 to master a chassis of that name. Adopting on
+        the name alone attached vce-sw1 to THAT row -- measured 200, master set,
+        the device dragged into a stack it was never in, and no later diff
+        mentioning the join, because a VirtualChassis payload names no members.
+
+        It now creates its own row, and the pre-existing one is left
+        byte-identical: last_updated is the assertion that proves it, because
+        "untouched" and "saved with the same two fields" look alike in name and
+        master.
+
+        This shape is the one that decided the design. It is orb-agent's
+        standalone virtual_chassis entity -- the second of the 154 entities its
+        snmp-discovery run emits (see test_the_real_orb_agent_stack_capture_...).
+        A refusal here is permanent for that producer: the entity carries a name
+        and a master and nothing else, orb emits no domain at all, and every
+        subsequent run re-sends the identical bytes. Measured against the real
+        capture with a masterless same-named row present: refusing gave 207 on
+        every pass forever; declining gives 200, the stack's own chassis, and an
+        empty re-diff -- which is also what develop does with the same input.
+        """
+        member = Device.objects.create(
+            name="vce-sw2", site=self.site, device_type=self.dt, role=self.role
+        )
+        vc = VirtualChassis.objects.create(name="vce-stack")
+        Device.objects.filter(pk=member.pk).update(virtual_chassis=vc, vc_position=2)
+        master = Device.objects.create(
+            name="vce-sw1", site=self.site, device_type=self.dt, role=self.role
+        )
+        vc.refresh_from_db()
+        before = vc.last_updated
+
+        payload = self._vc_payload("vce-stack", "vce-sw1")
+        self._diff_apply(payload)
+
+        vc.refresh_from_db()
+        self.assertIsNone(vc.master_id)
+        self.assertEqual(vc.last_updated, before, "the declined adoption saved the row")
+        self.assertEqual(list(vc.members.values_list("name", flat=True)), ["vce-sw2"])
+
+        mine = VirtualChassis.objects.exclude(pk=vc.pk).get(name="vce-stack")
+        self.assertEqual(mine.master_id, master.pk)
+        master.refresh_from_db()
+        self.assertEqual(master.virtual_chassis_id, mine.pk)
+        self.assertEqual(master.vc_position, 1)
         self._assert_noop_rediff(payload)
 
     def test_standalone_vc_payload_reingest_is_a_noop(self):
@@ -619,7 +1032,7 @@ class VirtualChassisIngestE2ETests(APITestCase):
         asserts the real position, and Device.clean simply refuses a member
         without one, so adoption has to pick something.
         """
-        vc = VirtualChassis.objects.create(name="vce-stack")
+        vc = VirtualChassis.objects.create(name="vce-stack", domain="vce-dom")
         for name, position in (("vce-sw2", 1), ("vce-sw3", 3)):
             d = Device.objects.create(
                 name=name, site=self.site, device_type=self.dt, role=self.role
@@ -629,20 +1042,85 @@ class VirtualChassisIngestE2ETests(APITestCase):
             name="vce-sw1", site=self.site, device_type=self.dt, role=self.role
         )
 
-        self._diff_apply(self._vc_payload("vce-stack", "vce-sw1"))
+        # domain identifies the row: a POPULATED chassis is not adopted on its
+        # name alone any more, so the position rule is exercised through the
+        # discriminated path (see test_standalone_vc_payload_creates_its_own_
+        # row_rather_than_taking_one).
+        self._diff_apply(self._vc_payload("vce-stack", "vce-sw1", domain="vce-dom"))
         self._assert_single_vc("vce-stack", master_name="vce-sw1",
                               members={"vce-sw1": 2, "vce-sw2": 1, "vce-sw3": 3})
 
     def test_standalone_vc_payload_will_not_move_master_out_of_another_chassis(self):
         """
-        Adoption attaches a chassis-less device; it does not relocate one.
+        Adoption attaches a chassis-less device; it does not relocate one -- and says so.
 
         Membership is asserted by the DEVICE payload (Device.virtual_chassis).
         A VC payload naming a master is not authority to pull that device out
-        of a chassis it already belongs to -- and when the device is the other
-        chassis's master NetBox refuses the move outright. So master stays
-        unset and the deviation stays visible (the CREATE keeps re-planning)
-        rather than being "converged" by a silent relocation.
+        of a chassis it already belongs to. That part is unchanged.
+
+        THE OLD EXPECTATION HERE WAS UNSAFE in the answer it accepted, not in
+        the refusal: this test used to assert 200 with master silently dropped.
+        A payload requesting VirtualChassis(name=X, master=Y) was reported as
+        successfully applied while Y was not made master of anything, and
+        because a standalone VC payload carries nothing else, an identical
+        re-ingest re-planned the identical CREATE forever -- three plan+apply
+        cycles measured, each 200 with errors null, master never set. "The
+        deviation stays visible because the CREATE keeps re-planning" is not
+        visibility; it asks the producer to infer a conflict from a plan that
+        never empties. It is now a per-entity conflict on field master, and the
+        DB is left exactly as it was.
+
+        The remedy had to be rewritten too. It used to read "ingest the device's
+        own payload with virtual_chassis and vc_position to move it", which is
+        advice orb-agent cannot follow: it sends the stack master as a plain
+        device entity with no chassis fields at all (that is what the standalone
+        virtual_chassis entity is for), so there is no payload of its it could
+        change. The move it names now is one an operator can make in NetBox, and
+        the message says the payload then applies unchanged.
+        """
+        other, _ = self._seed_stack(vc_name="vce-other", master="vce-sw9")
+        member = Device.objects.create(
+            name="vce-sw1", site=self.site, device_type=self.dt, role=self.role
+        )
+        Device.objects.filter(pk=member.pk).update(virtual_chassis=other, vc_position=2)
+        vc = VirtualChassis.objects.create(name="vce-stack")
+        vc.refresh_from_db()
+        before = vc.last_updated
+
+        cs = self._diff(self._vc_payload("vce-stack", "vce-sw1"))
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        error = r.json()["errors"]["dcim.virtualchassis"]["master"][0]
+        self.assertIn("vce-sw1", error)
+        self.assertIn("vce-other", error)
+        self.assertIn("Move the device in NetBox", error,
+                      "the error must name a move somebody can actually make")
+        self.assertIn("applies unchanged on the next pass", error)
+        self.assertNotIn(
+            "vc_position", error,
+            "orb-agent sends the master with no chassis fields; asking it for "
+            "virtual_chassis + vc_position on that device is advice it cannot take",
+        )
+
+        member.refresh_from_db()
+        self.assertEqual(member.virtual_chassis_id, other.pk)  # not relocated
+        self.assertEqual(member.vc_position, 2)
+        vc.refresh_from_db()
+        self.assertIsNone(vc.master_id)
+        self.assertEqual(vc.members.count(), 0)
+        self.assertEqual(vc.last_updated, before, "the refused apply saved the chassis anyway")
+        self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
+
+    def test_a_conflicted_master_converges_once_the_device_moves_itself(self):
+        """
+        The conflict is a conflict, not a dead end: the device's own payload clears it.
+
+        This is what makes the refusal above the right answer rather than merely
+        a louder one. The device payload owns membership, so ingesting IT moves
+        vce-sw1 into vce-stack; the identical VirtualChassis payload then adopts
+        the row (its master is now a member -- the strongest identity there is)
+        and sets master. Two ingests, no guess, no relocation performed by a
+        chassis payload.
         """
         other, _ = self._seed_stack(vc_name="vce-other", master="vce-sw9")
         member = Device.objects.create(
@@ -651,15 +1129,23 @@ class VirtualChassisIngestE2ETests(APITestCase):
         Device.objects.filter(pk=member.pk).update(virtual_chassis=other, vc_position=2)
         vc = VirtualChassis.objects.create(name="vce-stack")
 
-        self._diff_apply(self._vc_payload("vce-stack", "vce-sw1"))
+        vc_payload = self._vc_payload("vce-stack", "vce-sw1")
+        cs = self._diff(vc_payload)
+        self.assertEqual(
+            self.client.post(self.apply_url, data=cs, format="json", **self.auth).status_code,
+            400,
+        )
 
-        member.refresh_from_db()
-        self.assertEqual(member.virtual_chassis_id, other.pk)  # not relocated
-        self.assertEqual(member.vc_position, 2)
-        vc.refresh_from_db()
-        self.assertIsNone(vc.master_id)
-        self.assertEqual(vc.members.count(), 0)
-        self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 1)
+        # the device asserts its own membership
+        self._diff_apply(self._device_payload("vce-sw1", {
+            "vc_position": 1, "virtual_chassis": {"name": "vce-stack"},
+        }))
+        # ...and now the same chassis payload lands
+        self._diff_apply(vc_payload)
+        adopted = self._assert_single_vc("vce-stack", master_name="vce-sw1",
+                                        members={"vce-sw1": 1})
+        self.assertEqual(adopted.pk, vc.pk)
+        self._assert_noop_rediff(vc_payload)
 
     def _plan_vc_create_then_delete_master(self, vc_name, master_name):
         """Plan a master-bearing VC CREATE against an adoptable row, then delete the master."""
@@ -716,46 +1202,56 @@ class VirtualChassisIngestE2ETests(APITestCase):
             "a rolled-back apply must leave no changelog entry for the chassis",
         )
 
-    def test_missing_master_and_deferred_master_are_not_the_same_outcome(self):
+    def test_missing_master_and_conflicted_master_are_not_the_same_outcome(self):
         """
         Adoption's two "cannot attach" cases must not collapse into one branch.
 
-        Both halves run here together because the defect they guard is exactly
-        the two sharing an outcome:
+        THE OLD EXPECTATION HERE WAS UNSAFE for the first half: it asserted 200
+        with master dropped when the named master lived in another chassis. Both
+        halves are 400 now, so the point of the test moves -- but it does not
+        disappear, because the two are still different answers and collapsing
+        them still costs a property:
 
-        - the named master belongs to a DIFFERENT chassis: a deliberate defer.
-          The apply succeeds with master dropped, because a VC payload is not
-          authority to relocate a device, and the device's own payload will
-          converge it.
-        - the named master DOES NOT EXIST: a dangling reference. The apply must
-          fail, because nothing later can converge a pk that resolves to
-          nothing.
+        - the named master is a MEMBER of a different chassis: a CONFLICT the
+          producer can act on, reported on field master, naming the chassis
+          that holds the device and how to move it. It is recoverable by
+          ingesting the device (test_a_conflicted_master_converges_once_the_
+          device_moves_itself).
+        - the named master DOES NOT EXIST: a dangling reference, reported by
+          NetBox's own serializer on the same field. Nothing can converge a pk
+          that resolves to nothing -- the producer's fix is a different payload,
+          not a different order.
 
-        Handling them alike sacrifices one property or the other: a shared drop
-        turns a dangling reference into a silent success, a shared raise turns a
-        legitimate defer into a failed ingest.
+        The shared field is deliberate (both are about master) and it is why
+        the MESSAGES are asserted rather than just the status: a single branch
+        handling both would still produce two 400s, and only the text would
+        reveal that the reconciler had been told the wrong thing.
         """
-        # deferred: the master is real, but it lives in another chassis
+        # conflict: the master is real, but it lives in another chassis
         other, _ = self._seed_stack(vc_name="vce-other", master="vce-sw9")
         held = Device.objects.create(
             name="vce-held", site=self.site, device_type=self.dt, role=self.role
         )
         Device.objects.filter(pk=held.pk).update(virtual_chassis=other, vc_position=2)
-        deferred_vc = VirtualChassis.objects.create(name="vce-deferred")
+        conflicted_vc = VirtualChassis.objects.create(name="vce-conflicted")
 
-        cs = self._diff(self._vc_payload("vce-deferred", "vce-held"))
+        cs = self._diff(self._vc_payload("vce-conflicted", "vce-held"))
         r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
-        self.assertEqual(r.status_code, 200, r.content)
-        self.assertIsNone(r.json().get("errors"))
-        deferred_vc.refresh_from_db()
-        self.assertIsNone(deferred_vc.master_id)
+        self.assertEqual(r.status_code, 400, r.content)
+        conflict = r.json()["errors"]["dcim.virtualchassis"]["master"][0]
+        self.assertIn("member of", conflict, conflict)
+        self.assertIn("vce-other", conflict, conflict)
+        conflicted_vc.refresh_from_db()
+        self.assertIsNone(conflicted_vc.master_id)
         held.refresh_from_db()
         self.assertEqual(held.virtual_chassis_id, other.pk)
 
-        # missing: same inability to attach, opposite outcome
+        # missing: same inability to attach, different reason and different error
         missing_vc, cs = self._plan_vc_create_then_delete_master("vce-missing", "vce-ghost")
         r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
         self.assertEqual(r.status_code, 400, (cs, r.content))
+        dangling = r.json()["errors"]["dcim.virtualchassis"]["master"][0]
+        self.assertNotIn("member of", dangling, dangling)
         missing_vc.refresh_from_db()
         self.assertIsNone(missing_vc.master_id)
 
@@ -1082,6 +1578,52 @@ class VirtualChassisIngestE2ETests(APITestCase):
                         f"{kind}/{label}: the CREATE left a duplicate row behind",
                     )
                     self._assert_member_count_is_honest(vc)
+
+    def test_a_masterless_create_on_an_ambiguous_name_is_a_structured_400(self):
+        """
+        The APPLY boundary for ambiguity, reached without the transformer.
+
+        apply-change-set and bulk-apply take a client-supplied changeset
+        straight to the applier, so any ambiguity guard that lived only in the
+        plan path would be a guard with a documented bypass. This is the same
+        two-stacks-one-name state as the plan-time test, driven through the
+        pre-save match instead: it calls find_existing_object, which is where
+        the refusal lives, so one raise covers both doors.
+
+        Neither row may be written and no third row may be inserted -- the two
+        wrong answers here are opposite (bind one, or create a duplicate) and
+        both are silent, which is why the row snapshot and the count are
+        asserted together.
+        """
+        vc_a, _ = self._seed_named_stack(
+            "vce-shared", "building-a", {"vce-a1": 1, "vce-a2": 2})
+        vc_b, _ = self._seed_named_stack(
+            "vce-shared", "building-b", {"vce-b1": 1, "vce-b2": 2})
+        before = self._row_fields([vc_a.pk, vc_b.pk])
+
+        r = self.client.post(
+            self.apply_url,
+            data={
+                "id": str(uuid.uuid4()),
+                "changes": [{
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.virtualchassis",
+                    "object_id": None,
+                    "ref_id": "1",
+                    "data": {"name": "vce-shared", "description": "FROM-A"},
+                }],
+            },
+            format="json", **self.auth,
+        )
+
+        self.assertEqual(r.status_code, 400, r.content)
+        error = r.json()["errors"]["dcim.virtualchassis"]["name"][0]
+        self.assertIn(f"id {vc_a.pk}", error)
+        self.assertIn(f"id {vc_b.pk}", error)
+        self.assertEqual(self._row_fields([vc_a.pk, vc_b.pk]), before)
+        self.assertEqual(VirtualChassis.objects.filter(name="vce-shared").count(), 2)
 
     def test_a_stale_plan_applied_never_writes_the_row_it_matched(self):
         """

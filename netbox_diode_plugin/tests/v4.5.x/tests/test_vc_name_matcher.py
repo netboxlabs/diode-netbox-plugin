@@ -656,8 +656,8 @@ class VirtualChassisAdoptionTests(TestCase):
             name="vca-sw1", site=site, device_type=dt, role=role
         )
 
-    def _apply_create(self, data):
-        return _apply_vc_create(data)
+    def _apply_create(self, data, extra_changes=()):
+        return _apply_vc_create(data, extra_changes=extra_changes)
 
     def test_master_bearing_create_adopts_masterless_vc(self):
         """No duplicate VC; adoption attaches the chassis-less master and sets it."""
@@ -722,23 +722,34 @@ class VirtualChassisAdoptionTests(TestCase):
         self.assertEqual(mastered.master_id, self.master.pk)
         self.assertEqual(mastered.last_updated, before, "the CREATE wrote the owned row")
 
-    def test_adoption_defers_master_for_a_device_in_another_chassis(self):
+    def test_adoption_reports_a_conflict_for_a_device_in_another_chassis(self):
         """
-        A master already in ANOTHER chassis is not relocated, so master stays unset.
+        A master already in ANOTHER chassis is a reported conflict, then converges.
 
-        This is the only case adoption still defers, and the only one where
-        deferring converges: membership is the DEVICE payload's to assert, and
-        once something else makes the device a member an identical re-apply
-        binds master. (A chassis-less master is attached by adoption itself --
-        nothing else would ever do it for a standalone VC payload.)
+        THE OLD EXPECTATION HERE WAS UNSAFE: it asserted that the apply
+        SUCCEEDS with master silently dropped. Not relocating the device was and
+        is right; answering 200 was not. The payload asked for
+        VirtualChassis(name=X, master=Y) and got a chassis without a master,
+        reported as applied -- and since a standalone chassis payload carries
+        nothing else, an identical re-ingest re-plans the identical CREATE
+        forever. A reconciler cannot tell that apart from success.
+
+        The second half of the test is unchanged and is what makes the conflict
+        a conflict rather than a wall: once something else (the device's own
+        payload) makes the device a member, the identical apply binds master.
         """
         elsewhere = VirtualChassis.objects.create(name="vca-elsewhere")
         Device.objects.filter(pk=self.master.pk).update(
             virtual_chassis=elsewhere, vc_position=2
         )
-        self._apply_create({"name": "vca-stack", "master": self.master.pk})
+        with self.assertRaises(ChangeSetException) as caught:
+            self._apply_create({"name": "vca-stack", "master": self.master.pk})
+        errors = caught.exception.errors["dcim.virtualchassis"]
+        self.assertIn("master", errors)
+        self.assertIn("vca-elsewhere", errors["master"][0])
+
         self.vc.refresh_from_db()
-        self.assertIsNone(self.vc.master)  # deferred, not forced
+        self.assertIsNone(self.vc.master)  # not forced
         self.master.refresh_from_db()
         self.assertEqual(self.master.virtual_chassis_id, elsewhere.pk)  # not relocated
         self.assertEqual(self.master.vc_position, 2)
@@ -764,3 +775,320 @@ class VirtualChassisAdoptionTests(TestCase):
         self.assertEqual(newer.master_id, self.master.pk)
         older.refresh_from_db()
         self.assertIsNone(older.master)
+
+    def test_a_populated_row_matched_only_by_name_is_left_alone_and_a_new_one_created(self):
+        """
+        The measured hazard, at the adopter's own door, and the answer to it.
+
+        The candidate holds another device and does not hold the requested
+        master, so binding it would designate this payload's device the master
+        of somebody else's stack and drag it in. Nothing in the payload says
+        that row is meant -- and nothing in the changeset asks for the
+        membership either, because a standalone dcim.virtualchassis entity plans
+        no device change at all. So adoption declines.
+
+        Declining is not refusing. The payload's own CREATE is still applied, on
+        a row of its own, which is the only answer that both leaves the foreign
+        row alone AND converges: a refusal here repeats on every identical pass,
+        and the entity that provokes it (orb-agent's standalone virtual_chassis
+        entity) carries nothing that could be changed to satisfy it.
+        """
+        squatter = Device.objects.create(
+            name="vca-squatter", site=self.master.site,
+            device_type=self.master.device_type, role=self.master.role,
+        )
+        Device.objects.filter(pk=squatter.pk).update(
+            virtual_chassis=self.vc, vc_position=4)
+        self.vc.refresh_from_db()
+        before = self.vc.last_updated
+
+        self._apply_create({"name": "vca-stack", "master": self.master.pk})
+
+        self.vc.refresh_from_db()
+        self.assertIsNone(self.vc.master_id, "the foreign row was mastered")
+        self.assertEqual(self.vc.last_updated, before, "the foreign row was written")
+        self.assertEqual(list(self.vc.members.values_list("name", flat=True)),
+                         ["vca-squatter"], "a device was moved into the foreign row")
+
+        mine = VirtualChassis.objects.exclude(pk=self.vc.pk).get(name="vca-stack")
+        self.assertEqual(mine.master_id, self.master.pk)
+        self.master.refresh_from_db()
+        self.assertEqual(self.master.virtual_chassis_id, mine.pk)
+        self.assertEqual(self.master.vc_position, 1)
+
+    def test_several_masterless_rows_sharing_the_name_are_neither_adopted_nor_written(self):
+        """
+        Two empty candidates are indistinguishable, so neither may be chosen.
+
+        A single empty row IS adopted (test_master_bearing_create_adopts_
+        masterless_vc): nothing is relocated and no duplicate is left. Two of
+        them are a different question -- picking either is creation order
+        wearing a disguise. What follows from "cannot choose" is create, not
+        refuse: the payload gets its own row, both duplicates are left exactly
+        as they were, and the operator can still delete them. A refusal would
+        have blocked the ingest on a mess the producer cannot clean up.
+        """
+        second = VirtualChassis.objects.create(name="vca-stack")  # a second empty duplicate
+        self._apply_create({"name": "vca-stack", "master": self.master.pk})
+
+        self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 3)
+        for row in (self.vc, second):
+            row.refresh_from_db()
+            self.assertIsNone(row.master_id)
+            self.assertEqual(row.members.count(), 0)
+        mine = VirtualChassis.objects.get(name="vca-stack", master=self.master)
+        self.assertNotIn(mine.pk, {self.vc.pk, second.pk})
+
+    def test_two_rows_sharing_the_asserted_domain_are_left_alone_and_a_third_created(self):
+        """
+        A discriminator that narrows to TWO rows identifies neither.
+
+        Both masterless rows carry domain "vca-twin" and the payload asserts it,
+        so narrowing keeps both and rule 2 does not fire (it needs exactly one).
+        The old behaviour raised here and told the operator to "supply domain" --
+        the value they had just supplied. There is nothing to add to this
+        payload, so there is nothing to refuse it for: the chassis it describes
+        is created, both twins are left byte-identical, and the duplicate names
+        stay visible in NetBox where they can be merged.
+        """
+        VirtualChassis.objects.filter(pk=self.vc.pk).update(domain="vca-twin")
+        twin = VirtualChassis.objects.create(name="vca-stack", domain="vca-twin")
+        self.vc.refresh_from_db()
+        before = self.vc.last_updated
+
+        self._apply_create(
+            {"name": "vca-stack", "domain": "vca-twin", "master": self.master.pk})
+
+        self.vc.refresh_from_db()
+        self.assertIsNone(self.vc.master_id)
+        self.assertEqual(self.vc.last_updated, before)
+        twin.refresh_from_db()
+        self.assertIsNone(twin.master_id)
+        self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 3)
+        mine = VirtualChassis.objects.get(name="vca-stack", master=self.master)
+        self.assertEqual(mine.domain, "vca-twin")
+
+    def test_adoption_accepts_a_domain_identified_populated_row(self):
+        """A domain turns the refusal above into an identification, and it adopts."""
+        squatter = Device.objects.create(
+            name="vca-squatter2", site=self.master.site,
+            device_type=self.master.device_type, role=self.master.role,
+        )
+        VirtualChassis.objects.filter(pk=self.vc.pk).update(domain="vca-dom")
+        Device.objects.filter(pk=squatter.pk).update(
+            virtual_chassis=self.vc, vc_position=4)
+
+        self._apply_create({
+            "name": "vca-stack", "domain": "vca-dom", "master": self.master.pk})
+        self.vc.refresh_from_db()
+        self.assertEqual(self.vc.master_id, self.master.pk)
+        self.master.refresh_from_db()
+        self.assertEqual(self.master.virtual_chassis_id, self.vc.pk)
+        self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
+
+    def test_adoption_accepts_a_populated_row_a_planned_device_change_names(self):
+        """
+        The other way identity gets strong enough: the changeset says so itself.
+
+        The review's objection to adoption was that the device mutation "is not
+        represented as a Device change in the planned changeset". When it IS --
+        a device payload nesting virtual_chassis plans exactly this pair -- the
+        producer has asked for the membership through the object that owns it,
+        and adoption is only performing it early because VirtualChassis.clean
+        refuses a master that is not yet a member.
+
+        Read precisely what that change asserts, because this docstring used to
+        overstate it: virtual_chassis = the CREATE's ref, i.e. the row the
+        preview names, and nothing about the pre-existing row adoption redirects
+        the create onto. So the evidence separates two SHAPES of payload rather
+        than two rows -- the member-first shape from a standalone chassis entity
+        -- and within the member-first shape it cannot tell this producer's own
+        earlier pass from another producer's identically named stack. That
+        residual bound is stated in applier._choose_adoption_candidate and
+        measured in test_a_second_producers_member_first_stack_lands_on_the_same
+        _row (ingest suite); the two narrowings tried against it were reverted,
+        one because it broke legitimate cross-site convergence
+        (test_a_cross_site_member_first_row_still_converges_to_one_chassis).
+
+        What DOES still stop adoption here: a row somebody labelled
+        (test_a_row_whose_domain_the_payload_never_asserts_is_left_for_its_owner)
+        and, without any companion change at all, the identical state
+        (test_a_populated_row_matched_only_by_name_is_left_alone_and_a_new_one
+        _created). Neither refuses the payload; both create its own row.
+        """
+        squatter = Device.objects.create(
+            name="vca-squatter3", site=self.master.site,
+            device_type=self.master.device_type, role=self.master.role,
+        )
+        Device.objects.filter(pk=squatter.pk).update(
+            virtual_chassis=self.vc, vc_position=4)
+
+        self._apply_create(
+            {"name": "vca-stack", "master": self.master.pk},
+            extra_changes=[Change(
+                change_type=ChangeType.UPDATE,
+                object_type="dcim.device",
+                object_id=self.master.pk,
+                data={"virtual_chassis": "vc1", "vc_position": 1},
+                new_refs=["virtual_chassis"],
+            )],
+        )
+        self.vc.refresh_from_db()
+        self.assertEqual(self.vc.master_id, self.master.pk)
+        self.master.refresh_from_db()
+        self.assertEqual(self.master.virtual_chassis_id, self.vc.pk)
+        self.assertEqual(self.master.vc_position, 1)
+
+    def test_an_empty_domain_payload_creates_its_own_row_and_keeps_the_labelled_one(self):
+        """
+        Adoption declines where the matcher binds, and the asymmetry is the point.
+
+        The single same-named masterless row carries domain "vca-dom" and the
+        payload asserts "": an assertion that contradicts the row. Dropping it
+        (the old behaviour) adopted that row and wrote "" over its domain --
+        a discriminator destroyed by a payload it should have excluded. Adoption
+        has a lossless alternative the matcher does not have, namely the CREATE
+        its own plan already asked for, so it takes it.
+        """
+        VirtualChassis.objects.filter(pk=self.vc.pk).update(domain="vca-dom")
+        self.vc.refresh_from_db()
+        before = self.vc.last_updated
+
+        self._apply_create(
+            {"name": "vca-stack", "domain": "", "master": self.master.pk})
+
+        self.vc.refresh_from_db()
+        self.assertEqual(self.vc.domain, "vca-dom", "the payload's '' was written over it")
+        self.assertIsNone(self.vc.master_id)
+        self.assertEqual(self.vc.last_updated, before)
+        fresh = VirtualChassis.objects.exclude(pk=self.vc.pk).get(name="vca-stack")
+        self.assertEqual(fresh.domain, "")
+        self.assertEqual(fresh.master_id, self.master.pk)
+
+    def test_a_cross_site_member_first_row_still_converges_to_one_chassis(self):
+        """
+        A VirtualChassis legitimately spans sites, so member sites are not identity.
+
+        Identical to test_adoption_accepts_a_populated_row_a_planned_device_
+        change_names except for ONE fact about the row: the device already in it
+        lives at another site. That fact was briefly a veto -- refuse to adopt a
+        row holding members from outside the master's site -- and it had to be
+        reverted, because it is exactly the shape of a legitimate cross-site
+        stack ingested member-first. Measured with the veto in place: this apply
+        answered 400 on every pass and never converged, where the branch without
+        it converges to one row.
+
+        What remains is the residual bound of name-keyed identity, stated in
+        applier._choose_adoption_candidate: within the member-first shape this
+        cell cannot be told from another producer's identically named stack, so
+        adopting is also what happens there. The honest fix is source-owned
+        VirtualChassis identity, not a guess about sites.
+        """
+        other_site = Site.objects.create(name="vca-site-b", slug="vca-site-b")
+        stranger = Device.objects.create(
+            name="vca-elsewhere", site=other_site,
+            device_type=self.master.device_type, role=self.master.role,
+        )
+        Device.objects.filter(pk=stranger.pk).update(
+            virtual_chassis=self.vc, vc_position=4)
+
+        self._apply_create(
+            {"name": "vca-stack", "master": self.master.pk},
+            extra_changes=[Change(
+                change_type=ChangeType.UPDATE,
+                object_type="dcim.device",
+                object_id=self.master.pk,
+                data={"virtual_chassis": "vc1", "vc_position": 1},
+                new_refs=["virtual_chassis"],
+            )],
+        )
+
+        self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
+        self.vc.refresh_from_db()
+        self.assertEqual(self.vc.master_id, self.master.pk)
+        self.master.refresh_from_db()
+        self.assertEqual(self.master.virtual_chassis_id, self.vc.pk)
+        self.assertEqual(self.master.vc_position, 1)
+        self.assertEqual(sorted(self.vc.members.values_list("name", flat=True)),
+                         ["vca-elsewhere", "vca-sw1"])
+
+    def test_an_empty_domain_is_not_an_identification_that_licenses_adoption(self):
+        """
+        "" narrows, and must not IDENTIFY -- tested at the door where it survives.
+
+        apply-change-set applies changes nobody planned, so a domain of ""
+        reaches _choose_adoption_candidate here, where the differ drops it from
+        a planned CREATE (test_an_empty_domain_in_the_payload_is_not_a_licence_
+        to_join measures that). The row carries no domain either, so "" is
+        consistent with it and narrows to it -- and if that counted as an
+        IDENTIFICATION it would collect rule 2's permission, which is the one
+        rule that adopts a POPULATED row with no companion device change at all.
+        Every chassis that never set a domain carries "", so it tells no two rows
+        apart and identifies none: this standalone payload gets its own row.
+        """
+        squatter = Device.objects.create(
+            name="vca-empty-dom", site=self.master.site,
+            device_type=self.master.device_type, role=self.master.role,
+        )
+        Device.objects.filter(pk=squatter.pk).update(
+            virtual_chassis=self.vc, vc_position=4)
+        self.vc.refresh_from_db()
+        before = self.vc.last_updated
+
+        self._apply_create(
+            {"name": "vca-stack", "domain": "", "master": self.master.pk})
+
+        self.vc.refresh_from_db()
+        self.assertIsNone(self.vc.master_id, "'' identified the row and adopted it")
+        self.assertEqual(self.vc.last_updated, before)
+        self.assertEqual(list(self.vc.members.values_list("name", flat=True)),
+                         ["vca-empty-dom"])
+        mine = VirtualChassis.objects.exclude(pk=self.vc.pk).get(name="vca-stack")
+        self.assertEqual(mine.master_id, self.master.pk)
+
+    def test_a_row_whose_domain_the_payload_never_asserts_is_left_for_its_owner(self):
+        """
+        Somebody labelled that stack and this payload never mentions the label.
+
+        The row carries domain "vca-dom"; the payload asserts no domain at all,
+        so name plus a planned device change is all it has -- and a row bearing a
+        discriminator the payload is silent about is a row the payload has not
+        identified. Contrast test_adoption_accepts_a_domain_identified_populated_
+        row, where the same value IS asserted and the same row is adopted.
+
+        This steers between adopting and creating; it never rejects the payload.
+        The labelled row keeps its label, its master slot and its members, and
+        the payload lands on a row of its own.
+        """
+        labelled = Device.objects.create(
+            name="vca-labelled", site=self.master.site,
+            device_type=self.master.device_type, role=self.master.role,
+        )
+        VirtualChassis.objects.filter(pk=self.vc.pk).update(domain="vca-dom")
+        Device.objects.filter(pk=labelled.pk).update(
+            virtual_chassis=self.vc, vc_position=4)
+        self.vc.refresh_from_db()
+        before = self.vc.last_updated
+
+        self._apply_create(
+            {"name": "vca-stack", "master": self.master.pk},
+            extra_changes=[Change(
+                change_type=ChangeType.UPDATE,
+                object_type="dcim.device",
+                object_id=self.master.pk,
+                data={"virtual_chassis": "vc1", "vc_position": 1},
+                new_refs=["virtual_chassis"],
+            )],
+        )
+
+        self.vc.refresh_from_db()
+        self.assertIsNone(self.vc.master_id)
+        self.assertEqual(self.vc.domain, "vca-dom")
+        self.assertEqual(self.vc.last_updated, before)
+        self.assertEqual(list(self.vc.members.values_list("name", flat=True)),
+                         ["vca-labelled"])
+        mine = VirtualChassis.objects.exclude(pk=self.vc.pk).get(name="vca-stack")
+        self.assertEqual(mine.domain, "")
+        self.assertEqual(mine.master_id, self.master.pk)
+        self.master.refresh_from_db()
+        self.assertEqual(self.master.virtual_chassis_id, mine.pk)

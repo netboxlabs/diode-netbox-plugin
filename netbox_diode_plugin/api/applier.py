@@ -24,10 +24,13 @@ from .common import (
     error_from_validation_error,
 )
 from .matcher import (
+    annotate_vc_member_counts,
     find_existing_object,
     invalidate_find_obj_entry,
+    narrow_vc_candidates,
     pre_save_match_binds_only,
     requires_pre_save_match,
+    unasserted_vc_discriminators,
 )
 from .plugin_utils import get_object_type_model, legal_fields
 from .profile import profiled
@@ -52,7 +55,7 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         try:
             model_class = get_object_type_model(object_type)
             data = _pre_apply(model_class, change, created)
-            _apply_change(data, model_class, change, created, request)
+            _apply_change(data, model_class, change, created, request, change_set)
         except ValidationError as e:
             raise error_from_validation_error(e, object_type)
         except ObjectDoesNotExist:
@@ -259,17 +262,29 @@ class _MasterAttach(Enum):
     - ATTACHED: the membership the payload implies now exists.
     - IN_OTHER_CHASSIS: the device is real, is a plain MEMBER of another
       chassis, and masters nothing. A VC payload is not authority to relocate
-      it, so master is deferred to the device's own payload and the adoption
-      otherwise succeeds.
+      it, so the request CONFLICTS and is reported as such. It used to drop
+      master and apply the rest -- a partial interpretation returned as
+      success. The rationale was that the device's own payload owns the
+      membership move, which is true, and it is why this is not a relocation;
+      but it is not a reason to answer 200. A standalone VirtualChassis
+      payload carries a name and a master and nothing else, so if no device
+      payload ever arrives, every identical re-ingest re-plans the same CREATE
+      against a row that stays masterless -- measured over three plan+apply
+      cycles, each 200 with errors null, master never set. Reporting the
+      conflict is what makes the deviation visible to the producer instead of
+      leaving it to be inferred from a plan that never empties.
     - MASTERS_OTHER_CHASSIS: the device already MASTERS a different chassis.
       VirtualChassis.master is a DB unique constraint, so that row -- not the
       same-named masterless one this adoption was about to write -- is the row
-      the payload identifies. The adoption must decline outright: writing the
-      payload onto a masterless same-named decoy applies it to a row the
+      the payload identifies. The adoption must decline outright and hand the
+      change back to the create path, which resolves it onto that row: writing
+      the payload onto a masterless same-named decoy applies it to a row the
       payload never referred to (its name matches, its identity is
-      contradicted) and leaves the real row untouched. Deferring master and
-      saving the rest, the IN_OTHER_CHASSIS treatment, is exactly that
-      mis-write, which is why this cannot share that branch.
+      contradicted) and leaves the real row untouched. It stays separate from
+      IN_OTHER_CHASSIS even now that both refuse the write, because the two
+      refusals differ in outcome: this one is a DEFERRAL TO ANOTHER PATH that
+      still applies the payload to the right row, while IN_OTHER_CHASSIS has no
+      right row to fall back to and must be reported.
     - DEVICE_MISSING: the pk resolves to no device at all (planned against a
       device deleted before this apply). Nothing later can converge a dangling
       reference, so it has to surface as a rejected apply, exactly as it did
@@ -283,15 +298,193 @@ class _MasterAttach(Enum):
     DEVICE_MISSING = "device_missing"
 
 
-def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_class, request):
+def _changeset_plans_membership(change: Change, change_set: ChangeSet, created: dict, device_pk: int) -> bool:
+    """
+    Does THIS changeset already plan making ``device_pk`` a member of this chassis?
+
+    Evidence that the producer asked for the membership at all, and nothing
+    more than that. Read the scope exactly, because an earlier revision of this
+    docstring (and of the commit message that introduced it) overstated it:
+
+    - what the device change asserts is ``virtual_chassis = <this CREATE's
+      ref>`` -- the chassis this change is about to CREATE. It is a real
+      assertion, in the preview, made by the object that owns its own
+      membership.
+    - what it does NOT assert is membership of the pre-existing row that
+      adoption may redirect that create onto. Nothing in a device payload names
+      a row by id. So "the changeset plans the membership" answers the review's
+      objection ("the mutation is not represented as a Device change in the
+      planned changeset") for the row the PREVIEW names, and only for that row.
+
+    So this predicate separates two SHAPES of payload rather than two rows. It
+    is true for a device payload nesting virtual_chassis -- the member-first
+    shape, which plans exactly the pair "create chassis mastered by R, then
+    update R with its chassis and position" -- and false for a STANDALONE
+    dcim.virtualchassis payload, which plans no device change at all. That is
+    the line _choose_adoption_candidate's rule 4 draws, and its limit is stated
+    there: within the member-first shape it cannot tell this producer's own
+    earlier pass from another producer's identically named stack, because the
+    difference is a fact about the pre-existing row and the change names only
+    the planned one.
+
+    Matching is by ref string, not by pk, because the chassis does not have one
+    yet: differ.diff_to_change puts the create's stringified UnresolvedReference
+    in ref_id and the referencing device change carries the identical string in
+    its own virtual_chassis field. The device side is matched by pk either way:
+    object_id for a device that already exists, created[ref_id] for one this
+    changeset just made (already applied -- it is ordered before the chassis,
+    which is why its instance is in ``created``).
+    """
+    ref = change.ref_id
+    if not ref:
+        return False
+    for other in change_set.changes:
+        if other.object_type != "dcim.device":
+            continue
+        if (other.data or {}).get("virtual_chassis") != ref:
+            continue
+        if other.object_id is not None:
+            if other.object_id == device_pk:
+                return True
+            continue
+        instance = created.get(other.ref_id) if other.ref_id else None
+        if instance is not None and getattr(instance, "pk", None) == device_pk:
+            return True
+    return False
+
+
+def _choose_adoption_candidate(model_class, candidates, data, master_pk, change, change_set, created):
+    """
+    Pick the row a master-bearing CREATE may adopt, or decline and let it create.
+
+    Two answers only: the chosen row, or None for "adopt nothing, create the
+    chassis this plan already asked for". There is deliberately no third,
+    refusing answer. An ambiguous name is a reason not to touch anybody's row;
+    it is not a reason to reject the payload, because the payload's own CREATE
+    is a lossless alternative that always exists -- and a refusal here is
+    permanent for the producer that provoked it. Measured on v4.5.5 with the
+    real 154-entity orb-agent snmp-discovery capture replayed against a
+    masterless, populated, same-named chassis:
+
+      - refusing: 207 on every pass, forever. Nothing in the capture changes,
+        so nothing converges. orb-agent emits no ``domain`` at all (its
+        device_name builder sends name + master), so the remedy a refusal could
+        name is not one this producer can take.
+      - declining and creating: 200, the stack gets its OWN chassis with its
+        three members at 1/2/3, the foreign row is byte-identical afterwards,
+        and the re-diff is empty. That is also exactly what develop (08af3fb,
+        which has no adoption at all) does with the same input, so it is not a
+        regression on the branch point either.
+
+    Declining also makes the two halves of the same collision agree. A MASTERED
+    same-named row already led to "create a second chassis, 200, converges" --
+    the unique-master matcher answers first and the payload lands on its own
+    row. A MASTERLESS one refused. Same name, same payload, opposite outcomes
+    decided by a field of the colliding row that the payload never mentions;
+    that asymmetry was the tell that the refusal was the wrong answer.
+
+    What is bounded is ADOPTION, not the request. A row is adopted only where
+    identity is strong enough that no device is moved on the strength of a name:
+
+    1. the requested master is ALREADY a member of exactly one candidate. The
+       database has already agreed with the payload; nothing moves. This is the
+       convergence path for a member-first ingest whose member landed first.
+    2. a NON-EMPTY discriminator the payload asserted
+       (matcher.narrow_vc_candidates) leaves exactly one candidate. Name plus
+       domain is a claim about which row, rather than a guess between rows. A
+       value that matches NO candidate is not ambiguity at all -- the payload
+       describes a chassis that does not exist yet, so it is created. An
+       explicitly empty ``domain: ""`` narrows (it excludes the rows that DO
+       carry a domain) but never identifies, because every row that never set a
+       domain carries it: see narrow_vc_candidates.
+    3. exactly one candidate and it is EMPTY -- no master, no members. Adopting
+       it is indistinguishable in outcome from the CREATE the plan asked for
+       (nothing is relocated, no existing membership is disturbed, the device
+       ends up master of a stack containing only itself) except that no
+       duplicate row is left behind. This is the plan-ahead race the pre-save
+       match covers for masterless payloads, reaching the master-bearing half.
+    4. exactly one candidate, POPULATED, and THIS changeset plans the device's
+       membership of the chassis it is creating (_changeset_plans_membership).
+       That is the member-first shape and only that shape: a device payload
+       nesting virtual_chassis plans exactly the pair "create chassis mastered
+       by R, then update R with its chassis and position", so the producer has
+       asked for the membership through the object that owns it, in the
+       preview. A STANDALONE dcim.virtualchassis payload plans no device change
+       and never reaches here -- which is what makes the capture above create
+       its own row, because the master arrives as its own entity.
+
+       Rule 4's evidence is real but its scope is the row the PREVIEW names, not
+       the pre-existing row adoption redirects that create onto, so it can still
+       land a member-first payload on a same-named row another producer owns.
+       That is the residual bound of name-keyed identity and it is stated as a
+       bound: the outcome is one shared row where a human might have wanted two,
+       reachable in NetBox, and no worse than the duplicate-name state the
+       decline produces the other way round. Narrowing it further was tried and
+       reverted -- vetoing a candidate whose members sit outside the master's
+       site broke legitimate cross-site member-first convergence (measured: 400
+       forever where the branch previously converged), and a VirtualChassis
+       legitimately spans sites, so the site of its members is not evidence
+       about its identity.
+
+    The one thing rule 4 will not do is adopt a row somebody else LABELLED: a
+    candidate carrying a discriminator this payload leaves unasserted
+    (matcher.unasserted_vc_discriminators) is declined, not adopted. That is a
+    steer between "adopt" and "create", never a refusal -- the payload still
+    applies, to its own row.
+    """
+    holders = set(
+        model_class.objects.filter(
+            pk__in=[c.pk for c in candidates], members__pk=master_pk
+        ).values_list("pk", flat=True)
+    )
+    strong = [c for c in candidates if c.pk in holders]
+    if len(strong) == 1:
+        return strong[0]
+    if len(strong) > 1:  # pragma: no cover - Device.virtual_chassis is one FK
+        # Unreachable while membership is a single FK on Device: a device
+        # belongs to at most one chassis, so at most one candidate can hold it.
+        # Kept as an explicit decline rather than dropped, because the fallback
+        # for an unhandled len(strong) > 1 would be to continue to the rules
+        # below and possibly bind one of them -- picking among rows that each
+        # claim the master is exactly what must not happen if the data model
+        # ever allows it. Declining leaves the create path to resolve the
+        # payload, and the master it names is already in a chassis, so
+        # _MasterAttach reports that conflict rather than inventing an answer.
+        return None
+
+    candidates, contradicted, identified = narrow_vc_candidates(candidates, data)
+    if contradicted:
+        return None
+    if identified and len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) != 1:
+        # Several rows are equally consistent with this payload and none holds
+        # the master. Nothing here tells them apart, so nothing here is
+        # adopted; the create path gives the payload its own row.
+        return None
+
+    only = candidates[0]
+    if only.master_id is None and not only._diode_member_count:
+        return only
+    if not _changeset_plans_membership(change, change_set, created, master_pk):
+        return None
+    if unasserted_vc_discriminators(only, data):
+        return None
+    return only
+
+
+def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_class, request,
+                                         change, change_set, created):
     """
     Adopt a same-named masterless VirtualChassis for a master-bearing CREATE.
 
     A member-first ingest ordering (or a replaced master) can leave a VC whose
-    master is unset; a later master-bearing CREATE must bind that row rather
-    than create a same-named duplicate. When several same-named masterless
-    rows exist, the one the master device already belongs to is preferred;
-    otherwise the oldest is adopted.
+    master is unset; a later master-bearing CREATE should bind that row rather
+    than create a same-named duplicate. WHICH row, and whether any row may be
+    bound at all, is decided by _choose_adoption_candidate and is the whole
+    identity question -- it is not settled by name plus creation order, which is
+    what this function used to do (prefer a candidate already containing the
+    master, else the oldest).
 
     NetBox allows setting VC.master only once that device is a member
     (VirtualChassis.clean), so adoption establishes the membership itself --
@@ -304,26 +497,30 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     real VC create (dcim.signals.assign_virtualchassis_master), and adoption
     stands in for that create, so both paths end in the same state.
 
-    master is dropped for exactly ONE reason: the device is a plain MEMBER of a
-    DIFFERENT chassis. That case keeps the deviation visible instead of
-    silently relocating a device on the strength of a VC payload; the device's
-    own payload owns its membership and a later ingest of THAT does converge
-    it. A device that already MASTERS another chassis, and a master pk with no
-    device behind it, are different things entirely and must not share that
-    handling -- see _MasterAttach.
+    What is NOT deferred any more: a master that is a plain MEMBER of a
+    DIFFERENT chassis. That used to drop master and apply the rest, which
+    reported a payload requesting VirtualChassis(name=X, master=Y) as
+    successfully applied while Y was not made master of anything -- a partial
+    interpretation dressed as success, and one that need never converge. It is
+    now the structured conflict _attach_master_to_virtualchassis's caller
+    raises. A master pk with no device behind it stays a hard serializer error;
+    a device that already MASTERS another chassis still declines the adoption
+    outright, because that other row IS the row the payload identifies (master
+    is a DB unique key) -- see _MasterAttach.
 
-    Known bound, stated because the blast radius is wider than "bind the row a
-    member-first ingest left". VirtualChassis.name carries no unique
-    constraint, so the same-named masterless row adopted here may belong to an
-    entirely different stack -- another site's, left masterless by its own
-    member-first ingest or by this function's own IN_OTHER_CHASSIS branch.
-    Adoption then attaches THIS payload's master to THAT stack and drags the
-    device into it. That is the intended behaviour and it is what keeps a
-    duplicate row out of a table with nothing to dedupe it later, but it is a
-    guess about identity rather than a fact, and no subsequent diff reports the
-    join. The pre-save match declines to WRITE such a row for exactly this
-    reason (matcher._PRE_SAVE_MATCH_BIND_ONLY); adoption cannot decline in the
-    same way, because a master-bearing payload has nowhere else to land.
+    Bounds, stated as bounds rather than as accepted collateral. Adoption can
+    bind a row this payload only described: rule 2 (name plus a non-empty
+    discriminator the payload asserted), rule 3 (a single EMPTY row) and rule 4
+    (a single populated row whose membership this changeset plans). Rule 4 is
+    the one that can still land a member-first payload on a same-named row
+    another producer owns, and _choose_adoption_candidate says why no narrowing
+    of it survived measurement. What adoption never does is bind a row on a
+    NAME alone: where identity is not strong it returns None and the payload
+    gets its own chassis from the ordinary create path, which is what the
+    pre-save match does for masterless payloads by declining to write the row
+    it matched (matcher._PRE_SAVE_MATCH_BIND_ONLY). Nothing is refused for
+    ambiguity at either door, because the create is always available and a
+    refusal a producer cannot act on never converges.
     """
     name = data.get("name")
     master = data.get("master")
@@ -334,8 +531,16 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
         # Nothing to adopt BY: a master that is not a usable pk cannot pick a
         # candidate row, and must not reach the queryset below. See _coerce_pk.
         return None
-    candidates = model_class.objects.filter(name=name, master__isnull=True).order_by("pk")
-    existing = candidates.filter(members__pk=master_pk).first() or candidates.first()
+    candidates = list(
+        annotate_vc_member_counts(
+            model_class.objects.filter(name=name, master__isnull=True)
+        ).order_by("pk")
+    )
+    if not candidates:
+        return None
+    existing = _choose_adoption_candidate(
+        model_class, candidates, data, master_pk, change, change_set, created
+    )
     if existing is None:
         return None
     update_data = dict(data)
@@ -349,9 +554,13 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
                 # in-memory counter back over the new one.
                 existing.refresh_from_db()
             case _MasterAttach.IN_OTHER_CHASSIS:
-                # Deliberate defer: the device's own payload owns its membership.
-                # Applying the rest of the payload is the intended outcome.
-                update_data.pop("master", None)
+                # A conflict, not a defer. The payload asks for master=device;
+                # the device is a member of a different chassis and a
+                # VirtualChassis payload is not authority to relocate it. Saving
+                # the rest and answering 200 reports a request that was only
+                # partly carried out as one that succeeded, and nothing in a
+                # standalone VC payload can ever converge it.
+                raise _master_in_other_chassis_error(existing, master_pk)
             case _MasterAttach.MASTERS_OTHER_CHASSIS:
                 # Decline the adoption entirely. master is a DB unique key and
                 # another chassis already holds this one, so that row -- not
@@ -375,8 +584,8 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
                 # chassis saved-but-masterless with nothing left to re-plan.
                 pass
             case unexpected:  # pragma: no cover - exhaustiveness guard
-                # The enum documents three outcomes and the branches above cover
-                # them. A fourth member added without a branch here would fall
+                # The enum documents four outcomes and the branches above cover
+                # them. A fifth member added without a branch here would fall
                 # straight through this match and silently inherit whatever the
                 # surrounding code does next, which is how the collapsed
                 # `device is None or ...` guard this enum replaced went wrong.
@@ -386,6 +595,26 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
     result = serializer.save()
     invalidate_find_obj_entry("dcim.virtualchassis", existing.id)
     return result
+
+
+def _master_in_other_chassis_error(virtual_chassis, master_pk):
+    """The structured conflict for "the named master lives in another chassis"."""
+    device_model = get_object_type_model("dcim.device")
+    device = device_model.objects.filter(pk=master_pk).select_related("virtual_chassis").first()
+    device_label = f"{device.name!r} (id {master_pk})" if device is not None else f"id {master_pk}"
+    holder = getattr(device, "virtual_chassis", None)
+    holder_label = (
+        f"{holder.name!r} (id {holder.pk})" if holder is not None else "another virtual chassis"
+    )
+    return _err(
+        f"Cannot designate device {device_label} as master of VirtualChassis "
+        f"{virtual_chassis.name!r} (id {virtual_chassis.pk}): the device is a member of "
+        f"{holder_label}. A dcim.virtualchassis payload is not authority to move a device "
+        f"between chassis. Move the device in NetBox -- out of {holder_label} and into "
+        f"{virtual_chassis.name!r} (id {virtual_chassis.pk}) -- and this payload applies "
+        f"unchanged on the next pass; or name a different master.",
+        "dcim.virtualchassis", "master",
+    )
 
 
 def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> _MasterAttach:
@@ -403,7 +632,9 @@ def _attach_master_to_virtualchassis(virtual_chassis, master_pk, request) -> _Ma
     Refuses (IN_OTHER_CHASSIS) when the device is a plain member of another
     chassis. Membership is asserted by the DEVICE payload
     (Device.virtual_chassis); a VC payload naming a master is not authority to
-    pull a device out of a chassis it is already in.
+    pull a device out of a chassis it is already in. The caller turns that
+    refusal into a reported conflict rather than a quiet drop of master --
+    _try_adopt_masterless_virtualchassis, and _MasterAttach on why.
 
     Reports separately (MASTERS_OTHER_CHASSIS) when the device already MASTERS
     another chassis. That is not "a membership the payload may not assert" but
@@ -474,10 +705,12 @@ def _lowest_free_vc_position(virtual_chassis) -> int:
 #
 # An adopter runs only after the pre-save match has missed, and only for a
 # CREATE. It exists for the case where the row to bind can only be chosen from
-# live database state -- for dcim.virtualchassis, "the same-named masterless
-# chassis, preferring the one this master already belongs to" is a preference
-# find_existing_object cannot express, since it returns the first matcher hit
-# ordered by pk.
+# live database state AND from the rest of the changeset -- for
+# dcim.virtualchassis, "the same-named masterless chassis that already holds
+# this master, or that an explicit discriminator identifies, or that is empty,
+# or that a planned device change names" is not something find_existing_object
+# can express: it answers from the payload alone and it may not raise a
+# conflict.
 _CREATE_ADOPTERS = {
     "dcim.virtualchassis": _try_adopt_masterless_virtualchassis,
 }
@@ -675,7 +908,8 @@ def _create_or_find_instance(data: dict, object_type: str, serializer_class, req
         return instance
 
 
-def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict, request):
+def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict, request,
+                  change_set: ChangeSet):
     serializer_class = get_serializer_for_model(model_class)
     change_type = change.change_type
 
@@ -710,7 +944,13 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             instance = _try_pre_save_match(data, change.object_type, serializer_class, request)
 
         if not instance and (adopt := _CREATE_ADOPTERS.get(change.object_type)):
-            instance = adopt(data, model_class, serializer_class, request)
+            # The whole changeset is passed, not just this change: whether a row
+            # may be adopted can depend on what else the changeset already plans
+            # (_changeset_plans_membership). ``created`` carries the instances
+            # of the changes applied before this one, which is how a device
+            # created earlier in the same changeset is identified by pk.
+            instance = adopt(data, model_class, serializer_class, request,
+                             change, change_set, created)
 
         if not instance:
             instance = _create_or_find_instance(data, change.object_type, serializer_class, request)
