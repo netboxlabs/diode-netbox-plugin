@@ -1,9 +1,9 @@
 """Transformer behavior for circular device<->virtual_chassis references."""
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
 from netbox_diode_plugin.api import transformer
-from netbox_diode_plugin.api.common import ChangeType
+from netbox_diode_plugin.api.common import VC_MEMBER_HINT, ChangeType
 from netbox_diode_plugin.api.differ import generate_changeset
 
 
@@ -125,3 +125,57 @@ class FingerprintDedupePostCreateIsolationTests(TestCase):
         self.assertEqual(device_result["_uuid"], "device-pc-uuid")
         self.assertNotIn("name", device_result)
         self.assertEqual(device_result["vc_position"], 2)
+class MemberHintMergeTests(SimpleTestCase):
+    """
+    _merge_nodes must UNION the member-device hint, not prefer a's copy.
+
+    Private keys are otherwise "prefer a's value", which for this key would make
+    the rule it feeds read "prefer the chassis the FIRST-named member already
+    belongs to" -- an arbitrary choice of exactly the kind the whole policy
+    exists to remove.
+
+    Asserted directly on _merge_nodes because no single-entity payload can reach
+    it: a dcim.device entity nests one chassis reference, so the fingerprint
+    dedupe that merges two chassis nodes needs two member devices in one
+    transform, which the SDK shapes this plugin accepts do not produce today. A
+    guard nothing can reach through the API is still a guard, and mutation
+    testing found this one unpinned without this test.
+    """
+
+    @staticmethod
+    def _node(uuid, hint):
+        return {
+            "_object_type": "dcim.virtualchassis",
+            "_uuid": uuid,
+            "_refs": set(),
+            "_warnings": {},
+            "name": "stack",
+            VC_MEMBER_HINT: list(hint),
+        }
+
+    def test_both_members_survive_the_merge(self):
+        """Two chassis nodes, one member each: the merged node knows both."""
+        merged = transformer._merge_nodes(self._node("a", [7]), self._node("b", [9]))
+        self.assertEqual(merged[VC_MEMBER_HINT], [7, 9])
+
+    def test_the_union_does_not_duplicate_or_reorder(self):
+        """Idempotent on the overlap, and stable for the reader."""
+        merged = transformer._merge_nodes(
+            self._node("a", [7, 9]), self._node("b", [9, 11]))
+        self.assertEqual(merged[VC_MEMBER_HINT], [7, 9, 11])
+
+    def test_a_node_without_the_hint_contributes_nothing(self):
+        """A chassis node reached other than through a member has no hint."""
+        bare = self._node("b", [])
+        del bare[VC_MEMBER_HINT]
+        self.assertEqual(
+            transformer._merge_nodes(self._node("a", [7]), bare)[VC_MEMBER_HINT], [7])
+        self.assertEqual(
+            transformer._merge_nodes(bare, self._node("a", [7]))[VC_MEMBER_HINT], [7])
+
+    def test_neither_side_is_mutated(self):
+        """The union must not accumulate into the inputs' own lists."""
+        a, b = self._node("a", [7]), self._node("b", [9])
+        transformer._merge_nodes(a, b)
+        self.assertEqual(a[VC_MEMBER_HINT], [7])
+        self.assertEqual(b[VC_MEMBER_HINT], [9])

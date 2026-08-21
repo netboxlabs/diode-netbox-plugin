@@ -20,6 +20,7 @@ from rest_framework import serializers
 from .common import (
     MATCH_ONLY_TYPES,
     NON_FIELD_ERRORS,
+    VC_MEMBER_HINT,
     AutoSlug,
     ChangeSetException,
     UnresolvedReference,
@@ -77,8 +78,59 @@ def _cable_terminable_types() -> frozenset:
         for ct in ContentType.objects.filter(CABLE_TERMINATION_MODELS)
     )
 
+# Private context keys that DO land on the child node. The general rule below
+# is that an underscore-prefixed context key contributes only ordering (its
+# reference is added to the child's _refs, which is what _topo_sort reads) and
+# is not copied as data. This set is the exception: a key here is copied too,
+# because a matcher has to read it back.
+#
+# Only common.VC_MEMBER_HINT qualifies today, and both halves matter for it:
+# the ordering half is what makes the value USEFUL (see the dcim.device entry
+# in _NESTED_CONTEXT), and the data half is what makes it READABLE
+# (matcher.VirtualChassisNameMatcher.resolve). Anything added here must be
+# stripped again before changes are emitted -- see transform_proto_json.
+_PRIVATE_CONTEXT_KEYS_KEPT = frozenset({VC_MEMBER_HINT})
+
 # these are implied values pushed down to referenced objects.
 _NESTED_CONTEXT = {
+    "dcim.device": {
+        # device.virtual_chassis -> the chassis node learns which member named
+        # it. Two effects, and the entry is here for both:
+        #
+        #   DATA: matcher.VirtualChassisNameMatcher.resolve prefers, among
+        #   several same-named chassis, the one this device ALREADY belongs to.
+        #   That rule cannot live in the matcher on its own -- the matcher sees
+        #   the VirtualChassis payload, which does not know the device. Here it
+        #   does: this is the exact point where a device's payload nests the
+        #   reference.
+        #
+        #   ORDERING: an UnresolvedReference in a context value adds the PARENT
+        #   to the child's _refs, so _topo_sort emits the chassis node AFTER the
+        #   member device. Without that the chassis node is resolved first and
+        #   the hint is still an unresolved uuid, so an EXISTING device's pk --
+        #   the only thing that can carry existing membership -- would never be
+        #   known in time and the rule would silently never fire.
+        #
+        # The ordering has a visible cost, stated because it is a plan-shape
+        # change and not an implementation detail: _handle_post_creates can no
+        # longer merge the deferred device update back into the device's own
+        # change for this shape (the chassis it references now sorts after the
+        # device), so a member re-ingest plans device + chassis + deferred
+        # update where it used to plan one device change carrying the chassis
+        # inline. Both converge, and the deferred step is where position and
+        # priority have to be asserted anyway (_POST_CREATE_COMPANIONS), but the
+        # changeset is longer.
+        #
+        # A list, not a scalar: several members of one chassis in one batch
+        # fingerprint-dedupe into a single chassis node, and _merge_nodes unions
+        # this key so every member's evidence survives the merge. Dropping to
+        # the first one would make the rule "prefer the chassis the FIRST-named
+        # member belongs to", which is an arbitrary choice of exactly the kind
+        # this whole path exists to remove.
+        "virtual_chassis": lambda object_type, uuid: {
+            VC_MEMBER_HINT: [UnresolvedReference(object_type=object_type, uuid=uuid)],
+        },
+    },
     "dcim.interface": {
         # interface.primary_mac_address -> mac_address.assigned_object = interface
         "primary_mac_address": lambda object_type, uuid: {
@@ -221,6 +273,12 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     _check_unresolved_refs(output)
     for entity in output:
         entity.pop('_refs', None)
+        # Matching is done; the hint must not reach a change. differ pops the
+        # private keys it knows by name, so anything left here is emitted as
+        # change data -- where cleanup_unresolved_references would stringify an
+        # unresolved device ref into it and report the hint as a new_ref.
+        for private_key in _PRIVATE_CONTEXT_KEYS_KEPT:
+            entity.pop(private_key, None)
 
     return output
 
@@ -244,10 +302,18 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
     # context pushed down from parent nodes
     if context is not None:
         for k, v in context.items():
-            if not k.startswith("_"):
+            if k in _PRIVATE_CONTEXT_KEYS_KEPT:
+                # Deep-copied, unlike the ordinary context values below: one
+                # nested_context dict is reused for every item of a list-valued
+                # reference, and _merge_nodes MUTATES this key (it unions the
+                # lists), so siblings sharing one list object would accumulate
+                # each other's members.
+                node[k] = copy.deepcopy(v)
+            elif not k.startswith("_"):
                 node[k] = v
-            if isinstance(v, UnresolvedReference):
-                node['_refs'].add(v.uuid)
+            for ref in (v if isinstance(v, list | tuple) else [v]):
+                if isinstance(ref, UnresolvedReference):
+                    node['_refs'].add(ref.uuid)
 
     nodes = [node]
     post_create = None
@@ -721,6 +787,18 @@ def _merge_nodes(a: dict, b: dict) -> dict:
     merged['_refs'] = a['_refs'] | b['_refs']
     _union_warnings(merged, a, b)
 
+    # Private keys are otherwise "prefer a's value", which for the member-device
+    # hint would silently discard every member but the first. Union them: the
+    # rule it feeds ("prefer the chassis a referencing member already belongs
+    # to") is only as good as the evidence it can see, and each merged node
+    # brought its own.
+    for k in _PRIVATE_CONTEXT_KEYS_KEPT:
+        if k in a or k in b:
+            union = list(a.get(k) or [])
+            for item in (b.get(k) or []):
+                if item not in union:
+                    union.append(item)
+            merged[k] = union
     deferred = dict(a.get('_deferred_conflicts') or {})
     rejected = []
     for k, v in b.items():
