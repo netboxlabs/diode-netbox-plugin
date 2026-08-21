@@ -208,6 +208,11 @@ def _outgoing_edges(node: dict) -> set[str]:
     return refs
 
 
+def referenced_uuids(entities) -> set[str]:
+    """Public alias: the reference graph the transformer snapshots before any drop."""
+    return _referenced_uuids(entities)
+
+
 def _referenced_uuids(entities) -> set[str]:
     """Every uuid some node in ``entities`` references."""
     referenced = set()
@@ -322,23 +327,20 @@ def submitted_driver_field_drops(object_type: str, entity: dict) -> dict[str, st
     return dropped
 
 
-def apply_submitted_driver_field_policy(entities: list[dict]) -> list[dict]:
+def apply_submitted_driver_field_policy(entities: list[dict]) -> bool:
     """
     Phase 1: let each submitted driver value win over the fields it forbids.
 
-    Takes transformed entity nodes and returns the surviving graph: the same list
-    minus any child node a drop left unreachable (see ``_prune_orphaned_nodes``).
-    Nodes are mutated in place, so a caller holding a reference to one still sees the
-    drop. Every dropped value is recorded in the node's ``_warnings``, which the differ
+    Mutates the nodes in place and returns whether any reference edge was released,
+    i.e. whether a later prune has anything to do. It does NOT prune: see
+    ``prune_orphaned_nodes`` and the ordering note there for why that has to wait.
+
+    Every dropped value is recorded in the node's ``_warnings``, which the differ
     surfaces on the change set, so producer data is never discarded silently.
 
     Safe to run more than once over the same graph, which the transformer does: a field
     that is already gone drops nothing, warns nothing and releases nothing.
     """
-    # Snapshot the reference graph BEFORE any drop. A node something referenced then was
-    # created as a nested child of that reference; a node nothing referenced is a root
-    # (the entity's own primary object, or a post-create step) and is never pruned.
-    referenced_before = _referenced_uuids(entities)
     refs_released = False
     for entity in entities:
         object_type = entity.get("_object_type")
@@ -359,8 +361,32 @@ def apply_submitted_driver_field_policy(entities: list[dict]) -> list[dict]:
             if reason not in messages:
                 messages.append(reason)
         logger.debug(f"Dropped {sorted(dropped)} from {object_type}: forbidden by the submitted driver value")
-    if not refs_released:
-        return entities
+    return refs_released
+
+
+def prune_orphaned_nodes(entities: list[dict], referenced_before: set) -> list[dict]:
+    """
+    Drop the child nodes the policy's releases left unreachable.
+
+    Separate from the drop, and run ONCE after deduplication, because pruning inside
+    the pre-dedupe pass destroys a duplicate representation before
+    ``_fingerprint_dedupe`` can merge it. Measured: an interface with mode "access",
+    ``untagged_vlan {vid 3992}`` and ``tagged_vlans [{vid 3992, name "v3992"}]`` --
+    two child nodes for one VLAN, the richer one inside the field the mode forbids.
+    Pruning per pass removed the named copy before the merge, leaving a survivor with
+    a vid and no name, and the whole entity became
+    ``400 {"ipam.vlan": {"name": ["This field cannot be blank."]}}`` forever -- an error
+    that also misdirects, blaming a blank VLAN name for an interface mode contradiction.
+    The quieter form of the same mechanism silently loses any field stated only on the
+    dropped occurrence (a ``description`` carried only in ``tagged_vlans``).
+    Deferring the sweep lets dedupe merge first, so the survivor keeps what the pruned
+    copy contributed and only genuinely unreachable nodes go.
+
+    ``referenced_before`` is the reference graph snapshotted BEFORE any drop: a node
+    something referenced then was created as a nested child of that reference, while a
+    node nothing referenced is a root (the entity's own primary object, or a post-create
+    step) and is never pruned.
+    """
     return _prune_orphaned_nodes(entities, referenced_before)
 
 

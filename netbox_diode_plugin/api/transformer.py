@@ -27,7 +27,11 @@ from .common import (
     sort_ints_first,
 )
 from .compat import apply_entity_migrations
-from .field_policy import apply_submitted_driver_field_policy
+from .field_policy import (
+    apply_submitted_driver_field_policy,
+    prune_orphaned_nodes,
+    referenced_uuids,
+)
 from .matcher import find_existing_object, fingerprints
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
@@ -154,7 +158,10 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     #   before _resolve_existing_references, because a dropped field can itself be a
     #   match criterion (ipam.vlan matches on qinq_svlan), and dropping it after the
     #   lookup strands the entity as an unmatchable CREATE that re-plans every ingest.
-    entities = apply_submitted_driver_field_policy(entities)
+    # Snapshot the reference graph before anything is dropped; the single prune sweep
+    # below needs it to tell a nested child from a root.
+    referenced_before = referenced_uuids(entities)
+    released = apply_submitted_driver_field_policy(entities)
     deduplicated = _fingerprint_dedupe(entities)
     deduplicated = _topo_sort(deduplicated)
     # ... and AFTER dedupe, because duplicates can also SPLIT the contradiction instead
@@ -168,7 +175,13 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     # support tagged vlans". Both passes are needed and neither is redundant; the
     # policy is idempotent, so the field a pre-dedupe drop already removed is not
     # dropped or warned about twice.
-    deduplicated = apply_submitted_driver_field_policy(deduplicated)
+    released = apply_submitted_driver_field_policy(deduplicated) or released
+    # ONE sweep, here and not inside either pass: pruning per pass removes a duplicate
+    # child before _fingerprint_dedupe can merge it, and the survivor then loses whatever
+    # the pruned copy alone carried -- a required `name` (permanent 400) or a description
+    # (silent loss). See prune_orphaned_nodes.
+    if released:
+        deduplicated = prune_orphaned_nodes(deduplicated, referenced_before)
     _set_auto_slugs(deduplicated, supported_models)
     _handle_cached_scope(deduplicated, supported_models)
     resolved = _resolve_existing_references(deduplicated)

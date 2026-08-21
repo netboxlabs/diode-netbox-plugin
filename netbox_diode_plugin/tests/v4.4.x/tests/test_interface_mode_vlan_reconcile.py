@@ -14,6 +14,8 @@ from netbox_diode_plugin.api.field_policy import (
     _DRIVER_FIELD_RULES,
     apply_submitted_driver_field_policy,
     match_participating_fields,
+    prune_orphaned_nodes,
+    referenced_uuids,
     submitted_driver_field_drops,
 )
 from netbox_diode_plugin.plugin_config import get_diode_user
@@ -424,12 +426,26 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
     def _uuids(self, entities):
         return sorted(e["_uuid"] for e in entities)
 
+    def _policy(self, entities):
+        """
+        Run the policy the way the transformer does: snapshot, drop, then ONE sweep.
+
+        The drop and the prune are deliberately separate calls -- pruning inside the
+        pass destroys a duplicate child before dedupe can merge it -- so this helper
+        keeps the unit tests exercising the same order the real pipeline uses.
+        """
+        referenced_before = referenced_uuids(entities)
+        released = apply_submitted_driver_field_policy(entities)
+        if not released:
+            return entities
+        return prune_orphaned_nodes(entities, referenced_before)
+
     def test_a_dropped_nested_reference_takes_its_child_node_with_it(self):
         """The child node a dropped tagged_vlans created is pruned, and so is its edge."""
         vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
         iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
                            mode="access", tagged_vlans=[self._ref("v1")])
-        out = apply_submitted_driver_field_policy([vlan, iface])
+        out = self._policy([vlan, iface])
         self.assertEqual(self._uuids(out), ["i1"])
         self.assertNotIn("tagged_vlans", iface)
         self.assertEqual(iface["_refs"], set())
@@ -439,7 +455,7 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
         vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
         iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1", mode="access",
                            untagged_vlan=self._ref("v1"), tagged_vlans=[self._ref("v1")])
-        out = apply_submitted_driver_field_policy([vlan, iface])
+        out = self._policy([vlan, iface])
         self.assertEqual(self._uuids(out), ["i1", "v1"])
         self.assertEqual(iface["_refs"], {"v1"})       # the untagged_vlan edge stands
         self.assertEqual(iface["untagged_vlan"], self._ref("v1"))
@@ -451,7 +467,7 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
                              mode="access", tagged_vlans=[self._ref("v1")])
         keeper = self._node("dcim.interface", "i2", refs={"v1"}, name="Eth2",
                             mode="tagged", tagged_vlans=[self._ref("v1")])
-        out = apply_submitted_driver_field_policy([vlan, dropped, keeper])
+        out = self._policy([vlan, dropped, keeper])
         self.assertEqual(self._uuids(out), ["i1", "i2", "v1"])
         self.assertEqual(dropped["_refs"], set())
         self.assertEqual(keeper["_refs"], {"v1"})
@@ -463,7 +479,7 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
                           group=self._ref("g1", "ipam.vlangroup"))
         iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
                            mode="access", tagged_vlans=[self._ref("v1")])
-        out = apply_submitted_driver_field_policy([group, vlan, iface])
+        out = self._policy([group, vlan, iface])
         self.assertEqual(self._uuids(out), ["i1"])
 
     def test_a_grandchild_something_surviving_needs_is_kept(self):
@@ -475,7 +491,7 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
                                group=self._ref("g1", "ipam.vlangroup"))
         iface = self._node("dcim.interface", "i1", refs={"v1", "v2"}, name="Eth1", mode="access",
                            untagged_vlan=self._ref("v2"), tagged_vlans=[self._ref("v1")])
-        out = apply_submitted_driver_field_policy([group, dropped_vlan, kept_vlan, iface])
+        out = self._policy([group, dropped_vlan, kept_vlan, iface])
         self.assertEqual(self._uuids(out), ["g1", "i1", "v2"])
         self.assertEqual(iface["_refs"], {"v2"})
 
@@ -491,7 +507,7 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
         )
         post_create["_is_post_create"] = True
         post_create["_instance"] = "i1"
-        out = apply_submitted_driver_field_policy([vlan, mac, iface, post_create])
+        out = self._policy([vlan, mac, iface, post_create])
         self.assertEqual(self._uuids(out), ["i1", "m1", "pc1"])
 
     def test_a_root_node_is_never_pruned(self):
@@ -499,7 +515,7 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
         vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
         iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
                            mode="access", tagged_vlans=[self._ref("v1")])
-        out = apply_submitted_driver_field_policy([vlan, iface])
+        out = self._policy([vlan, iface])
         self.assertIn("i1", self._uuids(out))
 
     def test_no_drop_prunes_nothing(self):
@@ -507,7 +523,7 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
         vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
         iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
                            mode="tagged", tagged_vlans=[self._ref("v1")])
-        out = apply_submitted_driver_field_policy([vlan, iface])
+        out = self._policy([vlan, iface])
         self.assertEqual(self._uuids(out), ["i1", "v1"])
         self.assertEqual(iface["tagged_vlans"], [self._ref("v1")])
         self.assertEqual(iface["_warnings"], {})
@@ -517,7 +533,7 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
         vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
         iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1", type="1000base-t",
                            rf_role="ap", mode="tagged", tagged_vlans=[self._ref("v1")])
-        out = apply_submitted_driver_field_policy([vlan, iface])
+        out = self._policy([vlan, iface])
         self.assertEqual(self._uuids(out), ["i1", "v1"])
         self.assertNotIn("rf_role", iface)
         self.assertEqual(iface["_refs"], {"v1"})
@@ -527,8 +543,8 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
         vlan = self._node("ipam.vlan", "v1", vid=101, name="v101")
         iface = self._node("dcim.interface", "i1", refs={"v1"}, name="Eth1",
                            mode="access", tagged_vlans=[self._ref("v1")])
-        entities = apply_submitted_driver_field_policy([vlan, iface])
-        again = apply_submitted_driver_field_policy(entities)
+        entities = self._policy([vlan, iface])
+        again = self._policy(entities)          # a second full pass changes nothing
         self.assertEqual(self._uuids(again), ["i1"])
         self.assertEqual(len(iface["_warnings"]["tagged_vlans"]), 1)
 
@@ -1080,6 +1096,46 @@ class InterfaceModeClearE2ETests(APITestCase):
         r = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
         self.assertEqual(r.status_code, 400, r.content)
         self.assertIn("Conflicting values", str(r.content))
+
+    def test_a_dropped_copy_still_contributes_before_it_is_pruned(self):
+        """The richer VLAN copy is inside the dropped field: it must merge, not vanish."""
+        # Pruning inside the pre-dedupe pass removed the named copy before
+        # _fingerprint_dedupe could merge it, leaving a survivor with a vid and no name:
+        # 400 {"ipam.vlan": {"name": ["This field cannot be blank."]}} on every round,
+        # blaming a blank VLAN name for an interface mode contradiction. Every earlier
+        # over-prune test specified the VLAN fully on BOTH sides, so the copies were
+        # interchangeable and losing one cost nothing -- this one makes them unequal,
+        # with the richer occurrence inside the field the mode forbids.
+        from ipam.models import VLAN
+        payload = {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": {
+            "device": self._device(), "name": "Gi8/0/2", "type": "1000base-t",
+            "mode": "access",
+            "untagged_vlan": {"vid": 3992},
+            "tagged_vlans": [{"vid": 3992, "name": "v3992"}],
+        }}}
+        cs = self._plan(payload)
+        self._apply(cs)
+        vlan = VLAN.objects.get(vid=3992)
+        self.assertEqual(vlan.name, "v3992")  # inherited from the copy that was dropped
+        iface = Interface.objects.get(name="Gi8/0/2")
+        self.assertEqual(iface.mode, "access")
+        self.assertEqual(iface.untagged_vlan.vid, 3992)
+        self.assertEqual(iface.tagged_vlans.count(), 0)
+        for quiet in range(1, 4):
+            self.assertEqual(self._plan(payload).get("changes", []), [],
+                             f"re-planned on quiet round {quiet}")
+
+    def test_a_field_only_the_dropped_copy_carried_is_not_lost(self):
+        """The quiet form of the same mechanism: a description only on the tagged copy."""
+        from ipam.models import VLAN
+        payload = {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": {
+            "device": self._device(), "name": "Gi8/0/3", "type": "1000base-t",
+            "mode": "access",
+            "untagged_vlan": {"vid": 3991, "name": "v3991"},
+            "tagged_vlans": [{"vid": 3991, "name": "v3991", "description": "ONLY-ON-TAGGED"}],
+        }}}
+        self._apply(self._plan(payload))
+        self.assertEqual(VLAN.objects.get(vid=3991).description, "ONLY-ON-TAGGED")
 
     def test_a_contradictory_vlan_payload_never_touches_a_same_vid_row(self):
         """ipam.vlan is exempt from the drop, so a same-vid VLAN is left alone."""
