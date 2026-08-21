@@ -905,6 +905,70 @@ class VirtualChassisIngestE2ETests(APITestCase):
                               members={"vce-a1": 1, "vce-a2": 2, "vce-b3": 3})
         self._assert_noop_rediff(payload)
 
+    def test_the_row_a_decline_leaves_behind_refuses_a_later_name_only_member(self):
+        """
+        What declining COSTS, measured, one producer and no foreign row anywhere.
+
+        Nothing here is another source's stack. One producer sends two members
+        with name-only virtual_chassis references, which builds a single
+        masterless row; then a STANDALONE dcim.virtualchassis entity naming a
+        master for the same name. That entity plans no device change, so
+        adoption declines it (_choose_adoption_candidate: a populated candidate,
+        no membership planned) and the create gives it a row of its own. Two
+        populated rows now share the name.
+
+        From there:
+          - an EXISTING member re-ingests clean, because the member hint puts it
+            in the row it is already in (VirtualChassisNameMatcher rule 1);
+          - a NEW member with the same name-only reference is a 400 at
+            generate-diff -- on that pass and every later one -- and its device
+            is not created at all.
+
+        That is the residual cost of decline-and-create, and it is asserted here
+        rather than described in a docstring: the refusal is loud, it names the
+        two rows and remedies that work, and no row was written -- but a
+        producer in this shape is blocked on this name until an operator merges
+        the rows or places the device. The alternative measured against it was
+        adopting the populated row on the strength of the name, which is the
+        hijack this series removed.
+        """
+        for name, position in (("vce-m1", 1), ("vce-m2", 2)):
+            self._diff_apply(self._device_payload(name, {
+                "vc_position": position,
+                "virtual_chassis": {"name": "vce-solo"},
+            }))
+        row = VirtualChassis.objects.get(name="vce-solo")
+        self.assertIsNone(row.master_id)
+        self.assertEqual(row.members.count(), 2)
+
+        # The master arrives as a plain device entity first and then as the
+        # standalone chassis entity's master stub -- orb-agent's own shape.
+        self._diff_apply(self._device_payload("vce-m3"))
+        self._diff_apply(self._vc_payload("vce-solo", "vce-m3"))
+        rows = VirtualChassis.objects.filter(name="vce-solo").order_by("pk")
+        self.assertEqual(rows.count(), 2)
+        row.refresh_from_db()
+        self.assertIsNone(row.master_id, "the decline mastered the row anyway")
+        self.assertEqual(row.members.count(), 2)
+        self.assertEqual(rows.last().master.name, "vce-m3")
+
+        # An existing member is unaffected: the hint answers for it.
+        self._assert_noop_rediff(self._device_payload("vce-m1", {
+            "vc_position": 1, "virtual_chassis": {"name": "vce-solo"}}))
+
+        # A new member is not: two populated rows, nothing to tell them apart.
+        r = self.client.post(
+            self.diff_url,
+            data=self._device_payload("vce-m4", {
+                "vc_position": 4, "virtual_chassis": {"name": "vce-solo"}}),
+            format="json", **self.auth,
+        )
+        self.assertEqual(r.status_code, 400, r.content)
+        error = r.json()["errors"]["dcim.virtualchassis"]["name"][0]
+        self.assertIn("merge the duplicates", error)
+        self.assertFalse(Device.objects.filter(name="vce-m4").exists())
+        self.assertEqual(VirtualChassis.objects.filter(name="vce-solo").count(), 2)
+
     def test_the_second_producer_gets_its_own_row_once_it_says_which(self):
         """
         The escape hatch from the bound above, and it does not touch A's row.

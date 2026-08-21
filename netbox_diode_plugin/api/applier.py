@@ -380,6 +380,20 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
         which has no adoption at all) does with the same input, so it is not a
         regression on the branch point either.
 
+    Declining is not free either, and the cost is downstream of this function.
+    It leaves TWO populated rows sharing one name, and a name that matches two
+    populated rows is what matcher.VirtualChassisNameMatcher.resolve refuses.
+    Measured on v4.5.5: a producer sending name-only member references builds
+    one masterless row; a standalone master-bearing chassis entity for the same
+    name then declines and creates its own; from there an EXISTING member
+    re-ingests fine (the member hint answers, rule 1), but a NEW member with a
+    name-only reference is a 400 at generate-diff on that pass and every later
+    one, and its device is not created until an operator merges the rows or
+    places the device. That is the price of not touching a row this payload
+    cannot identify, and it is the right price -- it is reported, it names what
+    to do, and nothing has been written to anybody's stack -- but it is a
+    price, not a free decline.
+
     Declining also makes the two halves of the same collision agree. A MASTERED
     same-named row already led to "create a second chassis, 200, converges" --
     the unique-master matcher answers first and the payload lands on its own
