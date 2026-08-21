@@ -8,7 +8,7 @@ scenario tests and every one of them still had a cell that either wrote the
 wrong row or refused forever. Scenario tests pick cells; this file enumerates
 them, over the product of every axis the decision can read:
 
-  - 0/1/2/3 same-named MASTERLESS candidates, each empty / populated /
+  - 0/1/2 same-named MASTERLESS candidates, each empty / populated /
     populated-and-labelled (a domain the payload may or may not assert)
   - a same-named MASTERED row present or absent (it is outside the candidate
     queryset, but it is what the create path falls back onto)
@@ -215,9 +215,25 @@ class VirtualChassisAdoptionMatrixTests(TestCase):
     # ---- the enumeration --------------------------------------------------
 
     def _cells(self):
+        # 0/1/2 candidates, not 0..3. The adoption decision cannot tell three
+        # same-named rows from two. narrow_vc_candidates is a per-element filter
+        # with one empty/non-empty check, so it is cardinality-blind; and
+        # _choose_adoption_candidate's only cardinality tests are
+        # len(strong) == 1, len(strong) > 1 (unreachable while
+        # Device.virtual_chassis is a single FK -- at most one row can hold the
+        # master) and len(candidates) != 1. Every branch past narrowing reads
+        # one row, `only`. Two candidates already reach "more than one", so a
+        # third adds cells, not states.
+        #
+        # Measured, not reasoned: the 4240 length-3 cells produced no behaviour
+        # signature the shorter 1824 did not. Dropping them, together with the
+        # matching cap on the matcher enumeration below, took the two
+        # enumerations from 224.3s to 54.3s on v4.5.5 -- run back to back under
+        # the same machine load, because timings on a loaded laptop move by 2x
+        # and a cross-run comparison here would prove nothing.
         shapes_axis = [
             tuple(combo)
-            for length in range(4)
+            for length in range(3)
             for combo in itertools.product("EPL", repeat=length)
         ]
         for shapes in shapes_axis:
@@ -255,7 +271,9 @@ class VirtualChassisAdoptionMatrixTests(TestCase):
             finally:
                 transaction.savepoint_rollback(sid)
 
-        self.assertGreater(counted, 2000, "the enumeration collapsed")
+        # Exact, not a floor: this guard exists to catch an enumeration that
+        # silently stopped enumerating, and a floor cannot see a narrowed axis.
+        self.assertEqual(counted, 1824, "the enumeration changed size")
         census = {}
         licences = {}
         for cell, verdict in table:
@@ -580,7 +598,13 @@ class VirtualChassisMatcherRefusalMatrixTests(TestCase):
         """No cell refuses without a remedy, and no refusal asks for a payload field."""
         failures = []
         kinds = set()
-        for length in range(4):
+        counted = 0
+        # 0/1/2 rows, for the same reason as the applier matrix above, and here
+        # even the oracle cannot see a third: build_queryset filters on name
+        # alone while _build names every row NAME, so `found.name == NAME` is
+        # vacuously true. A cell observes resolved / none / ambiguous plus the
+        # refusal text, and every branch of all four is reachable with two rows.
+        for length in range(3):
             for shapes in itertools.product("EPLM", repeat=length):
                 for domain in (None, "", LABEL, OTHER_LABEL):
                     for hint in ("none", "free", "in_0"):
@@ -589,8 +613,12 @@ class VirtualChassisMatcherRefusalMatrixTests(TestCase):
                             kind, problems = self._matcher_cell(shapes, domain, hint)
                             kinds.add(kind)
                             failures.extend(problems)
+                            counted += 1
                         finally:
                             transaction.savepoint_rollback(sid)
+        # Exact, not a floor: a later edit that narrows an axis has to say so
+        # here rather than quietly enumerating less.
+        self.assertEqual(counted, 252, "the matcher enumeration changed size")
         self.assertEqual(kinds, {"resolved", "none", "ambiguous"}, kinds)
         self.assertEqual(failures, [], "\n".join(failures[:40]))
 
