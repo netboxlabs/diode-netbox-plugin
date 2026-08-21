@@ -940,35 +940,24 @@ class VirtualChassisAdoptionTests(TestCase):
         self.assertEqual(self.master.virtual_chassis_id, self.vc.pk)
         self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
 
-    def test_adoption_accepts_a_populated_row_a_planned_device_change_names(self):
+    def test_adoption_declines_a_populated_row_a_planned_device_change_names(self):
         """
-        The other way identity gets strong enough: the changeset says so itself.
+        A planned Device change says WHICH CHASSIS, never WHICH ROW, so it licenses nothing.
 
-        The review's objection to adoption was that the device mutation "is not
-        represented as a Device change in the planned changeset". When it IS --
-        a device payload nesting virtual_chassis plans exactly this pair -- the
-        producer has asked for the membership through the object that owns it,
-        and adoption is only performing it early because VirtualChassis.clean
-        refuses a master that is not yet a member.
+        This cell used to adopt. The Device change asserts
+        virtual_chassis = <the CREATE's own ref>, which is the row the preview
+        names, and asserts nothing about the pre-existing row that adoption
+        would redirect that create onto. Within the member-first shape it
+        therefore could not tell this producer's own earlier pass from another
+        producer's identically named stack, and it took the row in both cases.
 
-        Read precisely what that change asserts, because this docstring used to
-        overstate it: virtual_chassis = the CREATE's ref, i.e. the row the
-        preview names, and nothing about the pre-existing row adoption redirects
-        the create onto. So the evidence separates two SHAPES of payload rather
-        than two rows -- the member-first shape from a standalone chassis entity
-        -- and within the member-first shape it cannot tell this producer's own
-        earlier pass from another producer's identically named stack. That
-        residual bound is stated in applier._choose_adoption_candidate and
-        measured in test_a_second_producers_member_first_stack_lands_on_the_same
-        _row (ingest suite); the two narrowings tried against it were reverted,
-        one because it broke legitimate cross-site convergence
-        (test_a_cross_site_member_first_row_still_converges_to_one_chassis).
-
-        What DOES still stop adoption here: a row somebody labelled
-        (test_a_row_whose_domain_the_payload_never_asserts_is_left_for_its_owner)
-        and, without any companion change at all, the identical state
-        (test_a_populated_row_matched_only_by_name_is_left_alone_and_a_new_one
-        _created). Neither refuses the payload; both create its own row.
+        Now it declines: the row nobody identified is left exactly as it was and
+        the payload gets its own. The cost is real and is not hidden -- a
+        name-only member-first producer no longer converges by itself, and
+        accumulates a duplicate until an operator merges the rows or the
+        producer starts sending identity. The gain is that a populated stack
+        nobody identified is never written, and a duplicate is visible where a
+        silent merge of two stacks is not.
         """
         squatter = Device.objects.create(
             name="vca-squatter3", site=self.master.site,
@@ -987,12 +976,18 @@ class VirtualChassisAdoptionTests(TestCase):
                 new_refs=["virtual_chassis"],
             )],
         )
-        self.vc.refresh_from_db()
-        self.assertEqual(self.vc.master_id, self.master.pk)
-        self.master.refresh_from_db()
-        self.assertEqual(self.master.virtual_chassis_id, self.vc.pk)
-        self.assertEqual(self.master.vc_position, 1)
 
+        self.vc.refresh_from_db()
+        self.assertIsNone(self.vc.master_id, "adopted a row nothing identified")
+        self.assertEqual(
+            {d.pk for d in self.vc.members.all()}, {squatter.pk},
+            "the untouched row gained or lost a member",
+        )
+        own = VirtualChassis.objects.filter(name="vca-stack").exclude(pk=self.vc.pk)
+        self.assertEqual(own.count(), 1, "the payload did not get its own row")
+        self.assertEqual(own.first().master_id, self.master.pk)
+        self.master.refresh_from_db()
+        self.assertEqual(self.master.virtual_chassis_id, own.first().pk)
     def test_an_empty_domain_payload_creates_its_own_row_and_keeps_the_labelled_one(self):
         """
         Adoption declines where the matcher binds, and the asymmetry is the point.
@@ -1019,24 +1014,23 @@ class VirtualChassisAdoptionTests(TestCase):
         self.assertEqual(fresh.domain, "")
         self.assertEqual(fresh.master_id, self.master.pk)
 
-    def test_a_cross_site_member_first_row_still_converges_to_one_chassis(self):
+    def test_a_cross_site_member_first_row_is_declined_but_never_refused(self):
         """
         A VirtualChassis legitimately spans sites, so member sites are not identity.
 
-        Identical to test_adoption_accepts_a_populated_row_a_planned_device_
-        change_names except for ONE fact about the row: the device already in it
-        lives at another site. That fact was briefly a veto -- refuse to adopt a
-        row holding members from outside the master's site -- and it had to be
-        reverted, because it is exactly the shape of a legitimate cross-site
-        stack ingested member-first. Measured with the veto in place: this apply
-        answered 400 on every pass and never converged, where the branch without
-        it converges to one row.
+        The device already in the row lives at another site. That fact was
+        briefly a veto -- refuse to adopt a row holding members from outside the
+        master's site -- and the veto had to be reverted because it made this
+        apply answer 400 on every pass and never converge. This test still pins
+        that half: whatever else happens here, it must not be an error, and it
+        must not depend on anybody's site.
 
-        What remains is the residual bound of name-keyed identity, stated in
-        applier._choose_adoption_candidate: within the member-first shape this
-        cell cannot be told from another producer's identically named stack, so
-        adopting is also what happens there. The honest fix is source-owned
-        VirtualChassis identity, not a guess about sites.
+        The other half changed. This row is populated and identified by nothing
+        but its name, so it is no longer adopted either -- the payload gets its
+        own row. Declining is not refusing: the apply succeeds, the cross-site
+        row is untouched, and nothing is permanent. The honest fix for the
+        convergence this gives up is source-owned VirtualChassis identity, not
+        a guess about sites.
         """
         other_site = Site.objects.create(name="vca-site-b", slug="vca-site-b")
         stranger = Device.objects.create(
@@ -1057,15 +1051,14 @@ class VirtualChassisAdoptionTests(TestCase):
             )],
         )
 
-        self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
         self.vc.refresh_from_db()
-        self.assertEqual(self.vc.master_id, self.master.pk)
+        self.assertIsNone(self.vc.master_id)
+        self.assertEqual({d.pk for d in self.vc.members.all()}, {stranger.pk})
+        own = VirtualChassis.objects.filter(name="vca-stack").exclude(pk=self.vc.pk)
+        self.assertEqual(own.count(), 1)
+        self.assertEqual(own.first().master_id, self.master.pk)
         self.master.refresh_from_db()
-        self.assertEqual(self.master.virtual_chassis_id, self.vc.pk)
-        self.assertEqual(self.master.vc_position, 1)
-        self.assertEqual(sorted(self.vc.members.values_list("name", flat=True)),
-                         ["vca-elsewhere", "vca-sw1"])
-
+        self.assertEqual(self.master.virtual_chassis_id, own.first().pk)
     def test_an_empty_domain_is_not_an_identification_that_licenses_adoption(self):
         """
         "" narrows, and must not IDENTIFY -- tested at the door where it survives.

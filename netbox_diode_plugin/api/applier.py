@@ -30,7 +30,6 @@ from .matcher import (
     narrow_vc_candidates,
     pre_save_match_binds_only,
     requires_pre_save_match,
-    unasserted_vc_discriminators,
 )
 from .plugin_utils import get_object_type_model, legal_fields
 from .profile import profiled
@@ -457,34 +456,42 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
        ends up master of a stack containing only itself) except that no
        duplicate row is left behind. This is the plan-ahead race the pre-save
        match covers for masterless payloads, reaching the master-bearing half.
-    4. exactly one candidate, POPULATED, and THIS changeset plans the device's
-       membership of the chassis it is creating (_changeset_plans_membership).
-       That is the member-first shape and only that shape: a device payload
-       nesting virtual_chassis plans exactly the pair "create chassis mastered
-       by R, then update R with its chassis and position", so the producer has
-       asked for the membership through the object that owns it, in the
-       preview. A STANDALONE dcim.virtualchassis payload plans no device change
-       and never reaches here -- which is what makes the capture above create
-       its own row, because the master arrives as its own entity.
+    There is deliberately no fourth rule. A POPULATED candidate matched on the
+    name alone is never adopted -- not even when this changeset plans the
+    device's membership of the chassis it is creating. That Device change says
+    virtual_chassis = <the new CREATE reference>; it does not say <this
+    pre-existing row>. Adoption is the step that would redirect the reference
+    onto the row, so reading the reference back as evidence about the row is
+    circular: it proves the producer wants membership of the chassis it is
+    creating, and proves nothing about which same-named row that create may
+    take over.
 
-       Rule 4's evidence is real but its scope is the row the PREVIEW names, not
-       the pre-existing row adoption redirects that create onto, so it can still
-       land a member-first payload on a same-named row another producer owns.
-       That is the residual bound of name-keyed identity and it is stated as a
-       bound: the outcome is one shared row where a human might have wanted two,
-       reachable in NetBox, and no worse than the duplicate-name state the
-       decline produces the other way round. Narrowing it further was tried and
-       reverted -- vetoing a candidate whose members sit outside the master's
-       site broke legitimate cross-site member-first convergence (measured: 400
-       forever where the branch previously converged), and a VirtualChassis
-       legitimately spans sites, so the site of its members is not evidence
-       about its identity.
+    It WAS a rule, and it is worth recording what it allowed, because the shape
+    is ordinary rather than exotic. An existing "access-stack" holds
+    building-a-sw2 and building-a-sw3 and has no master. A second producer sends
+    building-b-sw1 nesting its own chassis of the same name. There is one
+    populated masterless candidate and the changeset plans the membership, so
+    building-b-sw1 joined the building-A stack and became its master -- 200, no
+    duplicate row, no ambiguity, nothing for an operator to notice. Silent
+    wrong-row mutation is the worst outcome available on this path, worse than
+    either a duplicate or a refusal.
 
-    The one thing rule 4 will not do is adopt a row somebody else LABELLED: a
-    candidate carrying a discriminator this payload leaves unasserted
-    (matcher.unasserted_vc_discriminators) is declined, not adopted. That is a
-    steer between "adopt" and "create", never a refusal -- the payload still
-    applies, to its own row.
+    Declining costs a name-only producer its automatic member-first
+    convergence: it gets its own row instead, which is exactly what develop
+    (08af3fb, no adoption at all) does with the same input. A visible duplicate
+    can be merged by a human; a silent merge of two real stacks cannot be
+    undone by one who never learns of it. What may take a populated row is real
+    identity -- rule 1's existing membership, rule 2's asserted discriminator,
+    or source-owned chassis identity once that exists -- and not a plan-shaped
+    proxy for it.
+
+    An earlier attempt to keep the rule and narrow it was tried and reverted:
+    vetoing a candidate whose members sit outside the master's site broke
+    legitimate cross-site member-first convergence (measured: 400 forever where
+    the branch previously converged), and a VirtualChassis legitimately spans
+    sites, so the site of its members is not evidence about its identity. The
+    lesson taken here is that the rule could not be narrowed into safety, not
+    that a narrower version was needed.
     """
     holders = set(
         model_class.objects.filter(
@@ -523,12 +530,31 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
 
     only = candidates[0]
     if only.master_id is None and not only._diode_member_count:
+        # An empty masterless row is not a stack anyone owns: binding it merges
+        # no membership and relocates no device, so the name is enough.
         return only
-    if not _changeset_plans_membership(change, change_set, created, master_pk):
-        return None
-    if unasserted_vc_discriminators(only, data):
-        return None
-    return only
+    # A POPULATED row matched on the name alone is never adopted, even when this
+    # changeset plans the master's membership of the chassis it is creating.
+    # That Device change says virtual_chassis = <the new CREATE reference>; it
+    # does not say <this particular pre-existing row>. It proves the producer
+    # wants membership in the chassis being created, and proves nothing about
+    # which same-named row that create may safely take over -- adoption is what
+    # would redirect the reference onto this row, so reading the reference back
+    # as evidence for the row is circular.
+    #
+    # The failure it allowed was the worst kind available here: an existing
+    # "access-stack" holding building-a-sw2 and building-a-sw3, a new producer
+    # sending building-b-sw1 with its own master-bearing chassis of the same
+    # name, and the plugin attaching building-b-sw1 to the building-A stack and
+    # making it that stack's master -- reporting success, leaving no duplicate
+    # and no ambiguity for anyone to find. Declining costs automatic member-
+    # first convergence for a name-only producer, and that is the cheaper loss:
+    # it creates the payload's own row, which is what develop (08af3fb) does
+    # with the same input, and a duplicate is visible where a silent merge of
+    # two real stacks is not. Real identity, not a plan-shaped proxy for it, is
+    # what may take a populated row: rules 1 and 2 above, or source-owned
+    # chassis identity when that exists.
+    return None
 
 
 def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_class, request,

@@ -112,6 +112,31 @@ class VirtualChassisIngestE2ETests(APITestCase):
         non_noop = [c for c in cs.get("changes", []) if c["change_type"] != "noop"]
         self.assertEqual(non_noop, [], non_noop)
 
+    def _assert_split_vc(self, name, master_name, mastered_members, orphan_members):
+        """
+        Two same-named rows: the one this payload made, and the one it declined.
+
+        A populated row matched on the name alone is not adopted, so a
+        member-first pass leaves the member's masterless row where it is and the
+        master-bearing pass gets its own. Both halves are asserted, because the
+        property that makes the split shippable is that NOTHING MOVED: the row
+        the payload did not identify has to be byte-identical afterwards.
+        """
+        rows = VirtualChassis.objects.filter(name=name)
+        self.assertEqual(rows.count(), 2, list(rows.values_list("pk", "master_id")))
+        mastered = rows.exclude(master__isnull=True)
+        self.assertEqual(mastered.count(), 1, "no row ended up mastered")
+        mastered = mastered.first()
+        self.assertEqual(mastered.master.name, master_name)
+        self.assertEqual(
+            dict(mastered.members.values_list("name", "vc_position")), mastered_members)
+        orphan = rows.filter(master__isnull=True).first()
+        self.assertIsNone(orphan.master_id, "the declined row acquired a master")
+        self.assertEqual(
+            dict(orphan.members.values_list("name", "vc_position")), orphan_members,
+            "the declined row's membership changed")
+        return mastered, orphan
+
     def _assert_single_vc(self, name, master_name=None, members=None):
         vcs = VirtualChassis.objects.filter(name=name)
         self.assertEqual(vcs.count(), 1)
@@ -591,7 +616,7 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertIn("position", body.lower(), body)
         self.assertFalse(Device.objects.filter(name="vce-sw3").exists())
 
-    def test_fresh_stack_two_requests_both_orders_converge(self):
+    def test_fresh_stack_two_requests_both_orders_are_stable(self):
         """
         Master-first and member-first request orders both end at ONE VC.
 
@@ -624,11 +649,21 @@ class VirtualChassisIngestE2ETests(APITestCase):
             # for an ingest, because adoption attaches the chassis-less master
             # itself. It stays here as a re-ingest safety net.
             self._diff_apply(master_payload, allow_empty=True)
-            self._assert_single_vc(vc_name, master_name=m, members={m: 1, s2: 2})
+            if order == "master_first":
+                # The chassis exists before the member names it, so the
+                # member's name-only reference resolves to the one row there.
+                self._assert_single_vc(
+                    vc_name, master_name=m, members={m: 1, s2: 2})
+            else:
+                # Member-first builds the row before any master exists, so
+                # the master-bearing pass declines it and takes its own.
+                self._assert_split_vc(vc_name, master_name=m,
+                                      mastered_members={m: 1},
+                                      orphan_members={s2: 2})
             self._assert_noop_rediff(master_payload)
             self._assert_noop_rediff(member_payload)
 
-    def test_bulk_plan_apply_member_first_ordering_converges(self):
+    def test_bulk_plan_apply_member_first_ordering_is_stable(self):
         """
         Member-first ordering within ONE bulk-plan-apply request.
 
@@ -662,23 +697,22 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertIsNone(results["member"].get("errors"), results["member"])
         self.assertIsNone(results["master"].get("errors"), results["master"])
 
-        # Adoption fallback must not duplicate the masterless VC the member's
-        # plan created; exactly one VC row exists after the bulk request.
-        self.assertEqual(VirtualChassis.objects.filter(name=vc_name).count(), 1)
+        # The member entity creates a masterless row and the master-bearing
+        # entity declines to adopt it, so the request ends with two rows. The
+        # decline does not care that both entities arrived together: sharing the
+        # request-scoped caches does not make a populated row identifiable.
+        rows = VirtualChassis.objects.filter(name=vc_name)
+        self.assertEqual(rows.count(), 2, list(rows.values_list("pk", "master_id")))
 
-        # Pin the bulk request's own outcome: the member device lands on
-        # that VC before any follow-up re-ingest happens.
-        self.assertEqual(
-            Device.objects.get(name=s2).virtual_chassis_id,
-            VirtualChassis.objects.get(name=vc_name).pk,
-        )
-
-        # VC.master converges within the bulk request itself: adoption
-        # attaches the chassis-less master to the row it adopts, so the
-        # re-ingest below has nothing left to plan.
-        self.assertEqual(VirtualChassis.objects.get(name=vc_name).master.name, m)
+        # Pin the bulk request's own outcome: each device sits in the row its
+        # OWN entity produced, before any follow-up re-ingest happens.
+        orphan = rows.filter(master__isnull=True).get()
+        mastered = rows.exclude(master__isnull=True).get()
+        self.assertEqual(Device.objects.get(name=s2).virtual_chassis_id, orphan.pk)
+        self.assertEqual(mastered.master.name, m)
         self._diff_apply(master_payload, allow_empty=True)
-        self._assert_single_vc(vc_name, master_name=m, members={m: 1, s2: 2})
+        self._assert_split_vc(vc_name, master_name=m,
+                              mastered_members={m: 1}, orphan_members={s2: 2})
         self._assert_noop_rediff(master_payload)
         self._assert_noop_rediff(member_payload)
 
@@ -918,35 +952,34 @@ class VirtualChassisIngestE2ETests(APITestCase):
             for payload in payloads:
                 self._assert_noop_rediff(payload)
 
-    def test_a_second_producers_member_first_stack_lands_on_the_same_row(self):
+    def test_a_second_producers_member_first_stack_gets_its_own_row(self):
         """
-        The residual bound of name-keyed identity, measured rather than claimed.
+        Producer B never lands in producer A's stack. This is the data-integrity line.
 
         Producer A ingests two site-A devices member-first, leaving a masterless
         "vce-shared" holding both. Producer B then ingests one site-B device
         whose nested virtual_chassis carries the same name, its own master, and
-        no domain. generate-diff previews "create dcim.virtualchassis";
-        apply-change-set answers 200; ONE row remains, and producer B's device is
-        now a member of producer A's row and its master.
+        no domain. It gets its OWN row: producer A's row keeps exactly its two
+        members and stays masterless, and nothing of B's is written into it.
 
-        That is a real bound and it is stated as one, in
-        applier._choose_adoption_candidate. It is not closable from this data:
-        the payload is byte-for-byte the shape of a legitimate member-first
-        second pass (test_fresh_stack_two_requests_both_orders_converge,
-        member_first), the row is masterless, populated and unlabelled either
-        way, and the two narrowings tried were both worse -- the site veto broke
-        legitimate cross-site stacks (400 forever, see
-        test_a_cross_site_member_first_row_still_converges_to_one_chassis), and
-        refusing outright left the real orb-agent capture at 207 on every pass
-        with no remedy its producer could take. Closing it needs identity the
-        source owns, not another inference from the rows.
+        This used to adopt, and what it did was the worst outcome reachable on
+        this path -- B's device joined A's stack and became its master, reported
+        200, and left no duplicate and no ambiguity for anyone to notice. The
+        licence was that this changeset plans B's membership of the chassis it
+        is creating; but that Device change names the CREATE's own reference,
+        not A's row, and adoption is the step that would redirect it, so the
+        reference could never be evidence about which row to take.
 
-        What IS held down here: the outcome CONVERGES (the re-diff is empty, so
-        no pass ever re-plans this) and it is visible -- one row, both stacks in
-        it, which an operator can split. The failure mode this replaced was
-        invisible: adoption reported 200 while leaving the remaining members
-        detached.
+        The payload is byte-for-byte the shape of a legitimate member-first
+        second pass by ONE producer (test_fresh_stack_two_requests_both_orders_
+        are_stable, member_first), which is exactly why no rule over these rows
+        can separate them: same name, masterless, populated, unlabelled either
+        way. So both now decline, and the cost lands on the honest case as a
+        duplicate rather than on the dishonest one as a silent merge. Closing it
+        properly needs identity the source owns.
 
+        What is held down here: the split CONVERGES -- the re-diff is empty, so
+        no pass re-plans -- and it is visible, two rows an operator can merge.
         The sibling test below is the escape hatch: a domain makes producer B's
         payload describe its own chassis and it gets one.
         """
@@ -961,8 +994,11 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertIsNone(r.json().get("errors"))
 
-        self._assert_single_vc("vce-shared", master_name="vce-b3",
-                              members={"vce-a1": 1, "vce-a2": 2, "vce-b3": 3})
+        self._assert_split_vc(
+            "vce-shared", master_name="vce-b3",
+            mastered_members={"vce-b3": 3},
+            orphan_members={"vce-a1": 1, "vce-a2": 2},
+        )
         self._assert_noop_rediff(payload)
 
     def test_the_row_a_decline_leaves_behind_refuses_a_later_name_only_member(self):
@@ -1084,8 +1120,11 @@ class VirtualChassisIngestE2ETests(APITestCase):
         for key in ("a1", "a2", "b3"):
             self.assertIsNone(results[key].get("errors"), results[key])
 
-        self._assert_single_vc("vce-shared", master_name="vce-b3",
-                               members={"vce-a1": 1, "vce-a2": 2, "vce-b3": 3})
+        self._assert_split_vc(
+            "vce-shared", master_name="vce-b3",
+            mastered_members={"vce-b3": 3},
+            orphan_members={"vce-a1": 1, "vce-a2": 2},
+        )
 
     def test_the_differ_drops_an_empty_domain_from_a_planned_create(self):
         """

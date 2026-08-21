@@ -684,13 +684,23 @@ class VirtualChassisMatcherRefusalMatrixTests(TestCase):
 
 class CrossSiteMemberFirstConvergenceTests(APITestCase):
     """
-    A VirtualChassis spanning two sites must still converge to ONE row.
+    A VirtualChassis spanning two sites must never be REFUSED, in either order.
 
     This is the case a site veto broke -- refusing to adopt a candidate holding
     members from outside the master's site made the apply answer 400 on every
-    pass. The veto was reverted; this pins the cell it protected at the DOOR the
-    producer uses, in both request orders and through both entry points, which
-    the unit-level test of the same cell does not reach.
+    pass, forever. The veto was reverted, and that half is still pinned here at
+    the DOOR the producer uses, in both request orders and through both entry
+    points, which the unit-level test of the same cell does not reach: no site
+    of anybody's may turn into an error or move.
+
+    What these tests no longer assert is a single row. A populated row matched
+    on the name alone is not adopted any more (see
+    applier._choose_adoption_candidate), so member-first leaves the member's
+    row and the master's row side by side. Measured, and the reason this is
+    shippable where the veto was not: the pair is STABLE -- re-ingesting either
+    payload plans nothing, because the member reference resolves to the row it
+    is already in and the master-bearing one resolves through unique_master.
+    Two visible rows an operator can merge, not a plan that never settles.
     """
 
     def setUp(self):
@@ -767,8 +777,28 @@ class CrossSiteMemberFirstConvergenceTests(APITestCase):
                        if c["change_type"] != "noop"]
             self.assertEqual(changes, [], changes)
 
-    def test_two_requests_both_orders_converge_across_sites(self):
-        """Master-first and member-first, two requests, one row each time."""
+    def _assert_split_rows(self, vc_name, master, member):
+        """Member-first leaves two rows, and the pair must be stable."""
+        rows = VirtualChassis.objects.filter(name=vc_name)
+        self.assertEqual(rows.count(), 2, list(rows.values_list("pk", "domain")))
+        mastered = rows.exclude(master__isnull=True)
+        self.assertEqual(mastered.count(), 1, "no row ended up mastered")
+        self.assertEqual(mastered.first().master.name, master)
+        self.assertEqual(
+            sorted(mastered.first().members.values_list("name", "vc_position")),
+            [(master, 1)])
+        orphan = rows.filter(master__isnull=True).first()
+        self.assertEqual(
+            sorted(orphan.members.values_list("name", "vc_position")),
+            [(member, 2)], "the member left the row its own reference created")
+        # The property that makes a split acceptable at all: nothing re-plans.
+        for payload in self._payloads(vc_name, master, member):
+            changes = [c for c in self._diff(payload).get("changes", [])
+                       if c["change_type"] != "noop"]
+            self.assertEqual(changes, [], changes)
+
+    def test_two_requests_both_orders_are_stable_across_sites(self):
+        """Master-first still lands one row; member-first lands two stable ones."""
         for order in ("master_first", "member_first"):
             vc_name = f"xs-{order}"
             master, member = f"xs-m-{order}", f"xs-n-{order}"
@@ -778,9 +808,13 @@ class CrossSiteMemberFirstConvergenceTests(APITestCase):
                 else (member_payload, master_payload))
             self._diff_apply(first)
             self._diff_apply(second)
-            self._assert_one_row(vc_name, master, member)
-
-    def test_bulk_both_orders_converge_across_sites(self):
+            if order == "master_first":
+                # The chassis exists before the member names it, so the member's
+                # name-only reference resolves to the one row that is there.
+                self._assert_one_row(vc_name, master, member)
+            else:
+                self._assert_split_rows(vc_name, master, member)
+    def test_bulk_both_orders_are_stable_across_sites(self):
         """The same two orders inside one /bulk-plan-apply/ request."""
         for order in ("master_first", "member_first"):
             vc_name = f"xsb-{order}"
@@ -798,19 +832,20 @@ class CrossSiteMemberFirstConvergenceTests(APITestCase):
             self.assertEqual(r.status_code, 200, r.content)
             for result in r.json()["results"]:
                 self.assertIsNone(result.get("errors"), result)
-            self._assert_one_row(vc_name, master, member)
+            if order == "master_first":
+                self._assert_one_row(vc_name, master, member)
+            else:
+                self._assert_split_rows(vc_name, master, member)
 
     def test_the_cross_site_member_keeps_its_own_site(self):
-        """Convergence must not have moved anybody's site to make the row work."""
+        """Neither the split nor a convergence may move anybody's site to fit."""
         vc_name, master, member = "xs-keep", "xs-m-keep", "xs-n-keep"
         master_payload, member_payload = self._payloads(vc_name, master, member)
         self._diff_apply(member_payload)
         self._diff_apply(master_payload)
         self.assertEqual(Device.objects.get(name=master).site.name, "xs-site-a")
         self.assertEqual(Device.objects.get(name=member).site.name, "xs-site-b")
-        self._assert_one_row(vc_name, master, member)
-
-
+        self._assert_split_rows(vc_name, master, member)
 class AmbiguityRemedyTruthTests(TestCase):
     """
     Does each remedy the ambiguity refusal names actually settle it?
