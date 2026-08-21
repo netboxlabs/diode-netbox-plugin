@@ -3,7 +3,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from dcim.models import Interface
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
+from rest_framework import serializers
 from utilities.data import shallow_compare_dict
 from utilities.testing import APITestCase
 
@@ -18,6 +19,10 @@ from netbox_diode_plugin.api.field_policy import (
     prune_orphaned_nodes,
     referenced_uuids,
     submitted_driver_field_drops,
+)
+from netbox_diode_plugin.api.transformer import (
+    _fingerprint_dedupe,
+    raise_unsettled_conflicts,
 )
 from netbox_diode_plugin.plugin_config import get_diode_user
 
@@ -618,6 +623,97 @@ class DriverFieldPolicyPruneTests(SimpleTestCase):
         again = self._policy(entities)          # a second full pass changes nothing
         self.assertEqual(self._uuids(again), ["i1"])
         self.assertEqual(len(iface["_warnings"]["tagged_vlans"]), 1)
+
+
+class DedupeDriverFieldPolicyTests(TestCase):
+    """_fingerprint_dedupe normalizes every node it merges, so the result is N-independent."""
+
+    def _iface(self, uuid, **fields):
+        node = {
+            "_object_type": "dcim.interface",
+            "_uuid": uuid,
+            "_refs": {"d1"},
+            "_warnings": {},
+            "name": "Gi1/0/1",
+            "device": UnresolvedReference(object_type="dcim.device", uuid="d1"),
+        }
+        node.update(fields)
+        return node
+
+    def _fragments(self, count):
+        """One driver-only fragment plus ``count - 1`` fragments, each with its own VLAN."""
+        nodes = [self._iface("i0", mode="access")]
+        for k in range(1, count):
+            nodes.append(self._iface(
+                f"i{k}", _refs={"d1", f"v{k}"},
+                tagged_vlans=[UnresolvedReference(object_type="ipam.vlan", uuid=f"v{k}")],
+            ))
+        return nodes
+
+    def _assert_normalized(self, out, released):
+        raise_unsettled_conflicts(out)                    # nothing left to disagree about
+        merged = {entity["_uuid"]: entity for entity in out}
+        self.assertEqual(len(merged), 1, merged)          # all fragments are one node
+        node = next(iter(merged.values()))
+        self.assertEqual(node["mode"], "access")
+        self.assertNotIn("tagged_vlans", node)            # forbidden -> gone
+        self.assertNotIn("_deferred_conflicts", node)     # and never leaks downstream
+        self.assertEqual(node["_refs"], {"d1"})           # every VLAN edge released
+        self.assertTrue(released)                         # so the caller's sweep runs
+        self.assertEqual(len(node["_warnings"]["tagged_vlans"]), 1)
+
+    def test_every_merged_node_is_normalized_before_the_next_duplicate_arrives(self):
+        """Two to six duplicate fragments all end at the same normalized node."""
+        # Normalizing only AFTER dedupe stops working at three: the merge of the first
+        # two leaves the merged node holding both mode and tagged_vlans, and the third
+        # fragment's different tagged_vlans then conflicts inside _merge_nodes, so the
+        # whole entity is rejected and the post-dedupe pass never runs. Normalizing the
+        # merged node inside the loop is what makes the outcome independent of how many
+        # duplicate representations the producer happened to send.
+        for count in range(2, 7):
+            with self.subTest(fragments=count):
+                self._assert_normalized(*_fingerprint_dedupe(self._fragments(count)))
+
+    def test_the_outcome_does_not_depend_on_fragment_order(self):
+        """The driver-carrying fragment arriving last must reach the same node."""
+        for count in range(2, 7):
+            with self.subTest(fragments=count):
+                self._assert_normalized(*_fingerprint_dedupe(self._fragments(count)[::-1]))
+
+    def test_the_merged_node_is_already_normalized_when_dedupe_returns(self):
+        """Which is why the transformer needs no separate post-dedupe pass."""
+        out, _ = _fingerprint_dedupe(self._fragments(3))
+        self.assertNotIn("tagged_vlans", out[0])
+        # a further pass over the result finds nothing left to do
+        self.assertFalse(apply_submitted_driver_field_policy(out))
+
+    def test_an_allowed_field_still_conflicts_after_a_merge(self):
+        """The control: mode "tagged" permits tagged_vlans, so disagreement is still an error."""
+        nodes = self._fragments(3)
+        for node in nodes:
+            node["mode"] = "tagged"
+        out, _ = _fingerprint_dedupe(nodes)
+        with self.assertRaises(serializers.ValidationError) as raised:
+            raise_unsettled_conflicts(out)
+        self.assertIn("Conflicting values", str(raised.exception))
+
+    def test_a_conflict_on_a_field_no_driver_value_can_drop_is_immediate(self):
+        """A field outside the registry is a plain disagreement: raised where it happens."""
+        # Deferral is only for fields a driver value could delete. Everything else keeps
+        # develop's behaviour, including the error's position in the pipeline.
+        nodes = [self._iface("i0", description="from A"),
+                 self._iface("i1", description="from B")]
+        with self.assertRaises(serializers.ValidationError):
+            _fingerprint_dedupe(nodes)
+
+    def test_a_deferred_conflict_releases_the_rejected_copys_edges(self):
+        """The value a deferred conflict declined must not keep its VLAN node alive."""
+        # _merge_nodes unions _refs, so without this the rejected tagged_vlans list would
+        # still reach resolution as an edge and the VLAN would be created anyway -- the
+        # manufactured VLAN the prune sweep exists to prevent, arriving by another route.
+        out, _ = _fingerprint_dedupe(self._fragments(3)[::-1])
+        raise_unsettled_conflicts(out)
+        self.assertEqual(out[0]["_refs"], {"d1"})
 
 
 class InterfaceModeClearE2ETests(APITestCase):
@@ -1512,6 +1608,104 @@ class InterfaceModeClearE2ETests(APITestCase):
         self.assertEqual(dropped_from.tagged_vlans.count(), 0)
         kept_by = Interface.objects.get(name="Gi1/0/42", device__name=dev["name"])
         self.assertEqual([v.vid for v in kept_by.tagged_vlans.all()], [641])
+
+    # --- N-way: one interface arriving as N duplicate fragments ---------------
+
+    def _tagged_copy(self, name, vid, tag):
+        """A duplicate fragment of ``name`` carrying one forbidden tagged VLAN."""
+        return {"device": self._device(), "name": name, "type": "1000base-t",
+                "tagged_vlans": [{"vid": vid, "name": f"{tag}-v{vid}", "status": "active"}]}
+
+    def _fragmented_payload(self, name, tag, octet, vids, driver_last=False):
+        """
+        One interface reached several times in a single payload.
+
+        Each nested copy hangs off a different device IP assignment and carries a
+        DIFFERENT forbidden tagged VLAN, so every merge is a fresh contradiction for the
+        policy to settle. ``driver_last`` moves mode "access" off the root fragment and
+        onto one more nested copy, so the driver value arrives only after the duplicates
+        have already disagreed.
+        """
+        copies = [self._tagged_copy(name, vid, tag) for vid in vids]
+        if driver_last:
+            copies.append({"device": self._device(), "name": name,
+                           "type": "1000base-t", "mode": "access"})
+        assert 2 <= len(copies) <= 4
+        addresses = [f"10.9.{octet}.10/24", f"2001:db8:{octet}::11/64",
+                     f"10.9.{octet}.12/24", f"10.9.{octet}.13/24"]
+        ips = [{"address": address, "assigned_object_interface": copy}
+               for address, copy in zip(addresses, copies, strict=False)]
+        dev = dict(self._device())
+        dev["primary_ip4"], dev["primary_ip6"] = ips[0], ips[1]
+        if len(ips) > 2:
+            dev["oob_ip"] = ips[2]
+        if len(ips) > 3:
+            dev["primary_ip4"]["nat_inside"] = ips[3]
+        root = {"device": dev, "name": name, "type": "1000base-t"}
+        if not driver_last:
+            root["mode"] = "access"
+        return {"timestamp": 1, "object_type": "dcim.interface",
+                "entity": {"interface": root}}
+
+    def _assert_fragments_converge(self, name, tag, octet, vids, driver_last=False):
+        """Plan, apply and re-plan a fragmented payload; assert one drop and no VLANs."""
+        from ipam.models import VLAN
+        payload = self._fragmented_payload(name, tag, octet, vids, driver_last)
+        cs = self._plan(payload)
+        iface_changes = [c for c in cs["changes"] if c["object_type"] == "dcim.interface"]
+        self.assertTrue(iface_changes)
+        for change in iface_changes:
+            self.assertNotIn("tagged_vlans", change.get("data", {}))
+        messages = cs.get("warnings", {}).get("dcim.interface", {}).get("tagged_vlans")
+        self.assertEqual(len(messages or []), 1, messages)
+        vlan_changes = [(c["change_type"], c.get("data", {}).get("vid"))
+                        for c in cs["changes"]
+                        if c["object_type"] == "ipam.vlan" and c["change_type"] != "noop"]
+        self.assertEqual(vlan_changes, [], vlan_changes)
+        self._converge(payload, f"fragments of {name}")
+        iface = Interface.objects.get(name=name, device__name=self._device()["name"])
+        self.assertEqual(iface.mode, "access")
+        self.assertEqual(iface.tagged_vlans.count(), 0)
+        self.assertFalse(VLAN.objects.filter(vid__in=vids).exists())
+
+    def test_three_fragments_of_one_interface_still_let_the_driver_win(self):
+        """Root + two nested copies, each with a different forbidden VLAN: still one access iface."""
+        # This is the shape a single pre- and post-dedupe pass could not settle. The root
+        # fragment has no forbidden field and the nested copies have no submitted mode, so
+        # the pre-dedupe pass drops nothing; dedupe merged root + copy 1 into the
+        # contradiction and the SECOND copy's different tagged_vlans then conflicted inside
+        # _merge_nodes, rejecting the whole entity before the post-dedupe pass could run.
+        # One interface really can be reached three times: as the entity, as primary_ip4's
+        # assigned interface, and as primary_ip6's.
+        self._assert_fragments_converge("Gi2/0/3", "n3", 63, [701, 702])
+
+    def test_four_fragments_of_one_interface_still_let_the_driver_win(self):
+        """A fourth copy, via the device's oob_ip, changes nothing."""
+        self._assert_fragments_converge("Gi2/0/4", "n4", 64, [711, 712, 713])
+
+    def test_five_fragments_of_one_interface_still_let_the_driver_win(self):
+        """A fifth copy, via primary_ip4's nat_inside, changes nothing either."""
+        self._assert_fragments_converge("Gi2/0/5", "n5", 65, [721, 722, 723, 724])
+
+    def test_reordering_the_same_fragments_does_not_change_the_outcome(self):
+        """The forbidden values swapped between fragments plan and converge identically."""
+        # Representation independence is the property under test: the same logical
+        # fragments in a different order must not produce a different answer.
+        self._assert_fragments_converge("Gi2/0/6", "n6", 66, [733, 732, 731])
+
+    def test_the_driver_fragment_arriving_last_still_wins(self):
+        """The mode arrives only after two duplicates have already disagreed."""
+        # Measured on the incremental normalization alone: the two tagged-only copies
+        # merge first, _merge_nodes rejects the second one's different tagged_vlans, and
+        # the fragment carrying mode "access" is never reached -- a 400 that depends
+        # purely on which copy the payload happened to nest first. Holding a conflict on
+        # a droppable field until the graph is merged is what removes that dependency.
+        self._assert_fragments_converge("Gi2/0/7", "n7", 67, [741, 742], driver_last=True)
+
+    def test_the_driver_fragment_arriving_last_of_five_still_wins(self):
+        """Three disagreeing copies, then the mode: still one access interface."""
+        self._assert_fragments_converge("Gi2/0/8", "n8", 68, [751, 752, 753],
+                                        driver_last=True)
 
     def test_an_ipam_vlan_ingested_in_its_own_right_is_untouched(self):
         """A VLAN that is the entity's own primary object is never pruned."""

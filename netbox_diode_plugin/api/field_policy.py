@@ -72,15 +72,14 @@ _DRIVER_FIELD_RULES = {
 # The policy runs in two phases, on purpose:
 #
 # Phase 1 — apply_submitted_driver_field_policy(), run by the transformer over the
-# whole entity graph, twice: once BEFORE fingerprint dedupe and once on the merged
-# nodes after it (see transform_proto_json for why both are needed). A driver value
-# the producer SUBMITTED wins over a field it forbids that the producer also
-# submitted: the dependent field is removed from the payload, the reference edges it
-# created are released, any child node left unreachable is pruned, and the removal is
-# reported as a warning. This is what rescues a self-contradictory payload from a 400
-# that costs the whole entity. The pass is idempotent — once a field is gone there is
-# nothing left to drop and nothing new to warn about — so running it twice reports one
-# warning per field and prunes each node once.
+# whole entity graph before fingerprint dedupe, and again on each node dedupe merges
+# (see transform_proto_json). A driver value the producer SUBMITTED wins over a field
+# it forbids that the producer also submitted: the dependent field is removed from the
+# payload, the reference edges it created are released, any child node left unreachable
+# is pruned, and the removal is reported as a warning. This is what rescues a
+# self-contradictory payload from a 400 that costs the whole entity. The pass is
+# idempotent — once a field is gone there is nothing left to drop and nothing new to
+# warn about — so however often it runs, each field is reported once.
 #
 # Phase 2 — normalize_changeset(), run by the differ once an existing row has been
 # matched. It clears a STORED dependent value the effective driver value forbids, so
@@ -214,6 +213,43 @@ def referenced_uuids(entities) -> set[str]:
     return _referenced_uuids(entities)
 
 
+@lru_cache(maxsize=16)
+def droppable_dependent_fields(object_type: str) -> frozenset:
+    """
+    Fields of ``object_type`` that SOME driver value could remove.
+
+    A disagreement between two duplicate nodes over one of these is not necessarily a
+    disagreement about real data: a driver value the merge has not reached yet may
+    delete the field outright and settle it. Fields the gate protects are excluded —
+    they can never be dropped, so a conflict on one is final.
+    """
+    rules_by_driver = _DRIVER_FIELD_RULES.get(object_type)
+    if not rules_by_driver:
+        return frozenset()
+    names = set()
+    for value_map in rules_by_driver.values():
+        for dependents in value_map.values():
+            names.update(dependents)
+    return frozenset(names - match_participating_fields(object_type))
+
+
+def release_rejected_edges(node: dict, rejected_values: list) -> None:
+    """
+    Release the edges only a rejected duplicate value contributed.
+
+    ``_merge_nodes`` unions ``_refs``, so a value it declines to merge would otherwise
+    keep its child nodes reachable and have them created anyway — the same manufactured
+    VLAN ``_prune_orphaned_nodes`` exists to prevent. Only edges nothing else on the
+    node still needs are released.
+    """
+    released = set()
+    for value in rejected_values:
+        released |= _ref_uuids(value)
+    released -= _node_ref_uuids(node)
+    if released and "_refs" in node:
+        node["_refs"] = set(node["_refs"]) - released
+
+
 def _referenced_uuids(entities) -> set[str]:
     """Every uuid some node in ``entities`` references."""
     referenced = set()
@@ -339,8 +375,9 @@ def apply_submitted_driver_field_policy(entities: list[dict]) -> bool:
     Every dropped value is recorded in the node's ``_warnings``, which the differ
     surfaces on the change set, so producer data is never discarded silently.
 
-    Safe to run more than once over the same graph, which the transformer does: a field
-    that is already gone drops nothing, warns nothing and releases nothing.
+    Safe to run any number of times over the same graph, which the transformer does
+    (once up front, then on every node fingerprint dedupe merges): a field that is
+    already gone drops nothing, warns nothing and releases nothing.
     """
     refs_released = False
     for entity in entities:
@@ -356,7 +393,7 @@ def apply_submitted_driver_field_policy(entities: list[dict]) -> bool:
         entity_warnings = entity.setdefault("_warnings", {})
         for field, reason in dropped.items():
             messages = entity_warnings.setdefault(field, [])
-            # One drop of one field is one message. This pass runs twice and
+            # One drop of one field is one message. The pass runs repeatedly and
             # _merge_nodes unions the warnings of merged duplicates, so the same
             # sentence can arrive from more than one of those steps.
             if reason not in messages:
