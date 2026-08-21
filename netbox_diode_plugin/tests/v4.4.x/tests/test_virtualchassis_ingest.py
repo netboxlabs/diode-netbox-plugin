@@ -454,7 +454,13 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertIn("vce-shared", error)
         self.assertIn(f"id {vc_a.pk}", error)
         self.assertIn(f"id {vc_b.pk}", error)
-        self.assertIn("domain", error, "the error must name the discriminator that resolves it")
+        # The message names domain, but only as what it is for a payload that
+        # asserts none: half of a two-part fix (the producer sends it, the row
+        # carries it). These two rows already carry different domains, so
+        # labelling alone cannot resolve this -- see
+        # test_the_remedy_the_refusal_names_actually_resolves_it.
+        self.assertIn("domain", error)
+        self.assertIn("labelling these rows cannot settle it on its own", error)
 
         # nothing planned means nothing applied: no device, no membership change
         self.assertFalse(Device.objects.filter(name="vce-b3").exists())
@@ -792,9 +798,18 @@ class VirtualChassisIngestE2ETests(APITestCase):
             chassis, members at 1/2/3, empty re-diff.
           - the branch before this series: adoption took the oldest masterless
             same-named row, so the master was hijacked into the foreign row --
-            and because that row is not the one the members' own payloads
-            resolve to, members 2 and 3 were left with virtual_chassis NULL and
-            vc_position NULL. 207 forever, silently wrong in NetBox.
+            dragged in at position 3, with the row's cached member_count left at
+            1 against 3 real members. Because that row is not the one the
+            members' own payloads resolve to, their two device entities were
+            REJECTED (400 at apply-change-set, aggregated to 207 at
+            bulk-plan-apply: "Device with this Virtual chassis and VC position
+            already exists"), on that pass and on every later one; the two
+            switches then reach NetBox only through their interface entities,
+            which create them with virtual_chassis NULL and vc_position NULL.
+            The rejection is loud and repeats; the hijack next to it is silent.
+            Measured on the full 154-entity run, whose interface entities are
+            what create those two devices at all -- the four entities
+            transcribed below would leave them absent.
           - refusing the ambiguous adoption: 207 on every pass, forever. The
             standalone virtual_chassis entity carries name + master and nothing
             else, so no remedy naming a payload field is one this producer can

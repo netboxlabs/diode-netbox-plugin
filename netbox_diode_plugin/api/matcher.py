@@ -414,8 +414,8 @@ def asserted_vc_discriminators(data: dict) -> dict:
     submitted ``domain: ""`` is a value -- the producer saying this chassis has
     no domain -- and dropping it was the defect this function exists to remove:
     it let a payload that asserts domainlessness bind a domain-BEARING row and
-    then write "" over it, destroying the one field the ambiguity refusals tell
-    the operator to set. Absence (no key, null, or a non-string) asserts
+    then write "" over it, destroying the one field the ambiguity refusals point
+    at. Absence (no key, null, or a non-string) asserts
     nothing, because the ingest applies only the fields it was given.
     """
     return {
@@ -499,6 +499,57 @@ def annotate_vc_member_counts(queryset):
     refusal into a write or the other way round.
     """
     return queryset.annotate(_diode_member_count=models.Count("members"))
+
+
+def _vc_ambiguity_remedy(data: dict) -> str:
+    """
+    What the operator can actually DO about two rows one name matched.
+
+    Split by what the payload asserts, because the two halves have different
+    ways out and an earlier single sentence offered the wrong one to the half
+    that reaches it most often. It read "give one of those rows a domain the
+    others do not have" and prefixed the whole list with "which needs no change
+    to what the producer sends" -- both true only where a domain IS asserted.
+
+    Measured, on the unasserted half: narrow_vc_candidates iterates the
+    discriminators the PAYLOAD asserts, so with none asserted it narrows
+    nothing, and labelling a row leaves the candidate set exactly as it was.
+    Two same-named populated rows, one of them then given a domain, still raise
+    this same error for the same payload -- and so do two rows carrying
+    DIFFERENT domains from the start (VirtualChassisAmbiguityTests's own
+    fixture). Advice that cannot change the outcome is not a remedy; on that
+    half the domain now appears only as what it is, a change to what the
+    producer sends, paired with the row that must then carry it.
+
+    What is left is what works on both halves and is checked by a test:
+    merging the duplicates, or placing the referencing device in the chassis it
+    belongs to -- rule 1 above then answers from the database. Placing it
+    covers the case where the device does not exist yet, which is why it says
+    to create it there.
+    """
+    fields = " or ".join(_VC_DISCRIMINATORS)
+    placement = (
+        "put the referencing device into the chassis it belongs to in NetBox -- "
+        "creating it there if it does not exist yet -- because a reference from a "
+        "device that is already a member resolves to that member's own chassis"
+    )
+    asserted = describe_vc_assertions(data)
+    if asserted:
+        return (
+            f"It asserts {asserted}, which every one of those rows carries too, so it "
+            f"does not tell them apart. Settle it in NetBox, with no change to what the "
+            f"producer sends: change the {fields} of the rows this payload does NOT mean, "
+            f"so that only one still carries the asserted value; or merge the duplicates "
+            f"into one row; or {placement}."
+        )
+    return (
+        f"The payload asserts nothing that tells them apart, and labelling these rows "
+        f"cannot settle it on its own -- a {fields} narrows only the values a payload "
+        f"asserts, and this one asserts none. Settle it in NetBox, with no change to "
+        f"what the producer sends: merge the duplicates into one row; or {placement}. "
+        f"Alternatively the producer starts sending a {fields}, and the row this payload "
+        f"means is given that value -- both halves are needed, one alone changes nothing."
+    )
 
 
 def describe_vc_candidates(candidates) -> str:
@@ -1226,14 +1277,15 @@ class VirtualChassisNameMatcher:
            ``domain: ""`` is an assertion like any other and excludes the rows
            that DO carry a domain -- it used to be dropped, which let a payload
            declaring no domain bind a domain-bearing row and then write "" over
-           the very field the refusal below tells the operator to set.
+           the very field the refusal below points at.
         3. exactly one candidate has a master or members and every other is
            empty -> that one. This is the recovery path for duplicates an
            earlier bug created: an empty row is not a stack anyone owns, so
            preferring the real one is a repair, and it cannot relocate a
            device that is already placed (rule 1 outranks it).
-        4. otherwise -> AmbiguousObjectMatch, naming the rows and what would
-           resolve them.
+        4. otherwise -> AmbiguousObjectMatch, naming the rows and the remedies
+           that would actually resolve them (_vc_ambiguity_remedy: what those
+           are depends on whether the payload asserts a discriminator at all).
 
         Rule 3 is the one that could still place a device into a stack it was
         not in (a device in no chassis, or in a chassis with another name,
@@ -1286,24 +1338,13 @@ class VirtualChassisNameMatcher:
         if len(populated) == 1:
             return populated[0]
 
-        asserted = describe_vc_assertions(data)
         raise AmbiguousObjectMatch(
             f"Ambiguous dcim.virtualchassis reference {name!r}: "
             f"{len(candidates)} existing virtual chassis named {name!r} are equally "
             f"consistent with this payload -- {describe_vc_candidates(candidates)}. "
             f"VirtualChassis.name is not unique in NetBox, so choosing would move devices "
             f"into a chassis this payload never identified. "
-            + (
-                f"It asserts {asserted}, which every one of those rows carries too, so it "
-                f"does not tell them apart. "
-                if asserted else
-                "The payload asserts nothing that tells them apart. "
-            )
-            + f"Settle it in NetBox, which needs no change to what the producer sends: "
-            f"give one of those rows a {' or '.join(_VC_DISCRIMINATORS)} the others do "
-            f"not have, or merge the duplicates into one row. Putting this device into "
-            f"the right one in NetBox also settles it, because a reference from a device "
-            f"that is already a member resolves to that member's own chassis.",
+            + _vc_ambiguity_remedy(data),
             "dcim.virtualchassis", "name",
         )
 

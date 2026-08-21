@@ -366,10 +366,14 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
     real 154-entity orb-agent snmp-discovery capture replayed against a
     masterless, populated, same-named chassis:
 
-      - refusing: 207 on every pass, forever. Nothing in the capture changes,
-        so nothing converges. orb-agent emits no ``domain`` at all (its
-        device_name builder sends name + master), so the remedy a refusal could
-        name is not one this producer can take.
+      - refusing: the standalone chassis entity and both member entities are
+        rejected on every pass, forever -- 400 each at apply-change-set, 207
+        aggregated at bulk-plan-apply. Nothing in the capture changes, so
+        nothing converges: the stack never gets a chassis, and the other two
+        switches reach NetBox only through their interface entities, which
+        create them with virtual_chassis NULL. orb-agent emits no ``domain``
+        at all (its device_name builder sends name + master), so the remedy a
+        refusal could name is not one this producer can take.
       - declining and creating: 200, the stack gets its OWN chassis with its
         three members at 1/2/3, the foreign row is byte-identical afterwards,
         and the re-diff is empty. That is also exactly what develop (08af3fb,
@@ -384,7 +388,11 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
     that asymmetry was the tell that the refusal was the wrong answer.
 
     What is bounded is ADOPTION, not the request. A row is adopted only where
-    identity is strong enough that no device is moved on the strength of a name:
+    identity is strong enough that no device is moved OUT of a chassis it
+    already belongs to on the strength of a name. Read that as the guarantee it
+    is and not a stronger one: rule 4 below can still let a chassis-LESS device
+    JOIN a same-named row another producer owns, and that residual is stated
+    under it rather than counted as identity:
 
     1. the requested master is ALREADY a member of exactly one candidate. The
        database has already agreed with the payload; nothing moves. This is the

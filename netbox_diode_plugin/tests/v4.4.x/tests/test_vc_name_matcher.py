@@ -204,7 +204,19 @@ class VirtualChassisAmbiguityTests(TestCase):
         the reference" is advice for a producer that has a domain to supply --
         orb-agent does not emit one at all. Every remedy here is therefore a
         NetBox-side action that leaves the payload untouched.
+
+        And it must not offer a NetBox-side action that does not work either.
+        These two rows already carry DIFFERENT domains, and the payload still
+        cannot be resolved, because narrowing looks at the values the PAYLOAD
+        asserts: labelling rows changes nothing while it asserts none. The
+        message used to end "give one of those rows a domain the others do not
+        have", under the heading "needs no change to what the producer sends" --
+        advice already satisfied by this very fixture. It now says so, and the
+        domain appears only as the pair it really is (producer sends it, row
+        carries it). test_the_remedy_the_refusal_names_actually_resolves_it
+        walks the remedies it does name.
         """
+        self.assertNotEqual(self.vc_a.domain, self.vc_b.domain)
         with self.assertRaises(AmbiguousObjectMatch) as caught:
             find_existing_object({"name": "vcx-shared"}, "dcim.virtualchassis")
         message = str(caught.exception)
@@ -214,6 +226,48 @@ class VirtualChassisAmbiguityTests(TestCase):
         self.assertIn("Settle it in NetBox", message)
         self.assertIn("merge the duplicates", message)
         self.assertNotIn("Supply domain", message)
+        self.assertIn("labelling these rows cannot settle it on its own", message)
+        self.assertNotIn("the others do not have", message)
+
+    def test_the_remedy_the_refusal_names_actually_resolves_it(self):
+        """
+        Every remedy in the message, taken literally, and the outcome measured.
+
+        A structured error is only worth its space if following it changes the
+        answer. Three states, one payload ({"name": ...} and nothing else):
+
+          - label one row: STILL ambiguous. This is the advice the message used
+            to lead with, and it is inert here -- narrow_vc_candidates iterates
+            the discriminators the payload asserts, and this payload asserts
+            none, so no labelling of any row narrows anything.
+          - place the referencing device in one of them: resolves, to that row,
+            through rule 1 (the member hint).
+          - merge the duplicates (here: delete the row nobody meant, the
+            operator's other lever): resolves, because one candidate is left.
+        """
+        VirtualChassis.objects.filter(pk=self.vc_a.pk).update(domain="vcx-relabelled")
+        with self.assertRaises(AmbiguousObjectMatch):
+            find_existing_object({"name": "vcx-shared"}, "dcim.virtualchassis")
+
+        Device.objects.filter(pk=self.loose.pk).update(
+            virtual_chassis=self.vc_b, vc_position=9)
+        self.assertEqual(
+            find_existing_object(
+                {"name": "vcx-shared", VC_MEMBER_HINT: [self.loose.pk]},
+                "dcim.virtualchassis"),
+            self.vc_b,
+        )
+
+        Device.objects.filter(pk=self.loose.pk).update(
+            virtual_chassis=None, vc_position=None)
+        Device.objects.filter(pk=self.a1.pk).update(
+            virtual_chassis=None, vc_position=None)
+        VirtualChassis.objects.filter(pk=self.vc_a.pk).update(master=None)
+        VirtualChassis.objects.filter(pk=self.vc_a.pk).delete()
+        self.assertEqual(
+            find_existing_object({"name": "vcx-shared"}, "dcim.virtualchassis"),
+            self.vc_b,
+        )
 
     def test_the_refusal_carries_the_per_entity_error_shape(self):
         """
