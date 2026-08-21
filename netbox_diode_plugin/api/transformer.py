@@ -665,14 +665,15 @@ def _merge_nodes(a: dict, b: dict) -> dict:
     _union_warnings(merged, a, b)
 
     deferred = dict(a.get('_deferred_conflicts') or {})
-    droppable = droppable_dependent_fields(a.get('_object_type') or '')
     rejected = []
     for k, v in b.items():
         if k.startswith("_"):
             continue
         if k in merged and merged[k] != v:
             error = _conflict_error(a, k, merged[k], v)
-            if k not in droppable:
+            # Consulted only on an actual conflict: the gate reads the content-type
+            # table, and a conflict-free duplicate merge must not depend on it.
+            if k not in droppable_dependent_fields(a.get('_object_type') or ''):
                 raise serializers.ValidationError(error)
             # A driver value on a duplicate not reached yet can delete this field and
             # settle the disagreement, so raising now would make the outcome depend on
