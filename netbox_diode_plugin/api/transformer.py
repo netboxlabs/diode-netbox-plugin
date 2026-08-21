@@ -141,32 +141,20 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     entities = _transform_proto_json_1(proto_json, object_type, supported_models)
 
     entities = _topo_sort(entities)
-    # Phase 1 of the driver field policy, before anything else reads the fields it may
-    # remove -- and in particular before _resolve_existing_references, because a dropped
-    # field can itself be a match criterion and dropping it after the lookup strands the
-    # entity as an unmatchable CREATE that re-plans on every ingest.
-    #
-    # This pre-dedupe pass handles nodes that carry the contradiction on their own: two
-    # duplicates that each name the same driver value with DIFFERENT forbidden values
-    # would otherwise reach _merge_nodes and be rejected outright ("Conflicting values
-    # for 'tagged_vlans'"), losing the whole entity. Duplicates that SPLIT the
-    # contradiction -- one node with the driver value, another with the forbidden field --
-    # only become contradictory as they merge, so _fingerprint_dedupe normalizes each
-    # merged node itself and reports back whether it released any edge.
-    #
-    # `referenced_before` is the reference graph before any drop; the prune sweep needs
-    # it to tell a nested child from a root.
+    # Phase 1 of the driver field policy. It runs before _resolve_existing_references
+    # because a dropped field can itself be a match criterion, and dropping it after the
+    # lookup strands the entity as a CREATE that re-plans on every ingest. This pass
+    # settles nodes that carry the contradiction on their own; duplicates that SPLIT it
+    # only become contradictory as they merge, which _fingerprint_dedupe handles.
+    # `referenced_before` is the reference graph before any drop, which the prune sweep
+    # needs to tell a nested child from a root.
     referenced_before = referenced_uuids(entities)
     released = apply_submitted_driver_field_policy(entities)
     deduplicated, merge_released = _fingerprint_dedupe(entities)
-    # Every merge is done and every merged node is normalized, so a conflict dedupe held
-    # back is a disagreement no driver value settled.
+    # Everything is merged and normalized, so a conflict dedupe held back is real.
     raise_unsettled_conflicts(deduplicated)
     deduplicated = _topo_sort(deduplicated)
-    # ONE sweep, here and never inside a pass: pruning per pass removes a duplicate child
-    # before _fingerprint_dedupe can merge it, and the survivor then loses whatever the
-    # pruned copy alone carried -- a required `name` (permanent 400) or a description
-    # (silent loss). See prune_orphaned_nodes.
+    # ONE sweep, never inside a pass: see prune_orphaned_nodes.
     if released or merge_released:
         deduplicated = prune_orphaned_nodes(deduplicated, referenced_before)
     _set_auto_slugs(deduplicated, supported_models)
@@ -613,8 +601,8 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
 
     *list must be in topo order by reference already*
 
-    Returns the deduplicated entities and whether normalizing a merged node released
-    any reference edge, i.e. whether the caller's prune sweep has anything to do.
+    Also returns whether normalizing a merged node released any reference edge, i.e.
+    whether the caller's prune sweep has anything to do.
     """
     by_uuid = {}
     by_fp = {}
@@ -647,13 +635,10 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
             new_refs[entity['_uuid']] = existing['_uuid']
             merged = _merge_nodes(existing, entity)
             _update_unresolved_refs(merged, new_refs)
-            # Normalize the merged node NOW, before the next duplicate is compared
-            # against it. A merge is where duplicates that each carry only half of a
-            # contradiction become contradictory, and leaving the merged node
-            # contradictory makes the outcome depend on how many duplicates follow:
-            # the third one carrying a different forbidden value would conflict with
-            # the second and reject the whole entity. It drops but never prunes --
-            # pruning waits for the caller's single post-dedupe sweep.
+            # Normalize NOW, before the next duplicate is compared against this node. A
+            # merge is where duplicates each carrying half a contradiction become
+            # contradictory, and leaving it there makes the outcome depend on how many
+            # duplicates follow. Drops only: the prune is the caller's one sweep.
             refs_released = apply_submitted_driver_field_policy([merged]) or refs_released
             for fp in fps:
                 by_fp[fp] = existing_uuid
@@ -684,10 +669,9 @@ def _merge_nodes(a: dict, b: dict) -> dict:
             error = _conflict_error(a, k, merged[k], v)
             if k not in droppable:
                 raise serializers.ValidationError(error)
-            # A driver value on a duplicate this merge has not reached yet can delete
-            # this field outright, which settles the disagreement. Raising now would
-            # make the outcome depend on the order the duplicates happen to arrive in,
-            # so the error waits until the graph is merged and normalized.
+            # A driver value on a duplicate not reached yet can delete this field and
+            # settle the disagreement, so raising now would make the outcome depend on
+            # the order the duplicates arrive in. See raise_unsettled_conflicts.
             deferred.setdefault(k, error)
             rejected.append(v)
             continue
@@ -701,10 +685,8 @@ def _merge_nodes(a: dict, b: dict) -> dict:
 
 def _union_warnings(merged: dict, a: dict, b: dict) -> None:
     """Union both nodes' _warnings per field instead of preferring a's."""
-    # Underscore keys are otherwise "prefer a's value", which would silently discard the
-    # warnings recorded on b -- including a driver-field drop the policy made before
-    # dedupe. A drop the operator never hears about is the thing the warning exists to
-    # prevent, so warnings are unioned per field like _refs.
+    # Underscore keys are otherwise "prefer a's value", which would discard a drop b
+    # recorded before dedupe -- and a drop nobody hears about defeats the warning.
     merged_warnings = copy.deepcopy(a.get('_warnings') or {})
     for field, msgs in (b.get('_warnings') or {}).items():
         for msg in msgs:
@@ -731,9 +713,9 @@ def raise_unsettled_conflicts(entities: list[dict]) -> None:
     """
     Raise the duplicate-merge conflicts no driver value settled.
 
-    A conflict on a field the policy could drop is held during dedupe; here the graph is
-    fully merged and normalized, so a field that is still present was never dropped and
-    the disagreement was real after all.
+    A conflict on a droppable field is held during dedupe; by here the graph is merged
+    and normalized, so a field still present was never dropped and the disagreement was
+    real after all.
     """
     for entity in entities:
         deferred = entity.pop('_deferred_conflicts', None)

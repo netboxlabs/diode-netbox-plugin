@@ -667,7 +667,7 @@ class DedupeDriverFieldPolicyTests(TestCase):
         # Normalizing only AFTER dedupe stops working at three: the merge of the first
         # two leaves the merged node holding both mode and tagged_vlans, and the third
         # fragment's different tagged_vlans then conflicts inside _merge_nodes, so the
-        # whole entity is rejected and the post-dedupe pass never runs. Normalizing the
+        # whole entity is rejected before any later pass runs. Normalizing the
         # merged node inside the loop is what makes the outcome independent of how many
         # duplicate representations the producer happened to send.
         for count in range(2, 7):
@@ -1465,7 +1465,7 @@ class InterfaceModeClearE2ETests(APITestCase):
         self.assertTrue(iface_changes)
         for change in iface_changes:
             self.assertNotIn("tagged_vlans", change.get("data", {}))
-        # reported exactly once, with both passes active
+        # reported exactly once, though two steps could each report it
         messages = cs.get("warnings", {}).get("dcim.interface", {}).get("tagged_vlans")
         self.assertEqual(len(messages or []), 1, messages)
         self._apply(cs)
@@ -1476,13 +1476,13 @@ class InterfaceModeClearE2ETests(APITestCase):
             self.assertEqual(self._plan(payload).get("changes", []), [],
                              f"re-planned on quiet round {quiet}")
 
-    def test_a_drop_reported_by_both_passes_is_one_warning(self):
-        """Pass 1 drops from one node, pass 2 from the merged node: still one message."""
-        # The mixed shape: the outer node carries BOTH mode and a forbidden tagged_vlans
-        # (pass 1 drops it and records the warning), the nested node carries a DIFFERENT
-        # tagged_vlans and no mode (pass 1 cannot see it; it survives the merge and pass 2
-        # drops it). Without dedupe on the message, change_set.warnings carried the same
-        # sentence twice for one field.
+    def test_a_drop_reported_by_two_steps_is_one_warning(self):
+        """The pre-dedupe pass drops from one node, the merge from another: one message."""
+        # The mixed shape: the outer node carries BOTH mode and a forbidden tagged_vlans,
+        # so the pre-dedupe pass drops it and records the warning; the nested node carries
+        # a DIFFERENT tagged_vlans and no mode, so it survives untouched and is dropped
+        # when it merges. Without dedupe on the message, change_set.warnings carried the
+        # same sentence twice for one field.
         dev = self._device()
         dev_with_ip = dict(dev, primary_ip4={
             "address": "10.9.22.22/24",
@@ -1670,11 +1670,11 @@ class InterfaceModeClearE2ETests(APITestCase):
 
     def test_three_fragments_of_one_interface_still_let_the_driver_win(self):
         """Root + two nested copies, each with a different forbidden VLAN: still one access iface."""
-        # This is the shape a single pre- and post-dedupe pass could not settle. The root
+        # This is the shape a pass on each side of dedupe could not settle. The root
         # fragment has no forbidden field and the nested copies have no submitted mode, so
         # the pre-dedupe pass drops nothing; dedupe merged root + copy 1 into the
         # contradiction and the SECOND copy's different tagged_vlans then conflicted inside
-        # _merge_nodes, rejecting the whole entity before the post-dedupe pass could run.
+        # _merge_nodes, rejecting the whole entity before the mode was ever considered.
         # One interface really can be reached three times: as the entity, as primary_ip4's
         # assigned interface, and as primary_ip6's.
         self._assert_fragments_converge("Gi2/0/3", "n3", 63, [701, 702])
