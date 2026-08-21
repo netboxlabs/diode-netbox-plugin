@@ -1,29 +1,39 @@
 """Unit tests for masterless VirtualChassis name matching."""
 from types import SimpleNamespace
+from unittest import mock
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
 from netbox_diode_plugin.api.applier import _is_auto_created_component, apply_changeset
-from netbox_diode_plugin.api.common import Change, ChangeSet, ChangeType
+from netbox_diode_plugin.api.common import (
+    VC_MEMBER_HINT,
+    Change,
+    ChangeSet,
+    ChangeSetException,
+    ChangeType,
+    UnresolvedReference,
+)
 from netbox_diode_plugin.api.matcher import (
     _REQUIRES_PRE_SAVE_MATCH,
+    AmbiguousObjectMatch,
     find_existing_object,
     fingerprints,
     get_model_matchers,
     pre_save_match_binds_only,
     requires_pre_save_match,
+    vc_hint_pks,
 )
 
 
-def _apply_vc_create(data):
+def _apply_vc_create(data, extra_changes=()):
     """Apply a single dcim.virtualchassis CREATE, exactly as a changeset would."""
     cs = ChangeSet(changes=[Change(
         change_type=ChangeType.CREATE,
         object_type="dcim.virtualchassis",
         ref_id="vc1",
         data=data,
-    )])
+    ), *extra_changes])
     return apply_changeset(cs, SimpleNamespace(user=None))
 
 
@@ -57,8 +67,26 @@ class VirtualChassisNameMatcherTests(TestCase):
         """A masterless payload binds by name even when the DB row HAS a master."""
         found = find_existing_object({"name": "vcm-other"}, "dcim.virtualchassis")
         self.assertEqual(found, self.vc_other)
+
+    def test_a_populated_row_beats_an_empty_same_named_duplicate(self):
+        """
+        Two rows, one real: resolve the real one -- NOT because it is older.
+
+        THE OLD EXPECTATION HERE WAS UNSAFE: this assertion used to read
+        "oldest pk wins over the newer duplicate", which is the policy, not the
+        reason. The seed happens to make the mastered row the older one, so the
+        two rules were indistinguishable in this fixture and the assertion
+        passed under a rule that also picks an arbitrary row when BOTH
+        candidates are real stacks (see
+        VirtualChassisAmbiguityTests.test_two_populated_rows_refuse_to_resolve).
+
+        What holds now is a fact about the rows: vc_dup has no master and no
+        members, so it is not a stack anyone owns, and exactly one candidate is.
+        """
         found = find_existing_object({"name": "vcm-stack"}, "dcim.virtualchassis")
-        self.assertEqual(found, self.vc_old)  # oldest pk wins over the newer duplicate
+        self.assertEqual(found, self.vc_old)
+        self.assertIsNone(self.vc_dup.master_id)
+        self.assertEqual(self.vc_dup.members.count(), 0)
 
     def test_explicit_null_master_counts_as_masterless(self):
         """master: None gates the same as an absent master key."""
@@ -95,6 +123,331 @@ class VirtualChassisNameMatcherTests(TestCase):
         )
         shared = set(fp_no_master) & set(fp_master)
         self.assertTrue(shared, "expected a shared name-keyed fingerprint")
+
+
+class VirtualChassisHintPkTests(SimpleTestCase):
+    """
+    The member-hint type filter, pinned without a database.
+
+    Through find_existing_object this guard is invisible: a hint of [True] means
+    pk 1, and whether pk 1 happens to be a member of one of the candidates
+    depends on a sequence the test cannot control -- so the behavioural test
+    passes either way and the guard is unpinned. Asserting the extraction
+    directly is the only way to fail when the bool exclusion is removed.
+    """
+
+    def test_only_real_pks_survive(self):
+        """Every non-pk form the wire or the transformer can put in the hint."""
+        self.assertEqual(vc_hint_pks([3, 7]), [3, 7])
+        self.assertEqual(vc_hint_pks([True, False]), [], "bool read as pk 1/0")
+        self.assertEqual(vc_hint_pks([3, True, None, "4", [5], 7.5]), [3])
+        self.assertEqual(vc_hint_pks(UnresolvedReference("dcim.device", "u")), [])
+        self.assertEqual(
+            vc_hint_pks([UnresolvedReference("dcim.device", "u"), 9]), [9],
+            "a device this batch is still creating carries no evidence",
+        )
+
+    def test_absent_and_scalar_forms(self):
+        """None means no hint; a bare pk is accepted as a one-item hint."""
+        self.assertEqual(vc_hint_pks(None), [])
+        self.assertEqual(vc_hint_pks([]), [])
+        self.assertEqual(vc_hint_pks(5), [5])
+
+
+class VirtualChassisAmbiguityTests(TestCase):
+    """
+    What a name that matches SEVERAL real chassis resolves to: nothing.
+
+    find_existing_object's framework default is order_by('pk').first(), and for
+    a name-keyed match on a model with no uniqueness on name that is a policy
+    rather than a lookup. The rows here are two legitimately distinct stacks
+    that happen to share a name -- the state the default silently picks a winner
+    from, and (because the reference being resolved is usually a member device's
+    virtual_chassis) plans a device move out of.
+
+    These are unit tests on find_existing_object because that is the single door
+    both the plan path and the direct-apply path go through; the end-to-end
+    consequences are in test_virtualchassis_ingest.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        """Two same-named, differently-domained, both-populated chassis."""
+        site = Site.objects.create(name="vcx-site", slug="vcx-site")
+        mfr = Manufacturer.objects.create(name="vcx-mfr", slug="vcx-mfr")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="vcx-dt", slug="vcx-dt")
+        role = DeviceRole.objects.create(name="vcx-role", slug="vcx-role")
+        cls.kw = {"site": site, "device_type": dt, "role": role}
+
+        cls.a1 = Device.objects.create(name="vcx-a1", **cls.kw)
+        cls.vc_a = VirtualChassis.objects.create(name="vcx-shared", domain="building-a")
+        Device.objects.filter(pk=cls.a1.pk).update(virtual_chassis=cls.vc_a, vc_position=1)
+        cls.vc_a.refresh_from_db()
+        cls.vc_a.master = cls.a1
+        cls.vc_a.save()
+
+        cls.b1 = Device.objects.create(name="vcx-b1", **cls.kw)
+        cls.vc_b = VirtualChassis.objects.create(name="vcx-shared", domain="building-b")
+        Device.objects.filter(pk=cls.b1.pk).update(virtual_chassis=cls.vc_b, vc_position=1)
+        cls.vc_b.refresh_from_db()
+        cls.vc_b.master = cls.b1
+        cls.vc_b.save()
+
+        cls.loose = Device.objects.create(name="vcx-loose", **cls.kw)
+
+    def test_two_populated_rows_refuse_to_resolve(self):
+        """
+        The core refusal, with an error that names both rows and the way out.
+
+        The way out has to be one somebody can take. This refusal is reached by
+        a payload that carries a name and nothing else, so "supply a domain on
+        the reference" is advice for a producer that has a domain to supply --
+        orb-agent does not emit one at all. Every remedy here is therefore a
+        NetBox-side action that leaves the payload untouched.
+        """
+        with self.assertRaises(AmbiguousObjectMatch) as caught:
+            find_existing_object({"name": "vcx-shared"}, "dcim.virtualchassis")
+        message = str(caught.exception)
+        self.assertIn("vcx-shared", message)
+        self.assertIn(f"id {self.vc_a.pk}", message)
+        self.assertIn(f"id {self.vc_b.pk}", message)
+        self.assertIn("Settle it in NetBox", message)
+        self.assertIn("merge the duplicates", message)
+        self.assertNotIn("Supply domain", message)
+
+    def test_the_refusal_carries_the_per_entity_error_shape(self):
+        """
+        It has to be reportable, not just raised.
+
+        Both API boundaries render a ChangeSetException's ``errors`` dict
+        directly, so the shape is the contract: {object_type: {field: [msg]}}.
+        A bare exception here would surface as a 500 at one door or the other.
+        """
+        with self.assertRaises(ChangeSetException) as caught:
+            find_existing_object({"name": "vcx-shared"}, "dcim.virtualchassis")
+        errors = caught.exception.errors
+        self.assertIn("dcim.virtualchassis", errors)
+        self.assertIn("name", errors["dcim.virtualchassis"])
+        self.assertEqual(len(errors["dcim.virtualchassis"]["name"]), 1)
+
+    def test_the_refusal_is_not_a_malformed_reference(self):
+        """
+        It must not be a ValueError or TypeError, and this is not pedantry.
+
+        Three call sites swallow those two to turn a payload the ORM cannot
+        query into "no match" (applier._find_existing_object_or_none,
+        _try_find_and_update_existing_instance, and apply_changeset's own
+        handler chain). An ambiguity that inherited from either would be
+        swallowed the same way -- and "no match" for a name that matched twice
+        means INSERT A THIRD ROW.
+        """
+        self.assertFalse(issubclass(AmbiguousObjectMatch, ValueError))
+        self.assertFalse(issubclass(AmbiguousObjectMatch, TypeError))
+        self.assertTrue(issubclass(AmbiguousObjectMatch, ChangeSetException))
+
+    def test_a_discriminator_resolves_one_row(self):
+        """A domain is a claim about which row, so it resolves -- to the named one."""
+        self.assertEqual(
+            find_existing_object(
+                {"name": "vcx-shared", "domain": "building-b"}, "dcim.virtualchassis"),
+            self.vc_b,
+        )
+        self.assertEqual(
+            find_existing_object(
+                {"name": "vcx-shared", "domain": "building-a"}, "dcim.virtualchassis"),
+            self.vc_a,
+        )
+
+    def test_a_discriminator_no_row_carries_is_a_create_not_an_ambiguity(self):
+        """
+        A domain no candidate has means "not one of these rows".
+
+        Returning None here is the difference between creating the chassis the
+        payload describes and binding one whose own discriminator contradicts
+        it. Raising instead would make a legitimate third stack unrepresentable.
+        """
+        self.assertIsNone(
+            find_existing_object(
+                {"name": "vcx-shared", "domain": "building-c"}, "dcim.virtualchassis")
+        )
+
+    def test_an_empty_domain_excludes_every_row_that_carries_one(self):
+        """
+        An explicitly submitted empty domain is a value, not an absence.
+
+        Both rows here carry a domain, so a payload declaring the chassis has
+        none describes NEITHER of them -- which is the create case, not the
+        ambiguous one. The "" used to be dropped as if the key were missing, so
+        this call refused as ambiguous and, wherever it did resolve, the ""
+        was then written over the matched row's domain: the discriminator the
+        refusal message asks the operator to set, destroyed by the payload that
+        should have been excluded by it.
+        """
+        self.assertIsNone(
+            find_existing_object(
+                {"name": "vcx-shared", "domain": ""}, "dcim.virtualchassis")
+        )
+
+    def test_an_empty_domain_narrows_to_the_row_that_carries_none(self):
+        """
+        Exclusion is all "" does, and it is enough to resolve a third row.
+
+        It excludes building-a and building-b and leaves one candidate, which
+        resolves like any other single candidate. It never IDENTIFIES a row --
+        every chassis that never set a domain carries "" -- which is why
+        applier._choose_adoption_candidate will not let it authorise adopting a
+        populated row the way a real domain does.
+        """
+        plain = VirtualChassis.objects.create(name="vcx-shared")
+        member = Device.objects.create(name="vcx-c1", **self.kw)
+        Device.objects.filter(pk=member.pk).update(virtual_chassis=plain, vc_position=1)
+        self.assertEqual(
+            find_existing_object(
+                {"name": "vcx-shared", "domain": ""}, "dcim.virtualchassis"),
+            plain,
+        )
+
+    def test_a_refusal_does_not_ask_for_what_the_payload_already_supplied(self):
+        """
+        The remedy has to be actionable, and this one used to be a loop.
+
+        Two rows share the name AND the domain, so the payload's discriminator
+        is asserted, matched, and still does not tell them apart. Every one of
+        these refusals used to end "Supply domain ... to identify it" -- telling
+        the operator to do the thing they just did, which is how a structured
+        error stops being a way out and becomes noise.
+        """
+        twin_a = VirtualChassis.objects.create(name="vcx-twin", domain="vcx-both")
+        twin_b = VirtualChassis.objects.create(name="vcx-twin", domain="vcx-both")
+        for row, name in ((twin_a, "vcx-t1"), (twin_b, "vcx-t2")):
+            member = Device.objects.create(name=name, **self.kw)
+            Device.objects.filter(pk=member.pk).update(virtual_chassis=row, vc_position=1)
+
+        with self.assertRaises(AmbiguousObjectMatch) as caught:
+            find_existing_object(
+                {"name": "vcx-twin", "domain": "vcx-both"}, "dcim.virtualchassis")
+        message = str(caught.exception)
+        self.assertIn(f"id {twin_a.pk}", message)
+        self.assertIn(f"id {twin_b.pk}", message)
+        self.assertIn("asserts domain 'vcx-both'", message)
+        self.assertNotIn("Supply domain", message)
+        self.assertIn("Settle it in NetBox", message)
+
+    def test_the_member_a_device_is_already_in_wins(self):
+        """
+        The rule that guarantees no relocation, and it needs the member hint.
+
+        The hint is what the transformer pushes onto a nested chassis node from
+        the device that referenced it (common.VC_MEMBER_HINT); the matcher
+        cannot see the device any other way. With it, a device already in the
+        NEWER duplicate resolves to that one -- against creation order, which is
+        the point.
+        """
+        Device.objects.filter(pk=self.loose.pk).update(
+            virtual_chassis=self.vc_b, vc_position=2)
+        found = find_existing_object(
+            {"name": "vcx-shared", VC_MEMBER_HINT: [self.loose.pk]},
+            "dcim.virtualchassis",
+        )
+        self.assertEqual(found, self.vc_b)
+
+    def test_a_hint_for_a_chassis_less_device_carries_no_evidence(self):
+        """A device in no chassis cannot break the tie, so the refusal stands."""
+        with self.assertRaises(AmbiguousObjectMatch):
+            find_existing_object(
+                {"name": "vcx-shared", VC_MEMBER_HINT: [self.loose.pk]},
+                "dcim.virtualchassis",
+            )
+
+    def test_hints_that_disagree_refuse_rather_than_pick_a_side(self):
+        """
+        Two referencing members already in DIFFERENT same-named chassis.
+
+        Whichever row were chosen, the other member would be moved out of the
+        stack it is in, so there is no answer to give. (Several members of one
+        chassis in one batch dedupe into a single chassis node whose hint is the
+        union -- transformer._merge_nodes -- which is how both pks arrive here.)
+        """
+        with self.assertRaises(AmbiguousObjectMatch) as caught:
+            find_existing_object(
+                {"name": "vcx-shared", VC_MEMBER_HINT: [self.a1.pk, self.b1.pk]},
+                "dcim.virtualchassis",
+            )
+        self.assertIn("DIFFERENT", str(caught.exception))
+
+    def test_a_bogus_hint_value_is_a_refusal_not_a_valueerror(self):
+        """
+        A malformed hint must not reach the ORM as a pk.
+
+        Every form here carries no evidence, so the refusal is the right answer.
+        What this pins is that it IS a refusal and not a ValueError/TypeError
+        out of query construction -- the applier turns those into "no match",
+        which for a name that matched twice means inserting a third row.
+
+        It does NOT pin the bool exclusion: [True] would mean pk 1, and whether
+        pk 1 is a member of one of these candidates depends on a sequence no
+        test controls. VirtualChassisHintPkTests pins that directly.
+        """
+        for hint in ([True], [None], ["abc"], [[1]], [], None, self.loose.pk):
+            with self.subTest(hint=hint):
+                with self.assertRaises(AmbiguousObjectMatch):
+                    find_existing_object(
+                        {"name": "vcx-shared", VC_MEMBER_HINT: hint},
+                        "dcim.virtualchassis",
+                    )
+
+    def test_a_row_resolved_before_the_duplicate_appeared_is_not_served_from_cache(self):
+        """
+        The find-object cache must not be able to answer this question at all.
+
+        find_obj_cache_ttl defaults to 30s and the key is built from SCALAR
+        fields only, so a name-keyed VirtualChassis lookup would cache one row
+        under a key that cannot see the member hint OR the appearance of a
+        second same-named row. Two consequences, both silent: a payload naming
+        the chassis on behalf of a DIFFERENT member device would be served the
+        first device's answer, and an ambiguity that must be reported would be
+        answered with whatever row was cached before the duplicate existed.
+        A cache hit also skips resolve() entirely, so the whole policy would be
+        bypassed rather than merely stale.
+
+        _find_obj_cache_key therefore declines to key dcim.virtualchassis at
+        all, which disables both the django cache and the request-scoped one.
+        """
+        with mock.patch(
+            "netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl", return_value=30
+        ):
+            self.assertEqual(
+                find_existing_object(
+                    {"name": "vcx-cached", "domain": "building-a"}, "dcim.virtualchassis"),
+                None,
+            )
+            first = VirtualChassis.objects.create(name="vcx-cached", domain="building-a")
+            Device.objects.filter(pk=self.loose.pk).update(
+                virtual_chassis=first, vc_position=1)
+            self.assertEqual(
+                find_existing_object({"name": "vcx-cached"}, "dcim.virtualchassis"), first)
+
+            second = VirtualChassis.objects.create(name="vcx-cached", domain="building-b")
+            other = Device.objects.create(name="vcx-cached-b1", **self.kw)
+            Device.objects.filter(pk=other.pk).update(
+                virtual_chassis=second, vc_position=1)
+
+            with self.assertRaises(AmbiguousObjectMatch):
+                find_existing_object({"name": "vcx-cached"}, "dcim.virtualchassis")
+
+    def test_a_unique_candidate_still_resolves(self):
+        """
+        The floor: none of the above may cost the ordinary case.
+
+        One row with the name, no hint, no discriminator -- this is what the
+        whole feature is for, and every rule above is scoped to the multi-row
+        case so that it stays a plain resolution.
+        """
+        only = VirtualChassis.objects.create(name="vcx-only", domain="building-z")
+        self.assertEqual(
+            find_existing_object({"name": "vcx-only"}, "dcim.virtualchassis"), only)
+        self.assertIsNone(
+            find_existing_object({"name": "vcx-nothing"}, "dcim.virtualchassis"))
 
 
 class VirtualChassisPreSaveMatchScopeTests(TestCase):

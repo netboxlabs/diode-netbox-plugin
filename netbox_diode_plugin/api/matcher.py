@@ -22,7 +22,7 @@ from django.db.models.signals import post_delete, post_save
 from extras.models.customfields import CustomField
 from netbox.plugins import get_plugin_config
 
-from .common import UnresolvedReference
+from .common import NON_FIELD_ERRORS, VC_MEMBER_HINT, ChangeSetException, UnresolvedReference
 from .compat import in_version_range
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model
 from .profile import get_profile_ctx
@@ -112,7 +112,11 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 #     That same absent uniqueness means a row matched by name may be a
 #     different stack that merely shares it, so this type's match BINDS the row
 #     and writes nothing to it, while still validating the payload against it
-#     -- see _PRE_SAVE_MATCH_BIND_ONLY.
+#     -- see _PRE_SAVE_MATCH_BIND_ONLY. And when the name matches SEVERAL rows
+#     that nothing separates, it matches NOTHING and says so:
+#     VirtualChassisNameMatcher.resolve raises AmbiguousObjectMatch rather than
+#     returning the oldest, because the caller would point a Device's
+#     virtual_chassis at whatever came back.
 #   - ipam.prefix: NetBox has no unique constraint on prefix, nor on
 #     (prefix, vrf) - Prefix.Meta carries only ordering and indexes.
 #     Duplicate detection lives solely in Prefix.clean(), behind
@@ -222,6 +226,12 @@ def _virtualchassis_pre_save_match_applies(data: dict) -> bool:
     a member-first ingest is bound by
     applier._try_adopt_masterless_virtualchassis, which chooses its row from
     live database state and guards the same malformed-pk hazard explicitly.
+    "Chooses" is bounded there and the bound is the point: it adopts only a row
+    whose identity is established (it already holds the requested master, an
+    explicit discriminator names it, it is empty, or a device change in the same
+    changeset asserts the membership) and otherwise declines, letting the
+    payload create its own chassis rather than binding a same-named row on the
+    strength of the name.
 
     An explicit null counts as absent, matching VirtualChassisNameMatcher's own
     gate: the transformer emits master: None for a member-only payload.
@@ -333,6 +343,225 @@ def requires_pre_save_match(object_type: str, data: dict | None = None) -> bool:
     if data is None:
         return False
     return gate(data)
+
+
+class AmbiguousObjectMatch(ChangeSetException):
+    """
+    A lookup found several rows and no rule could tell which one was meant.
+
+    find_existing_object otherwise answers "an instance or None", and both
+    answers are actionable: an instance resolves the reference, None creates.
+    Ambiguity is neither, and the two ways of forcing it into that pair are
+    both wrong. Returning None creates a duplicate of a row that already
+    exists; returning one of the candidates picks an identity out of the air --
+    for dcim.virtualchassis that means pointing a Device's virtual_chassis at
+    an arbitrary same-named stack, which is a data move made on the strength of
+    a name.
+
+    So it is raised, as a ChangeSetException carrying the per-entity error shape
+    the rest of the API already speaks ({object_type: {field: [message]}}).
+    That subclassing is what makes ONE raise cover BOTH boundaries: the plan
+    path (transformer._resolve_existing_references, surfaced by
+    differ.generate_changeset and the generate-diff / bulk-plan views) and the
+    apply path (applier._try_bind_existing_instance and
+    _create_or_find_instance, reached by apply-change-set and bulk-apply, which
+    bypass the transformer entirely). Neither boundary needs its own
+    translation, and neither can grow a hole the other does not.
+
+    It is deliberately NOT a ValueError or TypeError. Three call sites --
+    _find_existing_object_or_none, _try_find_and_update_existing_instance and
+    the applier's own handler chain -- swallow those two to turn a malformed
+    reference into "no match", which is right for a payload the ORM cannot even
+    query and exactly wrong for a payload that queried fine and matched too
+    much.
+    """
+
+    def __init__(self, message, object_type, field=NON_FIELD_ERRORS):
+        """Build the per-entity error for one ambiguous lookup."""
+        super().__init__(message, errors={object_type: {field: [message]}})
+        self.object_type = object_type
+        self.field = field
+
+
+# Fields a payload may carry that DISCRIMINATE between same-named
+# VirtualChassis rows. A value here is matched against the candidate rows; it
+# is never used to guess, and a value no candidate carries means "not one of
+# these rows" rather than "pick one anyway".
+#
+# domain is the only one today. It is NetBox's own grouping field on
+# VirtualChassis, it is part of the SDK shape a producer already sends, and it
+# is the discriminator the review named. site is deliberately absent:
+# VirtualChassis has no site of its own (its members do), so filtering on it
+# would mean inferring identity from member rows, which is the same guess by a
+# longer route.
+_VC_DISCRIMINATORS = ("domain",)
+
+
+def _vc_row_value(candidate, field) -> str:
+    """A candidate's discriminator value, normalised to a string."""
+    # domain is a non-null CharField, so this is "" for a row that never set
+    # one. It is normalised rather than read raw because the comparison below
+    # must not decide that None != "" and treat a domainless row as carrying a
+    # value the payload contradicts.
+    return getattr(candidate, field, None) or ""
+
+
+def asserted_vc_discriminators(data: dict) -> dict:
+    """
+    The discriminators this payload ASSERTS, empty strings included.
+
+    "Asserts" is deliberately not "has a truthy value for". An explicitly
+    submitted ``domain: ""`` is a value -- the producer saying this chassis has
+    no domain -- and dropping it was the defect this function exists to remove:
+    it let a payload that asserts domainlessness bind a domain-BEARING row and
+    then write "" over it, destroying the one field the ambiguity refusals tell
+    the operator to set. Absence (no key, null, or a non-string) asserts
+    nothing, because the ingest applies only the fields it was given.
+    """
+    return {
+        field: data[field]
+        for field in _VC_DISCRIMINATORS
+        if isinstance(data.get(field), str)
+    }
+
+
+def describe_vc_assertions(data: dict) -> str:
+    """The asserted discriminators, for a refusal message. "" reads as empty."""
+    asserted = asserted_vc_discriminators(data)
+    return ", ".join(f"{field} {value!r}" for field, value in asserted.items())
+
+
+def narrow_vc_candidates(candidates, data) -> tuple[list, bool, bool]:
+    """
+    Narrow same-named candidates by what the payload asserts. ONE implementation.
+
+    Returns ``(candidates, contradicted, identified)``:
+
+    - ``contradicted`` -- an asserted value that NO candidate carries. That is
+      not ambiguity: the payload describes a chassis none of these rows is, so
+      the caller creates it rather than binding a row whose own discriminator
+      says otherwise.
+    - ``identified`` -- at least one NON-EMPTY value was asserted and matched.
+      Emptiness is the whole distinction: ``domain: "dc-a"`` is a claim about
+      WHICH row, while ``domain: ""`` is shared by every row that never set a
+      domain and so tells none of them apart. So "" narrows (it excludes the
+      rows that do carry a domain) but never identifies, and a caller that
+      treats identification as permission to bind a POPULATED row -- see
+      applier._choose_adoption_candidate rule 2 -- must not be handed that
+      permission by an empty string.
+
+    Both call sites had a copy of this loop and the copies disagreed about ""
+    in the same wrong direction. It lives here, once, next to
+    _VC_DISCRIMINATORS, because the semantics of a discriminator are a property
+    of the discriminator and not of the caller.
+    """
+    identified = False
+    for field, value in asserted_vc_discriminators(data).items():
+        narrowed = [c for c in candidates if _vc_row_value(c, field) == value]
+        if not narrowed:
+            return [], True, identified
+        if value:
+            identified = True
+        candidates = narrowed
+    return candidates, False, identified
+
+
+def unasserted_vc_discriminators(candidate, data) -> str:
+    """
+    The values THIS ROW carries that the payload says nothing about.
+
+    A row bearing ``domain: "dc-a"`` when the payload asserts no domain is a row
+    the payload has not identified: somebody labelled that stack, and this
+    producer never mentioned the label. Its only caller uses it to choose
+    between ADOPTING that row and creating the payload's own
+    (applier._choose_adoption_candidate rule 4) -- never to reject the payload.
+    A labelled row is somebody's, so the payload gets a row of its own instead;
+    that is a different write, not a failed one.
+    """
+    asserted = asserted_vc_discriminators(data)
+    return ", ".join(
+        f"{field} {_vc_row_value(candidate, field)!r}"
+        for field in _VC_DISCRIMINATORS
+        if _vc_row_value(candidate, field) and field not in asserted
+    )
+
+
+def annotate_vc_member_counts(queryset):
+    """
+    Annotate a VirtualChassis queryset with its REAL member count.
+
+    Not VirtualChassis.member_count: that is a utilities.counters cached
+    counter, and a stale one is exactly the state this branch has already had
+    to repair once (see applier._try_adopt_masterless_virtualchassis). An
+    identity decision must not be taken from a field that can be wrong -- an
+    empty row whose counter drifted upward would read as populated and a
+    populated one whose counter drifted down as empty, in both cases turning a
+    refusal into a write or the other way round.
+    """
+    return queryset.annotate(_diode_member_count=models.Count("members"))
+
+
+def describe_vc_candidates(candidates) -> str:
+    """
+    One-line, id-bearing description of the rows a name matched.
+
+    Every caller today passes rows from annotate_vc_member_counts, so the
+    per-row fallback below does not run. It stays because this string is only
+    ever built on the way to raising, and a describe() that raised AttributeError
+    on an unannotated queryset would replace a reportable refusal with a 500 --
+    the one failure mode this whole path exists to avoid.
+    """
+    parts = []
+    for candidate in candidates:
+        count = getattr(candidate, "_diode_member_count", None)
+        if count is None:
+            count = candidate.members.count()
+        parts.append(
+            f"id {candidate.pk} (domain {candidate.domain!r}, {count} member(s), "
+            f"{'mastered' if candidate.master_id else 'masterless'})"
+        )
+    return "; ".join(parts)
+
+
+def vc_hint_pks(member_hint) -> list:
+    """
+    The usable device pks in a VC_MEMBER_HINT, and nothing else.
+
+    ``member_hint`` is common.VC_MEMBER_HINT as the transformer left it: a list
+    holding a pk for every member device that was already resolved to an
+    existing row, and an UnresolvedReference for every one this batch is still
+    creating. A device being created belongs to nothing yet, so it carries no
+    evidence -- which is why the hint is filtered by type here rather than
+    assumed to be pks. A direct apply-change-set can also put anything at all
+    in a payload, and none of it may reach an ORM pk filter.
+
+    bool is excluded explicitly: it is an int subclass, so True would otherwise
+    be read as pk 1 (the same hazard applier._coerce_pk documents) and let an
+    unrelated device decide which chassis a reference resolves to.
+
+    Split out as its own function because it is the whole of that guard, and a
+    guard that can only be observed through a database whose pk sequence the
+    test cannot control is a guard nothing pins -- see
+    VirtualChassisHintPkTests.
+    """
+    if member_hint is None:
+        return []
+    if not isinstance(member_hint, list | tuple):
+        member_hint = [member_hint]
+    return [v for v in member_hint if isinstance(v, int) and not isinstance(v, bool)]
+
+
+def vc_candidates_owning(candidates, member_hint) -> list:
+    """Candidates that one of the referencing member Devices ALREADY belongs to."""
+    pks = vc_hint_pks(member_hint)
+    if not pks:
+        return []
+    device_model = get_object_type_model("dcim.device")
+    owned = set(
+        device_model.objects.filter(pk__in=pks, virtual_chassis__isnull=False)
+        .values_list("virtual_chassis_id", flat=True)
+    )
+    return [c for c in candidates if c.pk in owned]
 
 
 _LOGICAL_MATCHERS = {
@@ -926,8 +1155,12 @@ class VirtualChassisNameMatcher:
     legitimately duplicate), so this is a fallback: a payload that carries a
     master keeps resolving through the auto-derived unique_master matcher.
     The DB row's own master is deliberately NOT filtered on — a masterless
-    payload must bind a mastered row. Ties resolve to the oldest row via the
-    framework's order_by('pk').first().
+    payload must bind a mastered row.
+
+    A name that matches SEVERAL rows is not resolved by creation order; see
+    ``resolve``. That is the whole of this matcher's identity policy and it is
+    why this class carries a resolve() hook at all -- the framework's default,
+    order_by('pk').first(), is deterministic but determinism is not identity.
     """
 
     model_class: type[models.Model]
@@ -959,6 +1192,120 @@ class VirtualChassisNameMatcher:
         if not self.has_required_fields(data):
             return None
         return self.model_class.objects.filter(name=data["name"])
+
+    def resolve(self, queryset: models.QuerySet, data: dict):
+        """
+        Choose among same-named candidates, or refuse to choose.
+
+        find_existing_object's default is order_by('pk').first(): the oldest
+        row wins. For a name-keyed match on a model with no uniqueness on name
+        that is a policy, not a lookup -- and the policy is unsafe. Two
+        legitimately distinct stacks may both be called "access-stack", and the
+        reference being resolved is usually a MEMBER DEVICE's
+        virtual_chassis, so picking the older row does not merely "match
+        something": it plans that device into the other stack. A non-unique
+        name is evidence, not permission.
+
+        The rules, in order, and each is a fact about the rows rather than a
+        tie-break over them:
+
+        0. exactly one candidate -> resolve it. This is the ordinary case and
+           the feature this matcher exists for; nothing below may weaken it.
+        1. a member device that referenced this node ALREADY belongs to one of
+           the candidates -> that one. The database already answered the
+           question, and honouring it is the one rule that guarantees no
+           device is relocated. When two referencing members disagree (each
+           already in a DIFFERENT candidate) there is no single answer and the
+           payload is describing a merge of two stacks -- refuse.
+        2. the payload ASSERTS a discriminator (_VC_DISCRIMINATORS) -> keep
+           only candidates carrying that value (narrow_vc_candidates, shared
+           with the applier's adoption). Exactly one left resolves; NONE left
+           means the payload names a chassis that does not exist yet, so return
+           None and let it be created rather than binding a row whose
+           discriminator contradicts the payload. An explicitly empty
+           ``domain: ""`` is an assertion like any other and excludes the rows
+           that DO carry a domain -- it used to be dropped, which let a payload
+           declaring no domain bind a domain-bearing row and then write "" over
+           the very field the refusal below tells the operator to set.
+        3. exactly one candidate has a master or members and every other is
+           empty -> that one. This is the recovery path for duplicates an
+           earlier bug created: an empty row is not a stack anyone owns, so
+           preferring the real one is a repair, and it cannot relocate a
+           device that is already placed (rule 1 outranks it).
+        4. otherwise -> AmbiguousObjectMatch, naming the rows and what would
+           resolve them.
+
+        Rule 3 is the one that could still place a device into a stack it was
+        not in (a device in no chassis, or in a chassis with another name,
+        joining the sole populated candidate). It is bounded on purpose: it
+        needs every OTHER same-named row to be empty AND masterless, which is
+        the signature of bug-created duplicates and not of two real stacks --
+        two real stacks both have members, which lands on rule 4.
+
+        Rule 0 is NOT subject to rule 2's exclusion, and that is deliberate: a
+        name that matches exactly one row resolves to it even when the payload
+        asserts ``domain: ""`` and the row carries a domain. Excluding there
+        would answer "no match" for the ordinary case and insert a duplicate
+        chassis, which is the outcome this matcher exists to prevent; the ""
+        then reaches that row as a field write like any other field the payload
+        carries. Adoption in the applier decides the opposite way for the same
+        input because it has a lossless alternative -- the CREATE its plan
+        already asked for (see _choose_adoption_candidate).
+        """
+        candidates = list(annotate_vc_member_counts(queryset).order_by("pk"))
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+
+        name = data.get("name")
+        owned = vc_candidates_owning(candidates, data.get(VC_MEMBER_HINT))
+        if len(owned) == 1:
+            return owned[0]
+        if len(owned) > 1:
+            raise AmbiguousObjectMatch(
+                f"Ambiguous dcim.virtualchassis reference {name!r}: the member devices "
+                f"named in this payload already belong to DIFFERENT virtual chassis with "
+                f"that name -- {describe_vc_candidates(owned)}. Refusing to choose one, "
+                f"because binding either would move devices out of the other. Ingest "
+                f"those devices in separate requests, so each keeps the chassis it is "
+                f"already in; or merge the two chassis into one in NetBox first.",
+                "dcim.virtualchassis", "name",
+            )
+
+        candidates, contradicted, _identified = narrow_vc_candidates(candidates, data)
+        if contradicted:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+
+        populated = [
+            c for c in candidates
+            if c.master_id is not None or c._diode_member_count
+        ]
+        if len(populated) == 1:
+            return populated[0]
+
+        asserted = describe_vc_assertions(data)
+        raise AmbiguousObjectMatch(
+            f"Ambiguous dcim.virtualchassis reference {name!r}: "
+            f"{len(candidates)} existing virtual chassis named {name!r} are equally "
+            f"consistent with this payload -- {describe_vc_candidates(candidates)}. "
+            f"VirtualChassis.name is not unique in NetBox, so choosing would move devices "
+            f"into a chassis this payload never identified. "
+            + (
+                f"It asserts {asserted}, which every one of those rows carries too, so it "
+                f"does not tell them apart. "
+                if asserted else
+                "The payload asserts nothing that tells them apart. "
+            )
+            + f"Settle it in NetBox, which needs no change to what the producer sends: "
+            f"give one of those rows a {' or '.join(_VC_DISCRIMINATORS)} the others do "
+            f"not have, or merge the duplicates into one row. Putting this device into "
+            f"the right one in NetBox also settles it, because a reference from a device "
+            f"that is already a member resolves to that member's own chassis.",
+            "dcim.virtualchassis", "name",
+        )
 
 
 @dataclass
@@ -1408,6 +1755,20 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
         # cache key; always run the authoritative build_queryset matcher loop.
         return None
 
+    if object_type == "dcim.virtualchassis":
+        # Not cacheable, and the reason is identity rather than cost. The key
+        # below is built from SCALAR fields only, so it cannot see
+        # common.VC_MEMBER_HINT (a list, and private) -- two payloads naming the
+        # same chassis on behalf of DIFFERENT member devices would share one
+        # key, and the first one's answer would be served to the second, which
+        # is precisely the "pick a row the payload never identified" the
+        # VirtualChassisNameMatcher.resolve rules exist to prevent. A cached hit
+        # would also skip resolve() entirely, so an ambiguity that must be
+        # reported would instead answer with whatever row was cached before the
+        # duplicate appeared. Both caches (django and request-scoped) key off
+        # this function, so returning None disables both.
+        return None
+
     items = []
     for k, v in sorted(data.items()):
         if k.startswith("_"):
@@ -1479,7 +1840,15 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
             if q is None:
                 continue
             matchers_checked += 1
-            existing = q.order_by('pk').first()
+            # A matcher may own the choice among the rows its queryset returned
+            # (VirtualChassisNameMatcher.resolve). The default remains the
+            # oldest row, which is right wherever the criteria carry real
+            # uniqueness -- there is only ever one row to pick.
+            resolve = getattr(matcher, "resolve", None)
+            if resolve is not None:
+                existing = resolve(q, data)
+            else:
+                existing = q.order_by('pk').first()
             if existing is not None:
                 result = existing
                 break

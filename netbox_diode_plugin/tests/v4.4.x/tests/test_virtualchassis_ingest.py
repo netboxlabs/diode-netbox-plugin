@@ -333,8 +333,28 @@ class VirtualChassisIngestE2ETests(APITestCase):
                                members={"vce-sw1-renamed": 1})
         self._assert_noop_rediff(payload)
 
-    def test_duplicate_field_state_member_migrates_back(self):
-        """Bug aftermath: member sits in a NEWER empty duplicate; must migrate back."""
+    def test_duplicate_field_state_member_keeps_the_chassis_it_is_in(self):
+        """
+        Bug aftermath: the member sits in a duplicate, and ingest must NOT move it.
+
+        THE OLD EXPECTATION HERE WAS UNSAFE and this test used to assert it:
+        "vce-sw2 migrates back to the oldest same-named chassis". It passed
+        because the name matcher resolved a name-only reference with
+        order_by('pk').first(), so a name that matches two rows always chose the
+        older one -- and since this reference is a MEMBER DEVICE's
+        virtual_chassis, choosing meant RELOCATING that device. Determinism is
+        not identity: run the same shape with two legitimately distinct stacks
+        sharing a name (see the ambiguity tests below) and the identical rule
+        moves a device into another building's stack.
+
+        The rule now is "prefer the chassis this device already belongs to",
+        which is the one preference the database itself answers, so nothing
+        moves and the second pass plans nothing at all. Recovering from
+        duplicates is still possible where the evidence is real -- see
+        test_empty_duplicate_loses_to_the_populated_chassis, where the member is
+        NOT already placed -- but a name is not evidence enough to move a device
+        that is.
+        """
         vc_old, master = self._seed_stack()
         vc_dup = VirtualChassis.objects.create(name="vce-stack")
         member = Device.objects.create(
@@ -345,9 +365,11 @@ class VirtualChassisIngestE2ETests(APITestCase):
         payload = self._device_payload("vce-sw2", {
             "vc_position": 2, "virtual_chassis": {"name": "vce-stack"},
         })
-        self._diff_apply(payload)
+        # Fully converged already: the device is where the payload says it is.
+        self.assertEqual(self._diff(payload).get("changes"), [])
         member.refresh_from_db()
-        self.assertEqual(member.virtual_chassis_id, vc_old.pk)  # oldest wins
+        self.assertEqual(member.virtual_chassis_id, vc_dup.pk, "the member was relocated")
+        self.assertEqual(member.vc_position, 2)
         self.assertEqual(VirtualChassis.objects.filter(name="vce-stack").count(), 2)
         self._assert_noop_rediff(payload)
 
