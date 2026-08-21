@@ -715,6 +715,47 @@ class DedupeDriverFieldPolicyTests(TestCase):
         raise_unsettled_conflicts(out)
         self.assertEqual(out[0]["_refs"], {"d1"})
 
+    def _shared_vlan_fragments(self):
+        """
+        Fragments whose surviving VLAN is ALSO the untagged one.
+
+        Dropping tagged_vlans then releases no edge -- untagged_vlan still needs it --
+        so the only edge phase 1 gives up is the one the rejected duplicate contributed.
+        """
+        shared = UnresolvedReference(object_type="ipam.vlan", uuid="v1")
+        other = UnresolvedReference(object_type="ipam.vlan", uuid="v2")
+        return [
+            self._iface("i0", _refs={"d1", "v1"}, untagged_vlan=shared, tagged_vlans=[shared]),
+            self._iface("i1", _refs={"d1", "v2"}, tagged_vlans=[other]),
+            self._iface("i2", mode="access"),
+        ]
+
+    def test_a_rejected_values_edge_release_is_reported_to_the_prune_sweep(self):
+        """Dedupe must report the edges the merge released, not only the ones drops did."""
+        out, released = _fingerprint_dedupe(self._shared_vlan_fragments())
+        raise_unsettled_conflicts(out)
+        node = out[0]
+        self.assertNotIn("tagged_vlans", node)
+        self.assertEqual(node["untagged_vlan"].uuid, "v1")
+        self.assertEqual(node["_refs"], {"d1", "v1"})   # the rejected copy's v2 is gone
+        # The drop itself released nothing, so if the merge's release is not reported the
+        # caller skips its one prune sweep and v2 survives as a manufactured VLAN.
+        self.assertTrue(released)
+
+    def test_the_orphan_of_a_rejected_value_is_pruned(self):
+        """Phase 1 in full: only the rejected duplicate's VLAN node disappears."""
+        vlans = [{"_object_type": "ipam.vlan", "_uuid": uuid, "_refs": set(),
+                  "vid": vid, "name": f"dedupe-v{vid}", "status": "active"}
+                 for uuid, vid in (("v1", 981), ("v2", 982))]
+        entities = vlans + self._shared_vlan_fragments()
+        referenced_before = referenced_uuids(entities)
+        released = apply_submitted_driver_field_policy(entities)
+        deduplicated, merge_released = _fingerprint_dedupe(entities)
+        raise_unsettled_conflicts(deduplicated)
+        if released or merge_released:
+            deduplicated = prune_orphaned_nodes(deduplicated, referenced_before)
+        self.assertEqual({entity["_uuid"] for entity in deduplicated}, {"v1", "i0"})
+
 
 class InterfaceModeClearE2ETests(APITestCase):
     """End-to-end: seed an existing interface, ingest a mode change, assert clear."""
@@ -1706,6 +1747,67 @@ class InterfaceModeClearE2ETests(APITestCase):
         """Three disagreeing copies, then the mode: still one access interface."""
         self._assert_fragments_converge("Gi2/0/8", "n8", 68, [751, 752, 753],
                                         driver_last=True)
+
+    def _shared_vlan_fragment_payload(self, name, octet, field, untagged, keep, reject):
+        """
+        Fragments of one interface where the survivor's VLAN is needed twice.
+
+        ``field`` is the forbidden field the copies split; the first copy also points
+        ``untagged_vlan`` at the same VLAN, which mode "access" permits, so dropping
+        ``field`` releases no edge of its own.
+        """
+        def copy(**extra):
+            return {"device": self._device(), "name": name, "type": "1000base-t", **extra}
+
+        dev = dict(self._device())
+        dev["primary_ip4"] = {
+            "address": f"10.6.{octet}.10/24",
+            "assigned_object_interface": copy(untagged_vlan=untagged, **{field: keep}),
+        }
+        dev["primary_ip6"] = {
+            "address": f"2001:db8:6{octet}::11/64",
+            "assigned_object_interface": copy(**{field: reject}),
+        }
+        dev["oob_ip"] = {
+            "address": f"10.6.{octet}.12/24",
+            "assigned_object_interface": copy(mode="access"),
+        }
+        return {"timestamp": 1, "object_type": "dcim.interface", "entity": {
+            "interface": {"device": dev, "name": name, "type": "1000base-t"}}}
+
+    def _assert_rejected_vlan_is_never_created(self, name, octet, field, keep_vid, reject_vid):
+        """The VLAN only a REJECTED duplicate value referenced must not be created."""
+        from ipam.models import VLAN
+        keep = {"vid": keep_vid, "name": f"rej-v{keep_vid}", "status": "active"}
+        reject = {"vid": reject_vid, "name": f"rej-v{reject_vid}", "status": "active"}
+        many = field == "tagged_vlans"
+        payload = self._shared_vlan_fragment_payload(
+            name, octet, field, dict(keep),
+            [dict(keep)] if many else dict(keep),
+            [dict(reject)] if many else dict(reject),
+        )
+        cs = self._plan(payload)
+        planned = [c.get("data", {}).get("vid") for c in cs["changes"]
+                   if c["object_type"] == "ipam.vlan" and c["change_type"] != "noop"]
+        self.assertEqual(planned, [keep_vid], planned)
+        self._converge(payload, f"a rejected duplicate's {field}")
+        self.assertTrue(VLAN.objects.filter(vid=keep_vid).exists())
+        self.assertFalse(VLAN.objects.filter(vid=reject_vid).exists())
+        iface = Interface.objects.get(name=name, device__name=self._device()["name"])
+        self.assertEqual(iface.mode, "access")
+        self.assertEqual(iface.untagged_vlan.vid, keep_vid)
+        self.assertEqual(iface.tagged_vlans.count(), 0)
+
+    def test_a_rejected_duplicates_tagged_vlan_is_never_created(self):
+        """The survivor is also the untagged VLAN, so only the merge released an edge."""
+        # Without the merge's release reaching the prune gate the change set still plans
+        # a create for the rejected copy's VLAN: the interface comes out correct while an
+        # extra VLAN is manufactured out of a value nothing kept.
+        self._assert_rejected_vlan_is_never_created("Gi3/0/1", 71, "tagged_vlans", 671, 672)
+
+    def test_a_rejected_duplicates_qinq_svlan_is_never_created(self):
+        """The same shape on a different forbidden field the interface policy drops."""
+        self._assert_rejected_vlan_is_never_created("Gi3/0/2", 72, "qinq_svlan", 681, 682)
 
     def test_an_ipam_vlan_ingested_in_its_own_right_is_untouched(self):
         """A VLAN that is the entity's own primary object is never pruned."""

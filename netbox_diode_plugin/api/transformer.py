@@ -633,7 +633,12 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
         else:
             existing = by_uuid[existing_uuid]
             new_refs[entity['_uuid']] = existing['_uuid']
+            refs_before = existing['_refs'] | entity['_refs']
             merged = _merge_nodes(existing, entity)
+            # A deferred conflict releases the rejected value's edges, which the caller's
+            # prune sweep must hear about too -- not only the drops below.
+            if merged['_refs'] != refs_before:
+                refs_released = True
             _update_unresolved_refs(merged, new_refs)
             # Normalize NOW, before the next duplicate is compared against this node. A
             # merge is where duplicates each carrying half a contradiction become
