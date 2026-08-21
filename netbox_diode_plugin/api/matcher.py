@@ -466,6 +466,237 @@ def narrow_vc_candidates(candidates, data) -> tuple[list, bool, bool]:
     return candidates, False, identified
 
 
+def asserted_vc_identity(data: dict) -> dict:
+    """
+    What this payload CLAIMS about WHICH chassis it is: master, then discriminators.
+
+    One notion of VirtualChassis identity, extended by exactly one field.
+    ``narrow_vc_candidates`` answers "which of these ROWS is the payload talking
+    about"; this answers "do these two PAYLOAD NODES talk about the same
+    chassis", which is what dedupe needs (transformer._vc_identity_partition).
+    Both read the same _VC_DISCRIMINATORS, so a domain can never tell rows apart
+    and nodes not apart, or the other way round -- two notions of VC identity
+    that can disagree is how this branch earned several of its earlier bugs.
+
+    master is here and NOT in _VC_DISCRIMINATORS, and the split is about where
+    the comparison happens rather than about what identity means.
+    VirtualChassis.master is a DB UNIQUE constraint, so it is the STRONGEST
+    identity there is: two nodes naming different masters are different stacks
+    even with no domain anywhere, and two naming the same master are one stack
+    whatever else they say. But it cannot narrow live rows the way a
+    discriminator does -- at transform time it is an UnresolvedReference to a
+    device that may not exist yet, so there is no value to match a row's
+    master_id against, and matcher's own rows-side gates deliberately keep
+    master out of an ORM filter (see _virtualchassis_pre_save_match_applies).
+    Node-against-node, both sides are payload, so it compares cleanly.
+
+    "Asserts" carries the same meaning as in asserted_vc_discriminators: an
+    explicit ``domain: ""`` is a value, and absence asserts nothing. For master,
+    absence includes an explicit null -- the transformer emits ``master: None``
+    for a member-only payload, which claims nothing about which stack this is.
+    """
+    identity = {}
+    master = data.get("master")
+    if master is not None:
+        identity["master"] = master
+    identity.update(asserted_vc_discriminators(data))
+    return identity
+
+
+# A group field its own members contradict each other about. It equals no
+# asserted value, so such a field stops telling anything apart instead of
+# silently answering with whichever member was seen first.
+_VC_CONTESTED = object()
+
+
+def vc_identities_conflict(a: dict, b: dict) -> bool:
+    """
+    True when two asserted identities CANNOT be the same chassis.
+
+    Compatibility, not equality: a node that asserts nothing conflicts with
+    nothing, which is what keeps a member's name-only chassis node and the
+    master-bearing one merging into a single create (issue #183).
+
+    master decides alone when both sides carry one, in BOTH directions. Same
+    master means one chassis even if the domains disagree -- the unique
+    constraint says there is only one row, so a domain disagreement there is a
+    field conflict for _merge_nodes to report, not licence to plan a second row
+    that could not be inserted. Different masters mean different chassis even if
+    the domains agree.
+    """
+    if "master" in a and "master" in b:
+        return a["master"] != b["master"]
+    for field, value in a.items():
+        if field == "master":
+            continue
+        if field in b and b[field] != value:
+            return True
+    return False
+
+
+def _vc_identities_agree(identities: list[dict]) -> bool:
+    """True when no two of these asserted identities conflict."""
+    return not any(
+        vc_identities_conflict(a, b)
+        for i, a in enumerate(identities)
+        for b in identities[i + 1:]
+    )
+
+
+def _vc_identity_key(identity: dict) -> tuple:
+    """A hashable form of an asserted identity: nodes making one claim group as one."""
+    return tuple(sorted(identity.items(), key=lambda item: item[0]))
+
+
+def _absorb_vc_identity(group: dict, identity: dict) -> None:
+    """Fold a node's assertions into its group's; a contradiction CONTESTS the field."""
+    for field, value in identity.items():
+        if field in group and group[field] != value:
+            group[field] = _VC_CONTESTED
+        else:
+            group.setdefault(field, value)
+
+
+def _seed_vc_groups(identities: list[dict], assigned: list) -> tuple[list[dict], list[int]]:
+    """
+    Open the groups the ASSERTING nodes establish: steps 1 and 2 of the partition.
+
+    master first, because it is a unique key: one group per distinct master, and
+    a node naming one always lands on its master's group -- vc_identities_conflict
+    answers on master alone when both sides carry one, so this loop cannot split
+    two nodes that name the same master however much else they disagree about.
+    Only when no node in the bucket names a master at all do the discriminators
+    seed instead, one group per distinct asserted set: a domain cannot outrank a
+    master, but with no master anywhere it is the strongest thing said.
+
+    Returns the groups and the ids of the seeded ones. Every group here is a
+    candidate for the nodes that assert nothing; groups opened later, for nodes
+    nothing could place, deliberately are not.
+    """
+    groups: list[dict] = []
+    seed_ids: list[int] = []
+
+    def seed(index):
+        identity = identities[index]
+        group_id = next(
+            (g for g in seed_ids if not vc_identities_conflict(groups[g], identity)),
+            None,
+        )
+        if group_id is None:
+            groups.append({})
+            group_id = len(groups) - 1
+            seed_ids.append(group_id)
+        assigned[index] = group_id
+        _absorb_vc_identity(groups[group_id], identity)
+
+    for i, identity in enumerate(identities):
+        if "master" in identity:
+            seed(i)
+
+    if not seed_ids:
+        for i, identity in enumerate(identities):
+            if identity:
+                seed(i)
+
+    return groups, seed_ids
+
+
+def _place_unseeded_vc_nodes(
+    identities: list[dict], assigned: list, groups: list[dict], seed_ids: list[int]
+) -> None:
+    """
+    Place the nodes that seeded nothing: step 3 of the partition.
+
+    Every one of them is resolved against the SEEDED groups before any of them
+    moves, so no node's answer can depend on which node arrived first. Nodes
+    asserting the same thing are bucketed and travel together; a bucket joins a
+    group only when that group is the only one that can take it AND it is the
+    only claim on that group that could be true -- two buckets asserting
+    different domains, both compatible with one group that says nothing about
+    domains, are both refused rather than settled by arrival order.
+    """
+    buckets: dict[tuple, list[int]] = {}
+    for i, identity in enumerate(identities):
+        if assigned[i] is None:
+            buckets.setdefault(_vc_identity_key(identity), []).append(i)
+
+    takers = {
+        key: [
+            group_id for group_id in seed_ids
+            if not vc_identities_conflict(groups[group_id], identities[members[0]])
+        ]
+        for key, members in buckets.items()
+    }
+    claimants: dict[int, list[tuple]] = {}
+    for key, group_ids in takers.items():
+        if len(group_ids) == 1:
+            claimants.setdefault(group_ids[0], []).append(key)
+
+    for key, members in buckets.items():
+        group_ids = takers[key]
+        if len(group_ids) == 1 and _vc_identities_agree(
+            [identities[buckets[claim][0]] for claim in claimants[group_ids[0]]]
+        ):
+            group_id = group_ids[0]
+        else:
+            groups.append({})
+            group_id = len(groups) - 1
+        for index in members:
+            assigned[index] = group_id
+            _absorb_vc_identity(groups[group_id], identities[index])
+
+
+def partition_vc_identities(identities: list[dict]) -> list[int]:
+    """
+    Split same-named VC nodes into the chassis they describe. ONE group index per node.
+
+    Nodes sharing an index describe one chassis and must dedupe-merge; nodes
+    with different indices are different chassis and must not. Hash equality
+    cannot express this -- the rule is "the same stack UNLESS conflicting
+    identity is asserted", a compatibility relation -- so the discrimination
+    happens INSIDE the name bucket, after grouping by name, and mirrors
+    narrow_vc_candidates: group by what is ASSERTED, and place a node that
+    asserts nothing only when exactly one group can take it.
+
+    The steps, and each is a fact about the nodes rather than a tie-break:
+
+    1. master, the unique key, seeds the groups: one group per distinct master.
+       Nothing below re-splits such a group, because nothing outranks a unique
+       key.
+    2. with no master asserted anywhere, the discriminators seed instead: one
+       group per distinct asserted set. Nodes asserting the same domain are one
+       stack; ``building-a`` and ``building-b`` are two, for the same reason
+       narrow_vc_candidates lets a domain exclude a row -- a discriminator that
+       tells rows apart must tell nodes apart too.
+    3. every node left says nothing the seeding step could use, so it is placed
+       by compatibility: onto the one seeded group that can take it, and
+       otherwise into a group of its own. Refusing to choose is the answer
+       VirtualChassisNameMatcher.resolve rule 4 gives, for the same reason:
+       these nodes are usually a member device's chassis reference, so guessing
+       does not merely pick a row, it puts that device in a stack the payload
+       never identified. Nodes asserting the SAME thing travel together even
+       here, so a graph naming one unidentifiable chassis twice still plans it
+       once.
+
+    Placement is decided for all of them at once, against the seeded groups
+    only, so the answer cannot depend on the order the nodes arrive in -- which
+    stack a member lands in must not depend on which reference its producer
+    emitted first. That costs one refusal: where two nodes assert DIFFERENT
+    things and the only group that could take either says nothing about it,
+    neither is placed, because taking the one that happened to come first is
+    exactly the order-dependence being avoided.
+
+    A group's own identity is what its seeded members agree on; a field they
+    contradict each other about is CONTESTED and then matches no assertion at
+    all. That disagreement is still _merge_nodes' to report -- partitioning
+    decides which nodes are one chassis, never whether their fields agree.
+    """
+    assigned: list[int | None] = [None] * len(identities)
+    groups, seed_ids = _seed_vc_groups(identities, assigned)
+    _place_unseeded_vc_nodes(identities, assigned, groups, seed_ids)
+    return assigned
+
+
 def unasserted_vc_discriminators(candidate, data) -> str:
     """
     The values THIS ROW carries that the payload says nothing about.
@@ -1215,6 +1446,14 @@ class VirtualChassisNameMatcher:
         Within one transform batch the members' name-only VC node and the
         master-bearing VC node must dedupe-merge into a single create; gating
         this on master absence would leave two nodes and a split chassis.
+
+        Adding master (or domain) to this KEY is not the way to keep two
+        genuinely different same-named stacks apart either, for the same reason:
+        it separates the name-only node from the master-bearing one and
+        reintroduces the split. Hash equality cannot express "the same stack
+        unless conflicting identity is asserted", so that discrimination happens
+        after grouping by name, in partition_vc_identities -- which is where the
+        cost of this name-only key is paid, not here.
         """
         name = data.get("name")
         if not isinstance(name, str) or not name:
