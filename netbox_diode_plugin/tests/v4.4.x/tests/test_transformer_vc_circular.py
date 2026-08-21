@@ -111,7 +111,9 @@ class FingerprintDedupePostCreateIsolationTests(TestCase):
             "name": "vctf-dedupe-site",
         }
 
-        result = transformer._fingerprint_dedupe([site_a, device_post_create, site_b_dup])
+        # _fingerprint_dedupe returns (entities, refs_released) since the driver-field
+        # policy landed on develop; only the entity list matters here.
+        result, _ = transformer._fingerprint_dedupe([site_a, device_post_create, site_b_dup])
         self.assertEqual(len(result), 3)
 
         # (a) the duplicate site must dedupe onto the FIRST site entity.
