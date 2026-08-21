@@ -1088,3 +1088,68 @@ class InterfaceModeClearE2ETests(APITestCase):
         for quiet in range(1, 5):
             self.assertEqual(self._plan(payload).get("changes", []), [],
                              f"re-planned on quiet round {quiet}")
+
+    # --- P2-A: duplicate nodes that SPLIT the contradiction -------------------
+
+    def test_split_duplicate_nodes_do_not_merge_into_the_contradiction(self):
+        """Duplicate nodes that SPLIT mode and tagged_vlans still lose the forbidden field."""
+        # Measured on the pre-dedupe pass alone: neither node triggers the policy, because
+        # phase 1 needs the driver field PRESENT in the node it is looking at. The outer
+        # node carries mode "access" and no tagged_vlans; the nested one (reached through
+        # the device's primary_ip4 assignment) carries tagged_vlans and no mode. _merge_nodes
+        # then combined them INTO the contradiction -- merged data keys held both mode and
+        # tagged_vlans, change_set.warnings was None, and apply was a 400
+        # {"dcim.interface": {"tagged_vlans": ["Interface mode does not support tagged vlans"]}}.
+        # Running the policy a second time on the merged nodes is what closes it.
+        dev = self._device()
+        dev_with_ip = dict(dev, primary_ip4={
+            "address": "10.9.20.20/24",
+            "assigned_object_interface": {
+                "device": dev, "name": "Gi1/0/20", "type": "1000base-t",
+                "tagged_vlans": [{"vid": 520, "name": "split-v520", "status": "active"}],
+            },
+        })
+        payload = {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": {
+            "device": dev_with_ip, "name": "Gi1/0/20", "type": "1000base-t", "mode": "access",
+        }}}
+        cs = self._plan(payload)
+        iface_changes = [c for c in cs["changes"] if c["object_type"] == "dcim.interface"]
+        self.assertTrue(iface_changes)
+        for change in iface_changes:
+            self.assertNotIn("tagged_vlans", change.get("data", {}))
+        # reported exactly once, with both passes active
+        messages = cs.get("warnings", {}).get("dcim.interface", {}).get("tagged_vlans")
+        self.assertEqual(len(messages or []), 1, messages)
+        self._apply(cs)
+        iface = Interface.objects.get(name="Gi1/0/20", device__name=dev["name"])
+        self.assertEqual(iface.mode, "access")
+        self.assertEqual(iface.tagged_vlans.count(), 0)
+        for quiet in range(1, 5):
+            self.assertEqual(self._plan(payload).get("changes", []), [],
+                             f"re-planned on quiet round {quiet}")
+
+    def test_a_drop_reported_by_both_passes_is_one_warning(self):
+        """Pass 1 drops from one node, pass 2 from the merged node: still one message."""
+        # The mixed shape: the outer node carries BOTH mode and a forbidden tagged_vlans
+        # (pass 1 drops it and records the warning), the nested node carries a DIFFERENT
+        # tagged_vlans and no mode (pass 1 cannot see it; it survives the merge and pass 2
+        # drops it). Without dedupe on the message, change_set.warnings carried the same
+        # sentence twice for one field.
+        dev = self._device()
+        dev_with_ip = dict(dev, primary_ip4={
+            "address": "10.9.22.22/24",
+            "assigned_object_interface": {
+                "device": dev, "name": "Gi1/0/22", "type": "1000base-t",
+                "tagged_vlans": [{"vid": 522, "name": "mix-v522", "status": "active"}],
+            },
+        })
+        payload = {"timestamp": 1, "object_type": "dcim.interface", "entity": {"interface": {
+            "device": dev_with_ip, "name": "Gi1/0/22", "type": "1000base-t", "mode": "access",
+            "tagged_vlans": [{"vid": 523, "name": "mix-v523", "status": "active"}],
+        }}}
+        cs = self._plan(payload)
+        messages = cs["warnings"]["dcim.interface"]["tagged_vlans"]
+        self.assertEqual(len(messages), 1, messages)
+        self._apply(cs)
+        iface = Interface.objects.get(name="Gi1/0/22", device__name=dev["name"])
+        self.assertEqual(iface.tagged_vlans.count(), 0)

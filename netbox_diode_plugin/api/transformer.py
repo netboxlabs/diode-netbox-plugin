@@ -136,7 +136,11 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
 
     entities = _topo_sort(entities)
     # Let a submitted driver value win over the fields it forbids BEFORE anything else
-    # looks at those fields. Two orderings matter and this position satisfies both:
+    # looks at those fields. The policy runs on BOTH sides of _fingerprint_dedupe
+    # because duplicate representations of one object break the contradiction in two
+    # different ways, and each pass catches only its own.
+    #
+    # Three orderings matter and this position satisfies all three:
     #
     #   before _fingerprint_dedupe, because two nodes for the SAME object that carry the
     #   same submitted driver value but DIFFERENT forbidden values are duplicates that
@@ -153,6 +157,18 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     apply_submitted_driver_field_policy(entities)
     deduplicated = _fingerprint_dedupe(entities)
     deduplicated = _topo_sort(deduplicated)
+    # ... and AFTER dedupe, because duplicates can also SPLIT the contradiction instead
+    # of repeating it: phase 1 needs the driver field PRESENT in the node it is looking
+    # at, so a node carrying mode "access" with no VLANs and a node carrying
+    # tagged_vlans with no mode each pass the pre-dedupe check untouched, and
+    # _merge_nodes then combines them INTO the contradiction. Measured on v4.5.5: one
+    # graph naming Gi1/0/20 twice (the nested copy reached through the device's
+    # primary_ip4 assignment) merged to data keys [..., mode, ..., tagged_vlans, ...]
+    # with change_set.warnings None, and apply was a 400 "Interface mode does not
+    # support tagged vlans". Both passes are needed and neither is redundant; the
+    # policy is idempotent, so the field a pre-dedupe drop already removed is not
+    # dropped or warned about twice.
+    apply_submitted_driver_field_policy(deduplicated)
     _set_auto_slugs(deduplicated, supported_models)
     _handle_cached_scope(deduplicated, supported_models)
     resolved = _resolve_existing_references(deduplicated)

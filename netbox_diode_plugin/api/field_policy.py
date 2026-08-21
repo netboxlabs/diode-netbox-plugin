@@ -70,11 +70,15 @@ _DRIVER_FIELD_RULES = {
 
 # The policy runs in two phases, on purpose:
 #
-# Phase 1 — apply_submitted_driver_field_policy(), run by the transformer for every
-# entity BEFORE any fingerprinting. A driver value the producer SUBMITTED wins over
-# a field it forbids that the producer also submitted: the dependent field is
-# removed from the payload and the removal is reported as a warning. This is what
-# rescues a self-contradictory payload from a 400 that costs the whole entity.
+# Phase 1 — apply_submitted_driver_field_policy(), run by the transformer over the
+# whole entity graph, twice: once BEFORE fingerprint dedupe and once on the merged
+# nodes after it (see transform_proto_json for why both are needed). A driver value
+# the producer SUBMITTED wins over a field it forbids that the producer also
+# submitted: the dependent field is removed from the payload and the removal is
+# reported as a warning. This is what rescues a self-contradictory payload from a 400
+# that costs the whole entity. The pass is idempotent — once a field is gone there is
+# nothing left to drop and nothing new to warn about — so running it twice reports one
+# warning per field.
 #
 # Phase 2 — normalize_changeset(), run by the differ once an existing row has been
 # matched. It clears a STORED dependent value the effective driver value forbids, so
@@ -213,9 +217,12 @@ def apply_submitted_driver_field_policy(entities: list[dict]) -> None:
     """
     Phase 1: let each submitted driver value win over the fields it forbids.
 
-    Runs before fingerprinting, so it must be given transformed entity nodes.
-    Every dropped value is recorded in the node's ``_warnings``, which the differ
-    surfaces on the change set, so producer data is never discarded silently.
+    Takes transformed entity nodes and mutates them in place. Every dropped value is
+    recorded in the node's ``_warnings``, which the differ surfaces on the change set,
+    so producer data is never discarded silently.
+
+    Safe to run more than once over the same graph, which the transformer does: a field
+    that is already gone drops nothing and warns nothing.
     """
     for entity in entities:
         object_type = entity.get("_object_type")
@@ -226,7 +233,12 @@ def apply_submitted_driver_field_policy(entities: list[dict]) -> None:
             continue
         entity_warnings = entity.setdefault("_warnings", {})
         for field, reason in dropped.items():
-            entity_warnings.setdefault(field, []).append(reason)
+            messages = entity_warnings.setdefault(field, [])
+            # One drop of one field is one message. This pass runs twice and
+            # _merge_nodes unions the warnings of merged duplicates, so the same
+            # sentence can arrive from more than one of those steps.
+            if reason not in messages:
+                messages.append(reason)
         logger.debug(f"Dropped {sorted(dropped)} from {object_type}: forbidden by the submitted driver value")
 
 
