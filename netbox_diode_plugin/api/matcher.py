@@ -503,29 +503,12 @@ def annotate_vc_member_counts(queryset):
 
 def _vc_ambiguity_remedy(data: dict) -> str:
     """
-    What the operator can actually DO about two rows one name matched.
+    What the operator can actually do about two rows one name matched.
 
-    Split by what the payload asserts, because the two halves have different
-    ways out and an earlier single sentence offered the wrong one to the half
-    that reaches it most often. It read "give one of those rows a domain the
-    others do not have" and prefixed the whole list with "which needs no change
-    to what the producer sends" -- both true only where a domain IS asserted.
-
-    Measured, on the unasserted half: narrow_vc_candidates iterates the
-    discriminators the PAYLOAD asserts, so with none asserted it narrows
-    nothing, and labelling a row leaves the candidate set exactly as it was.
-    Two same-named populated rows, one of them then given a domain, still raise
-    this same error for the same payload -- and so do two rows carrying
-    DIFFERENT domains from the start (VirtualChassisAmbiguityTests's own
-    fixture). Advice that cannot change the outcome is not a remedy; on that
-    half the domain now appears only as what it is, a change to what the
-    producer sends, paired with the row that must then carry it.
-
-    What is left is what works on both halves and is checked by a test:
-    merging the duplicates, or placing the referencing device in the chassis it
-    belongs to -- rule 1 above then answers from the database. Placing it
-    covers the case where the device does not exist yet, which is why it says
-    to create it there.
+    Split by what the payload asserts, because the halves have different ways
+    out: narrowing reads the payload, not the rows, so labelling a row settles
+    nothing for a payload that asserts no discriminator. Offering it there is
+    advice that cannot be followed.
     """
     fields = " or ".join(_VC_DISCRIMINATORS)
     placement = (
