@@ -604,7 +604,11 @@ class VirtualChassisMatcherRefusalMatrixTests(TestCase):
         # even the oracle cannot see a third: build_queryset filters on name
         # alone while _build names every row NAME, so `found.name == NAME` is
         # vacuously true. A cell observes resolved / none / ambiguous plus the
-        # refusal text, and every branch of all four is reachable with two rows.
+        # refusal text. Every branch any cell here can reach is reachable with
+        # two rows -- not every branch resolve HAS: the "referencing members
+        # already belong to DIFFERENT candidates" refusal needs two hinted
+        # members and this enumeration hints one, so it is unreachable at any
+        # row count and is covered by its own scenario test instead.
         for length in range(3):
             for shapes in itertools.product("EPLM", repeat=length):
                 for domain in (None, "", LABEL, OTHER_LABEL):

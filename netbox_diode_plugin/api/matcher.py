@@ -553,15 +553,6 @@ def vc_identities_conflict(a: dict, b: dict) -> bool:
     return False
 
 
-def _vc_identities_agree(identities: list[dict]) -> bool:
-    """True when no two of these asserted identities conflict."""
-    return not any(
-        vc_identities_conflict(a, b)
-        for i, a in enumerate(identities)
-        for b in identities[i + 1:]
-    )
-
-
 def _vc_identity_key(identity: dict) -> tuple:
     """A hashable form of an asserted identity: nodes making one claim group as one."""
     return tuple(sorted(identity.items(), key=lambda item: item[0]))
@@ -629,10 +620,19 @@ def _place_unseeded_vc_nodes(
     Every one of them is resolved against the SEEDED groups before any of them
     moves, so no node's answer can depend on which node arrived first. Nodes
     asserting the same thing are bucketed and travel together; a bucket joins a
-    group only when that group is the only one that can take it AND it is the
-    only claim on that group that could be true -- two buckets asserting
+    group when that group is the only one that can take it AND no other bucket
+    claiming that same group CONFLICTS WITH THIS ONE -- two buckets asserting
     different domains, both compatible with one group that says nothing about
     domains, are both refused rather than settled by arrival order.
+
+    The test is against this bucket, not across the claimants collectively. A
+    bucket that asserts NOTHING conflicts with nobody, so two OTHER buckets
+    disagreeing with each other must not take it down with them: they are each
+    refused and get their own group, so they never join, and the silent bucket's
+    claim was unambiguous all along. Reading the claimants as a group refused it
+    anyway -- usually a member device's name-only chassis reference, pushed into
+    a chassis of its own that nothing identified, which is the outcome refusing
+    exists to avoid.
     """
     buckets: dict[tuple, list[int]] = {}
     for i, identity in enumerate(identities):
@@ -653,8 +653,14 @@ def _place_unseeded_vc_nodes(
 
     for key, members in buckets.items():
         group_ids = takers[key]
-        if len(group_ids) == 1 and _vc_identities_agree(
-            [identities[buckets[claim][0]] for claim in claimants[group_ids[0]]]
+        mine = identities[members[0]]
+        rivals = [
+            identities[buckets[claim][0]]
+            for claim in (claimants.get(group_ids[0], ()) if len(group_ids) == 1 else ())
+            if claim != key
+        ]
+        if len(group_ids) == 1 and not any(
+            vc_identities_conflict(mine, rival) for rival in rivals
         ):
             group_id = group_ids[0]
         else:
@@ -733,8 +739,12 @@ def partition_vc_identities(identities: list[dict]) -> list[int]:
     exactly the order-dependence being avoided.
 
     A group's own identity is what its seeded members agree on; a field they
-    contradict each other about is CONTESTED and then matches no assertion at
-    all. That disagreement is still _merge_nodes' to report -- partitioning
+    contradict each other about is CONTESTED, which CONFLICTS with every
+    assertion about that field rather than merely failing to match one -- so a
+    node asserting it cannot join that group at all, which is the point: nothing
+    is attracted by whichever value happened to arrive first. Assertions from
+    the nodes placed in step 3 are absorbed the same way, so a group can become
+    contested after seeding too. That disagreement is still _merge_nodes' to report -- partitioning
     decides which nodes are one chassis, never whether their fields agree.
     """
     assigned: list[int | None] = [None] * len(identities)

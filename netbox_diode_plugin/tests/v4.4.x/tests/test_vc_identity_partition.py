@@ -174,19 +174,24 @@ class VirtualChassisIdentityPartitionTests(APITestCase):
             {d.name for d in by_master["fpm-b1"].members.all()}, {"fpm-b1", "fpm-d2"})
         self._assert_noop_rediff(payload)
 
-    def test_two_labelled_stacks_that_exist_are_each_matched_by_their_domain(self):
+    def test_two_labelled_stacks_that_exist_are_each_matched_to_their_own_row(self):
         """
-        Same name, different domains, and both rows already in NetBox: two noops.
+        Same name, different domains, both rows already in NetBox: two noops.
 
-        This is the reading the fix takes on domain, and the measurement that
-        chose it. matcher._VC_DISCRIMINATORS already commits to a domain telling
-        same-named chassis APART -- narrow_vc_candidates uses exactly these two
-        rows to resolve exactly this reference. Merging the nodes first denied
-        the matcher the chance: the entity was rejected with "Conflicting values
-        for 'domain'" before any lookup ran, even though NetBox held an
-        unambiguous answer for each node. Treating the two domains as ONE
-        contradictory description would have kept it that way, and would leave
-        the plugin with two notions of VC identity that disagree.
+        What this pins is the PARTITION, not the domain narrowing. Merging the
+        two nodes denied the matcher any chance to answer: the entity was
+        rejected with "Conflicting values for 'domain'" before a lookup ran,
+        even though NetBox held an unambiguous answer for each node. Now each
+        node reaches the matcher and lands on its own row.
+
+        Be precise about WHICH rule answers here, because the name this test
+        used to carry credited the wrong one: each referencing device is already
+        a member of the row it names, so resolve rule 1 (a referencing member
+        already belongs to one candidate) answers before the domain is
+        consulted at all. The domain is what makes the two nodes two identities
+        in the transformer; it is not what picks the rows here.
+        test_a_new_member_is_narrowed_by_the_domain_it_asserts isolates the
+        narrowing, with a device that belongs to neither row.
         """
         row_a = self._seed_labelled_stack("fpl-stack", "building-a", "fpl-a1")
         row_b = self._seed_labelled_stack("fpl-stack", "building-b", "fpl-b1")
@@ -211,6 +216,42 @@ class VirtualChassisIdentityPartitionTests(APITestCase):
             row.refresh_from_db()
             self.assertEqual(row.domain, domain)
             self.assertEqual([d.name for d in row.members.all()], [member])
+
+    def test_a_new_member_is_narrowed_by_the_domain_it_asserts(self):
+        """
+        Domain narrowing on its own, with rule 1 unable to answer.
+
+        Two same-named rows carry different domains, and the device referencing
+        the chassis belongs to NEITHER -- so the member-ownership rule that
+        answers in the test above has nothing to say, and the asserted domain is
+        the only thing that can choose. It picks the row that carries it, and
+        the device joins that row rather than the older one.
+
+        This is the assertion the sibling test was miscredited with, and the
+        thing _VC_DISCRIMINATORS commits to: narrow_vc_candidates keeps only the
+        candidates carrying an asserted value.
+        """
+        row_a = self._seed_labelled_stack("fpn-stack", "building-a", "fpn-a1")
+        row_b = self._seed_labelled_stack("fpn-stack", "building-b", "fpn-b1")
+        payload = {"timestamp": 1, "object_type": "dcim.device", "entity": {"device":
+            self._device("fpn-new", vc_position=7, virtual_chassis={
+                "name": "fpn-stack", "domain": "building-b",
+            })}}
+
+        cs = self._plan(payload)
+        self.assertEqual(
+            {c["object_id"] for c in self._vc_changes(cs)}, {row_b.pk},
+            "the asserted domain did not choose the row carrying it",
+        )
+        self._apply(cs)
+
+        joined = Device.objects.get(name="fpn-new")
+        self.assertEqual(joined.virtual_chassis_id, row_b.pk)
+        self.assertEqual(
+            sorted(row_a.members.values_list("name", flat=True)), ["fpn-a1"],
+            "the row whose domain was NOT asserted gained a member",
+        )
+        self._assert_noop_rediff(payload)
 
     def test_the_reported_domain_payload_is_rejected_not_half_applied(self):
         """
@@ -372,7 +413,9 @@ class VirtualChassisIdentityPartitionTests(APITestCase):
 
         errors = self._refused(self._cabled(near, far, iface="Gi0/4"))
         self.assertIn("Conflicting values for 'domain'", errors)
-        self.assertEqual(VirtualChassis.objects.count(), 0)
+        # No row-count assertion here: _refused only posts to /generate-diff/,
+        # which never writes, so "count == 0" could not fail and proved nothing.
+        # What matters is that the refusal names the field, above.
 
     def test_a_non_identity_field_disagreement_is_still_a_conflict(self):
         """
@@ -393,7 +436,7 @@ class VirtualChassisIdentityPartitionTests(APITestCase):
 
         errors = self._refused(self._cabled(near, far, iface="Gi0/5"))
         self.assertIn("Conflicting values for 'description'", errors)
-        self.assertEqual(VirtualChassis.objects.count(), 0)
+        # See above: planning writes nothing, so a row count here is vacuous.
 
     # ---- the bound of the finding ------------------------------------------
 
@@ -593,6 +636,22 @@ class VCIdentityPartitionRuleTests(SimpleTestCase):
                 {"name": "s"},
             ),
             [0, 0, 0],
+        )
+        # And still placed when BOTH contradicting claimants are present. This
+        # is the one the collective reading got wrong: it asked whether the
+        # claimants agreed with each other, so "a" disagreeing with "b" refused
+        # the silent node too -- a member's name-only chassis reference pushed
+        # into a chassis of its own that nothing identified. "a" and "b" are
+        # each refused and never join group 0, so the silent claim on it was
+        # unambiguous all along.
+        self.assertEqual(
+            self._partition(
+                {"name": "s", "master": self.M1},
+                {"name": "s", "domain": "a"},
+                {"name": "s", "domain": "b"},
+                {"name": "s"},
+            ),
+            [0, 1, 2, 0],
         )
 
     def test_conflict_is_symmetric_and_silence_conflicts_with_nothing(self):
