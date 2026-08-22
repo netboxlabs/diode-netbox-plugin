@@ -691,6 +691,10 @@ def vc_unique_master_fingerprint(data: dict):
 
     Returns None when the payload asserts no master, in which case nothing is
     exempt and every fingerprint is qualified.
+
+    The caller withholds the exemption from a node carrying an explicit
+    ``_netbox_id``: "two nodes naming one master are one row" holds only while
+    neither has said WHICH row, and two nodes addressing different rows have.
     """
     for matcher in get_model_matchers(get_object_type_model("dcim.virtualchassis")):
         if getattr(matcher, "name", None) == "unique_master":

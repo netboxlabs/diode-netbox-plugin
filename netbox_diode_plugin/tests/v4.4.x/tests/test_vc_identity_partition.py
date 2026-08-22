@@ -761,6 +761,58 @@ class VCPartitionKeyScopeTests(TestCase):
         self.assertEqual(self._distinct(result), 2, "two separately addressed rows merged")
         self.assertEqual({e["_netbox_id"] for e in result}, {4001, 4002})
 
+    def test_two_addressed_rows_are_not_remerged_by_a_shared_master(self):
+        """
+        The unique_master exemption must not undo the partition's own answer.
+
+        Exempting unique_master from qualification is what lets two nodes naming
+        one master meet across different names. That reasoning holds only while
+        neither node has said WHICH row it is: here both carry an explicit
+        _netbox_id, they address DIFFERENT rows, and they happen to submit the
+        same master. The partition separates them correctly, and the bare master
+        fingerprint then merged them straight back -- silently, because
+        _merge_nodes ignores conflicts in private fields, so nothing reported
+        the _netbox_id disagreement and one addressed row simply disappeared
+        (measured: two nodes in, one out, both carrying 5001).
+
+        A shared master here is contradictory input, not evidence of sameness:
+        VirtualChassis.master is unique, so one master cannot be on two rows.
+        Keeping the nodes apart lets the constraint that owns that rule refuse
+        it, instead of the dedupe quietly picking a winner.
+        """
+        nodes = [
+            dict(self._addressed("vc-1", "fpm-stack", 5001),
+                 master=UnresolvedReference(object_type="dcim.device", uuid="dev-m")),
+            dict(self._addressed("vc-2", "fpm-stack", 5002),
+                 master=UnresolvedReference(object_type="dcim.device", uuid="dev-m")),
+        ]
+        result, _ = transformer._fingerprint_dedupe(nodes)
+        self.assertEqual(self._distinct(result), 2,
+                         "a shared master re-merged two separately addressed rows")
+        self.assertEqual({e["_netbox_id"] for e in result}, {5001, 5002})
+
+    def test_an_addressed_node_still_merges_with_a_silent_one_naming_its_master(self):
+        """
+        The boundary the fix above could have broken, so it is pinned.
+
+        One node addresses a row and names a master; the other names only the
+        same master. Withholding the unique_master exemption from the addressed
+        node must not separate them: the silent node has said nothing about
+        WHICH row, so it does not contradict the addressed one -- they are one
+        group, share a qualifier, and meet on the qualified name key instead.
+        """
+        nodes = [
+            dict(self._addressed("vc-1", "fpx-stack", 6001),
+                 master=UnresolvedReference(object_type="dcim.device", uuid="dev-m")),
+            {"_uuid": "vc-2", "_object_type": "dcim.virtualchassis", "_refs": set(),
+             "name": "fpx-stack",
+             "master": UnresolvedReference(object_type="dcim.device", uuid="dev-m")},
+        ]
+        result, _ = transformer._fingerprint_dedupe(nodes)
+        self.assertEqual(self._distinct(result), 1,
+                         "a silent node was separated from the row it agrees with")
+        self.assertEqual(result[0]["_netbox_id"], 6001)
+
     def test_two_nodes_addressing_the_same_row_still_merge(self):
         """The other direction: one id named twice is one node, as before."""
         nodes = [

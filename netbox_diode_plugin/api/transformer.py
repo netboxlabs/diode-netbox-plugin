@@ -870,7 +870,18 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
                 # other way: the whole-payload key ignores private fields, so two
                 # nodes differing only in _netbox_id hashed identically and merged
                 # straight back together, dropping one addressed row.
-                keep = vc_unique_master_fingerprint(entity)
+                # ...unless this node ADDRESSES a row. The exemption rests on
+                # "two nodes naming one master are one row", which is true only
+                # while neither says which row it is. Two nodes explicitly
+                # addressing DIFFERENT rows have said they are two, so a shared
+                # master is contradictory data rather than evidence of sameness
+                # -- and merging them dropped one addressed row silently,
+                # because _merge_nodes ignores conflicts in private fields, so
+                # nothing reported the _netbox_id disagreement. Qualified, they
+                # stay apart and the impossible request (one unique master on
+                # two rows) is refused by the constraint that owns it.
+                keep = (None if entity.get('_netbox_id') is not None
+                        else vc_unique_master_fingerprint(entity))
                 fps = [fp if keep is not None and fp == keep else (fp, group)
                        for fp in fps]
             for fp in fps:
