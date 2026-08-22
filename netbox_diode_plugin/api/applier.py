@@ -44,6 +44,7 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     _validate_change_set(change_set)
 
     created = {}
+    warnings: list[dict] = []
     for change in change_set.changes:
         change_type = change.change_type
         object_type = change.object_type
@@ -54,7 +55,7 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         try:
             model_class = get_object_type_model(object_type)
             data = _pre_apply(model_class, change, created)
-            _apply_change(data, model_class, change, created, request, change_set)
+            _apply_change(data, model_class, change, created, request, change_set, warnings)
         except ValidationError as e:
             raise error_from_validation_error(e, object_type)
         except ObjectDoesNotExist:
@@ -82,6 +83,7 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
 
     return ChangeSetResult(
         id=change_set.id,
+        warnings=warnings or None,
     )
 
 def _is_auto_created_component(object_type: str) -> bool:
@@ -101,7 +103,8 @@ def _is_auto_created_component(object_type: str) -> bool:
     return object_type in auto_created_components
 
 
-def _try_pre_save_match(data: dict, object_type: str, serializer_class, request):
+def _try_pre_save_match(data: dict, object_type: str, serializer_class, request,
+                        warnings: list | None = None):
     """
     Resolve a CREATE onto the row it duplicates, or return None to insert.
 
@@ -120,11 +123,13 @@ def _try_pre_save_match(data: dict, object_type: str, serializer_class, request)
       always done. See _try_find_and_update_existing_instance.
     """
     if pre_save_match_binds_only(object_type):
-        return _try_bind_existing_instance(data, object_type, serializer_class, request)
+        return _try_bind_existing_instance(
+            data, object_type, serializer_class, request, warnings)
     return _try_find_and_update_existing_instance(data, object_type, serializer_class, request)
 
 
-def _try_bind_existing_instance(data: dict, object_type: str, serializer_class, request):
+def _try_bind_existing_instance(data: dict, object_type: str, serializer_class, request,
+                               warnings: list | None = None):
     """
     Resolve a CREATE onto an existing row WITHOUT applying its payload.
 
@@ -195,9 +200,87 @@ def _try_bind_existing_instance(data: dict, object_type: str, serializer_class, 
     # Validate against the matched row, then discard the result. No save(), so
     # no write, no changelog row, no last_updated bump -- only the payload
     # errors the parent commit reported.
+    # Snapshot BEFORE validating. Validation mutates the in-memory instance --
+    # measured: after is_valid the row object already carries the submitted
+    # description -- so comparing against it afterwards reports nothing dropped.
+    # Nothing is written either way; only this object's attributes change.
+    before = _bind_snapshot(instance, data) if warnings is not None else None
     serializer = serializer_class(instance, data=data, partial=True, context={"request": request})
     serializer.is_valid(raise_exception=True)
+    if warnings is not None:
+        _warn_bind_discarded_fields(warnings, instance, object_type, serializer, before)
     return instance
+
+
+# A value that could not be read, so it compares equal to nothing and its field
+# is reported as dropped. Under-reporting a lost write is the failure that
+# matters; over-reporting one is noise.
+_BIND_UNREADABLE = object()
+
+
+def _bind_comparable(value):
+    """Reduce a field value to something two sides can be compared by."""
+    if hasattr(value, "all"):
+        return {obj.pk for obj in value.all()}
+    if isinstance(value, (list, tuple, set)):
+        return {getattr(item, "pk", item) for item in value}
+    return getattr(value, "pk", value)
+
+
+def _bind_snapshot(instance, data: dict) -> dict:
+    """The row's current values for the fields this payload submits."""
+    snapshot = {}
+    for name in data:
+        if name.startswith("_"):
+            continue
+        try:
+            snapshot[name] = _bind_comparable(getattr(instance, name))
+        except Exception:
+            snapshot[name] = _BIND_UNREADABLE
+    return snapshot
+
+
+def _warn_bind_discarded_fields(warnings: list, instance, object_type: str, serializer,
+                                before: dict) -> None:
+    """
+    Say that a bind happened and which submitted values it did not store.
+
+    A bind answers 200 having deliberately written nothing, so without this the
+    caller is told its change applied when its payload was discarded. A producer
+    that replays its state converges on the next pass, through the object-id
+    UPDATE the row's existence now makes plannable; a one-shot or push-on-change
+    producer never sends that pass and would otherwise never learn.
+
+    Only fields whose submitted value differs from what the row held are named --
+    the ones actually dropped -- against a snapshot taken before validation,
+    because validating mutates the in-memory instance. A field that could not be
+    read is named rather than skipped.
+    """
+    dropped = []
+    for name, value in (serializer.validated_data or {}).items():
+        try:
+            submitted = _bind_comparable(value)
+        except Exception:
+            dropped.append(name)
+            continue
+        if before.get(name, _BIND_UNREADABLE) != submitted:
+            dropped.append(name)
+    dropped.sort()
+    if not dropped:
+        return
+    warnings.append({
+        "object_type": object_type,
+        "object_id": instance.pk,
+        "fields": dropped,
+        "message": (
+            f"Bound this create to the existing {object_type} with id {instance.pk} "
+            f"instead of inserting a duplicate, but did not apply "
+            f"{', '.join(dropped)}: the match is not authoritative, because the "
+            f"criteria it used carry no database uniqueness, so the row may be a "
+            f"different object that merely matches. Re-plan this entity to apply "
+            f"them through an update addressed by object_id."
+        ),
+    })
 
 
 def _try_find_and_update_existing_instance(data: dict, object_type: str, serializer_class, request):
@@ -1026,7 +1109,7 @@ def _create_or_find_instance(data: dict, object_type: str, serializer_class, req
 
 
 def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict, request,
-                  change_set: ChangeSet):
+                  change_set: ChangeSet, warnings: list | None = None):
     serializer_class = get_serializer_for_model(model_class)
     change_type = change.change_type
 
@@ -1058,7 +1141,8 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         # _try_pre_save_match answers per type.
         instance = None
         if _is_auto_created_component(change.object_type) or requires_pre_save_match(change.object_type, data):
-            instance = _try_pre_save_match(data, change.object_type, serializer_class, request)
+            instance = _try_pre_save_match(
+                data, change.object_type, serializer_class, request, warnings)
 
         if not instance and (adopt := _CREATE_ADOPTERS.get(change.object_type)):
             # The whole changeset is passed, not just this change: whether a row

@@ -285,6 +285,9 @@ class ChangeSetResult:
     id: str | None = field(default_factory=lambda: str(uuid.uuid4()))
     change_set: ChangeSet | None = field(default=None)
     errors: dict | None = field(default=None)
+    # Things that happened which the caller would not infer from a 200. Absent
+    # from the response unless there is one, so a clean apply is unchanged.
+    warnings: list | None = field(default=None)
 
     def to_dict(self) -> dict:
         """Convert the result to a dictionary."""
@@ -292,6 +295,9 @@ class ChangeSetResult:
             "id": self.id,
             "errors": self.errors,
         }
+
+        if self.warnings:
+            result["warnings"] = self.warnings
 
         if self.change_set:
             result["change_set"] = self.change_set.to_dict()

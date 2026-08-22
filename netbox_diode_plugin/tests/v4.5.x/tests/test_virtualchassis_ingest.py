@@ -1914,6 +1914,71 @@ class VirtualChassisIngestE2ETests(APITestCase):
                     )
                     self._assert_member_count_is_honest(vc)
 
+    def test_a_bind_says_which_submitted_values_it_discarded(self):
+        """
+        A bind answers 200 having written nothing, so it has to say so.
+
+        Refusing the write is right -- the criteria carry no database uniqueness,
+        so the row may be a different object that merely matches -- but a caller
+        told only "200, errors null" has been told its change applied when its
+        payload was dropped. A producer that replays its whole state converges
+        on the next pass, through the object-id UPDATE the row's existence now
+        makes plannable; a one-shot or push-on-change producer never sends that
+        pass and would never learn.
+
+        The warning names only what was actually dropped. `name` was submitted
+        too and is NOT named, because the row already carries it -- proof that
+        this reports discarded writes rather than every field in the payload.
+        """
+        name = "vce-warns"
+        vc = self._seed_row_kind("masterless_populated", name)
+
+        r = self.client.post(
+            self.apply_url,
+            data={
+                "id": str(uuid.uuid4()),
+                "changes": [{
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.virtualchassis",
+                    "object_id": None,
+                    "ref_id": "1",
+                    "data": {"name": name, "description": "FROM-A"},
+                }],
+            },
+            format="json", **self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertIsNone(body.get("errors"))
+
+        warnings = body.get("warnings")
+        self.assertEqual(len(warnings or []), 1, body)
+        warning = warnings[0]
+        self.assertEqual(warning["object_type"], "dcim.virtualchassis")
+        self.assertEqual(warning["object_id"], vc.pk)
+        self.assertIn("description", warning["fields"])
+        self.assertNotIn(
+            "name", warning["fields"],
+            "reported a field the row already carried, so this is not a discard report",
+        )
+        self.assertIn("object_id", warning["message"])
+
+    def test_an_ordinary_apply_carries_no_warnings_key(self):
+        """The key is absent unless something happened, so a clean apply is unchanged."""
+        payload = self._device_payload("vce-nowarn", {
+            "vc_position": 1,
+            "virtual_chassis": {
+                "name": "vce-nowarn-stack",
+                "master": {"name": "vce-nowarn", "site": {"name": "vce-site"}},
+            },
+        })
+        cs = self._diff(payload)
+        r = self.client.post(self.apply_url, data=cs, format="json", **self.auth)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertNotIn("warnings", r.json())
+
     def test_a_contradicting_domain_takes_its_own_row(self):
         """
         The other half of the bind-only contract: a domain the row lacks is identity.
