@@ -195,6 +195,56 @@ class VirtualChassisAmbiguityTests(TestCase):
 
         cls.loose = Device.objects.create(name="vcx-loose", **cls.kw)
 
+    def test_an_asserted_domain_outranks_the_member_hint(self):
+        """
+        A move the payload asks for must not become a rewrite of the row it left.
+
+        vcx-a1 is already a member of the building-a row, and its payload names
+        the chassis with domain building-b. Membership used to answer first, so
+        this resolved to the building-a row -- and the plan then UPDATED that
+        row's domain to "building-b" and left the device where it was,
+        overwriting the discriminator that identifies somebody's stack instead
+        of performing the move. Measured before the fix: resolved to the
+        building-a row in both cases below.
+
+        A non-empty discriminator is identity, so it excludes rows before any
+        other rule looks at them; membership then chooses among what is left,
+        which is what membership is good for.
+        """
+        self.assertEqual(
+            find_existing_object(
+                {"name": "vcx-shared", "domain": "building-b",
+                 VC_MEMBER_HINT: [self.a1.pk]},
+                "dcim.virtualchassis"),
+            self.vc_b,
+            "the member hint overrode an explicit domain",
+        )
+
+    def test_a_domain_no_row_carries_creates_rather_than_rewriting_one(self):
+        """
+        The same failure with nothing to move to: create, do not overwrite.
+
+        The payload asserts a domain neither row carries, so it describes a
+        chassis that does not exist yet. Returning None creates it. Answering
+        with the row the device happens to sit in would rewrite that row's
+        domain on every pass and never move anything.
+        """
+        self.assertIsNone(
+            find_existing_object(
+                {"name": "vcx-shared", "domain": "building-nowhere",
+                 VC_MEMBER_HINT: [self.a1.pk]},
+                "dcim.virtualchassis"),
+        )
+
+    def test_the_member_hint_still_decides_when_no_domain_is_asserted(self):
+        """The control: with nothing asserted, existing membership answers."""
+        self.assertEqual(
+            find_existing_object(
+                {"name": "vcx-shared", VC_MEMBER_HINT: [self.a1.pk]},
+                "dcim.virtualchassis"),
+            self.vc_a,
+        )
+
     def test_two_populated_rows_refuse_to_resolve(self):
         """
         The core refusal, with an error that names both rows and the way out.

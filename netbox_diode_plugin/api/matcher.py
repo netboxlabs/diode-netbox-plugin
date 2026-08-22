@@ -1630,15 +1630,33 @@ class VirtualChassisNameMatcher:
         candidates = list(annotate_vc_member_counts(queryset).order_by("pk"))
         if not candidates:
             return None
+
+        # A NON-EMPTY asserted discriminator speaks FIRST, before the rules
+        # below -- including before existing membership. It is the payload
+        # saying "not that row", and it has to mean that whether the name
+        # matched one row or twenty; an earlier revision applied it only to the
+        # single-candidate case, and the member hint then short-circuited it.
+        # Measured with two rows "a" and "b" and a device already in "a" whose
+        # payload asserts domain "b": membership answered "a", so the plan
+        # UPDATED a's domain to "b" and left the device where it was --
+        # overwriting the discriminator that identifies that row instead of
+        # performing the move the payload asked for. Same when the asserted
+        # domain matches no row at all.
+        #
+        # Excluding here leaves membership to choose among the rows that are
+        # still COMPATIBLE, which is what it is good for. An EMPTY assertion is
+        # not applied here: `domain: ""` narrows but never identifies, so it
+        # stays with the ordinary narrowing below, where it cannot turn the
+        # single-row case into a duplicate insert.
+        compatible = [c for c in candidates if not contradicting_vc_discriminator(c, data)]
+        if not compatible:
+            # The payload describes a chassis none of these rows is. Create it
+            # rather than bind a row it has just contradicted and re-plan the
+            # difference forever.
+            return None
+        candidates = compatible
+
         if len(candidates) == 1:
-            # Rule 0, with one thing able to overrule it: a NON-EMPTY
-            # discriminator the row does not carry. That is the payload saying
-            # "not this row", and it means the same thing whether the name
-            # matched one row or twenty. Returning None here creates the
-            # chassis the payload describes instead of binding one it just
-            # contradicted and re-planning the difference forever.
-            if contradicting_vc_discriminator(candidates[0], data):
-                return None
             return candidates[0]
 
         name = data.get("name")
