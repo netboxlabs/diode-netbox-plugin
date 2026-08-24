@@ -2019,6 +2019,78 @@ class VirtualChassisIngestE2ETests(APITestCase):
                 self.assertEqual(Device.objects.get(name=dev_name).vc_position, 5)
                 self._assert_noop_rediff(payload)
 
+    def _two_members_naming_one_master(self, vc_name, master, near_pos, far_pos,
+                                       master_pos_a, master_pos_b):
+        """One graph naming the same master twice, through two member devices."""
+        def member(name, position, master_position):
+            return self._device_payload(name, {
+                "vc_position": position,
+                "virtual_chassis": {
+                    "name": vc_name,
+                    "master": self._device_payload(
+                        master, {"vc_position": master_position})["entity"]["device"],
+                },
+            })["entity"]["device"]
+
+        def termination(device):
+            return [{"object_interface": {
+                "device": device, "name": "Gi0/9", "type": "1000base-t"}}]
+
+        return {"timestamp": 1, "object_type": "dcim.cable", "entity": {"cable": {
+            "a_terminations": termination(member(f"{master}-n1", near_pos, master_pos_a)),
+            "b_terminations": termination(member(f"{master}-n2", far_pos, master_pos_b)),
+            "status": "connected", "type": "cat6",
+        }}}
+
+    def test_duplicate_master_stubs_that_disagree_are_a_conflict(self):
+        """
+        A companion moved onto a deferred step must still be able to conflict.
+
+        Post-create steps are deliberately never dedupe candidates, but their
+        _instance IS canonicalised through the dedupe -- so two duplicate nodes
+        that merge into one device leave TWO deferred steps pointing at it. That
+        is invisible rather than merely redundant when they disagree, because
+        moving the companions onto those steps takes the disagreement off the
+        main nodes BEFORE they merge, which is where it would have been caught.
+
+        Measured before the fix, one graph naming the same master with
+        vc_position 5 and 7: both updates planned, apply 200 with no conflict,
+        and the stored position alternated 5, 7, 5 over three identical
+        ingests. A successful apply that never converges.
+
+        Now it is the same conflict the main nodes would have raised.
+        """
+        payload = self._two_members_naming_one_master(
+            "vce-dupm", "vce-dupmm", near_pos=2, far_pos=3,
+            master_pos_a=5, master_pos_b=7)
+        r = self.client.post(self.diff_url, data=payload, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        message = str(r.json()["errors"])
+        self.assertIn("Conflicting values for 'vc_position'", message)
+        self.assertIn("dcim.device", message)
+
+    def test_duplicate_master_stubs_that_agree_plan_one_step(self):
+        """
+        The other half: agreeing steps collapse rather than writing twice.
+
+        Two deferred updates for one device were emitted even when they said
+        the same thing -- harmless, but a duplicate write and a duplicate
+        changelog row. They are one step now, and the ingest converges.
+        """
+        payload = self._two_members_naming_one_master(
+            "vce-agrm", "vce-agrmm", near_pos=2, far_pos=3,
+            master_pos_a=5, master_pos_b=5)
+        cs = self._diff(payload)
+        master_steps = [
+            c for c in cs["changes"]
+            if c["object_type"] == "dcim.device"
+            and (c.get("data") or {}).get("vc_position") == 5
+        ]
+        self.assertEqual(len(master_steps), 1, master_steps)
+        self._diff_apply(payload)
+        self.assertEqual(Device.objects.get(name="vce-agrmm").vc_position, 5)
+        self._assert_noop_rediff(payload)
+
     def test_a_position_survives_an_unrelated_deferred_field_on_the_master(self):
         """
         An existing post-create step must be EXTENDED, not read as job done.

@@ -355,7 +355,7 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     defaulted = _set_defaults(resolved, supported_models)
 
     # handle post-create steps
-    output = _handle_post_creates(defaulted)
+    output = _handle_post_creates(_consolidate_post_creates(defaulted))
 
     _check_unresolved_refs(output)
     for entity in output:
@@ -1286,6 +1286,50 @@ def cleanup_unresolved_references(data: dict) -> list[str]:
             for uu in cleanup_unresolved_references(v):
                 unresolved.add(f"{k}.{uu}")
     return sorted(unresolved)
+
+def _consolidate_post_creates(entities: list[dict]) -> list[dict]:
+    """
+    One deferred step per object, so a duplicated node cannot flip its own field.
+
+    Post-create nodes are deliberately never dedupe candidates -- they register
+    no fingerprints. But their ``_instance`` IS canonicalised through the dedupe
+    (_update_unresolved_refs), so two duplicate payload nodes that merged into
+    one object leave TWO deferred steps pointing at it, and both are emitted.
+
+    That is invisible rather than merely redundant when the steps disagree,
+    because moving the companion scalars onto them (_move_deferred_companions,
+    _defer_nested_companions) takes the disagreement off the main nodes before
+    those are merged -- which is where _merge_nodes would have reported it.
+
+    Measured, one graph naming the same master twice with vc_position 5 and 7:
+    two deferred updates planned, apply 200 with no conflict, and the stored
+    position ALTERNATED 5, 7, 5 over three identical ingests. A successful
+    apply that never converges is the failure this branch exists to remove.
+
+    Merging here restores the report: steps that agree collapse into one update
+    (also removing a duplicate write that was pointless even when it was
+    harmless), and steps that disagree raise the same conflict the main nodes
+    would have raised, through the same _merge_nodes path.
+    """
+    first_index: dict[str, int] = {}
+    out: list[dict] = []
+    for entity in entities:
+        if not entity.get('_is_post_create'):
+            out.append(entity)
+            continue
+        instance = entity.get('_instance')
+        index = first_index.get(instance)
+        if index is None:
+            first_index[instance] = len(out)
+            out.append(entity)
+            continue
+        merged = _merge_nodes(out[index], entity)
+        # Keep the survivor's identity: later nodes may already reference it,
+        # and its position in the list is the order the step was planned for.
+        merged['_uuid'] = out[index]['_uuid']
+        out[index] = merged
+    return out
+
 
 def _handle_post_creates(entities: list[dict]) -> list[str]:
     """Merges any unnecessary post-create steps for existing objects."""
