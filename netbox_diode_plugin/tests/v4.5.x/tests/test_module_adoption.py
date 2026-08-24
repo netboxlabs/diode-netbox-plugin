@@ -660,6 +660,77 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         self.assertEqual(existing.installed_module.module_bay_id, existing.pk)
         self.assertEqual(self._non_noop(self._diff(again)), [])
 
+    def test_a_bay_nesting_an_existing_module_installed_elsewhere_is_refused(self):
+        """
+        The child must be found after its reference became a primary key.
+
+        _resolve_existing_references replaces a reference to an ALREADY-EXISTING
+        object with its pk, which drops the pointer to the node that described
+        it. Following only the reference form meant a payload describing an
+        existing module skipped the post-resolution check entirely -- and the
+        devices here are reached by disjoint selectors, so the payload-level
+        check cannot settle it either.
+
+        Measured before the fix: plan [update dcim.modulebay <bay A>], apply 200
+        with errors null, the module still installed in bay B, bay A still
+        empty, and the same ineffective update re-planned on every ingest.
+        """
+        dev_a = Device.objects.create(
+            name="ex-rtrA", site=self.dev.site, device_type=self.dev.device_type,
+            role=self.dev.role, asset_tag="EX-A")
+        dev_b = Device.objects.create(
+            name="ex-rtrB", site=self.dev.site, device_type=self.dev.device_type,
+            role=self.dev.role, asset_tag="EX-B")
+        bay_a = ModuleBay.objects.create(device=dev_a, name="ex-bay")
+        bay_b = ModuleBay.objects.create(device=dev_b, name="ex-bay")
+        module = Module.objects.create(
+            device=dev_b, module_bay=bay_b, module_type=self.mt, asset_tag="EX-MOD")
+        nested_dev = {"name": "ex-rtrB", "site": {"name": "im-site"}}
+
+        entity = {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": {"asset_tag": "EX-A"},
+            "name": "ex-bay",
+            "installed_module": {
+                "asset_tag": "EX-MOD",
+                "device": nested_dev,
+                "module_bay": {"device": nested_dev, "name": "ex-bay"},
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+            },
+        }}}
+        r = self.client.post(self.diff_url, data=entity, format="json", **self.auth)
+
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = str(r.json().get("errors"))
+        self.assertIn(str(bay_a.pk), errors)
+        self.assertIn(str(bay_b.pk), errors)
+        module.refresh_from_db()
+        self.assertEqual(module.module_bay_id, bay_b.pk, "the module was moved")
+        bay_a.refresh_from_db()
+        self.assertIsNone(getattr(bay_a, "installed_module", None))
+
+    def test_reingesting_an_existing_module_in_its_own_bay_is_still_a_noop(self):
+        """
+        The control: describing an existing module correctly must stay a no-op.
+
+        The pk lookup added for the case above makes every existing child
+        visible to the check, so the ordinary converged state is exactly what
+        it must not refuse.
+        """
+        bay = ModuleBay.objects.create(device=self.dev, name="ex-ok-bay")
+        Module.objects.create(
+            device=self.dev, module_bay=bay, module_type=self.mt, asset_tag="EX-OK")
+        entity = {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": self._dev_ref(),
+            "name": "ex-ok-bay",
+            "installed_module": {
+                "asset_tag": "EX-OK",
+                "device": self._dev_ref(),
+                "module_bay": {"device": self._dev_ref(), "name": "ex-ok-bay"},
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+            },
+        }}}
+        self.assertEqual(self._non_noop(self._diff(entity)), [])
+
     def test_reingest_of_an_already_installed_module_is_a_noop(self):
         """
         Rows already correct in the DB must survive a second pass.

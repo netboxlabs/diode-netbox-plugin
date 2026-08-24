@@ -129,6 +129,16 @@ compares those, so no selector, spelling or criterion can be incomplete about
 it — including the disjoint-selector case above, which no payload comparison
 can settle.
 
+It finds the child node whether its reference survived as a reference or was
+replaced by a **primary key**, which resolution does for an object that already
+exists. Following only the reference form left a payload describing an existing
+child invisible to the check — a reminder that "after resolution" is not one
+uniform state: a reference to a new object and a reference to an existing one
+look different by then, and a pass over resolved data has to read both.
+
+What is genuinely not checked is a reference to a row the payload does not
+*describe*: with no submitted parent field, there is nothing to disagree with.
+
 That is the division of labour, and it is why the payload check is *allowed* to
 be approximate: it exists for its **message**, refusing in the producer's own
 vocabulary before any lookup, while coverage is the post-resolution pass's job.

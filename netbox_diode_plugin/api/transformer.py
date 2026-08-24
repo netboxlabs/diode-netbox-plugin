@@ -1971,6 +1971,33 @@ def _referenced_identity(value, by_uuid) -> tuple | None:
     return None
 
 
+def _referenced_node(owner_type: str, field: str, value, by_uuid, by_pk):
+    """
+    The node a resolved reference points at, whether it is still a ref or a pk.
+
+    _resolve_existing_references replaces a reference to an ALREADY-EXISTING
+    object with its primary key, which drops the pointer to the node that
+    described it. The node is still in the graph, so it is found by
+    (object_type, pk) instead. Following only the reference form meant a payload
+    describing an existing child skipped the check entirely -- measured: a bay
+    nesting an existing module installed in a same-named bay on another device
+    applied 200 with errors null and re-planned the ineffective update forever.
+
+    A pk that matches no node is a reference to a row this payload does not
+    describe. That asserts nothing about which parent the row is in, because
+    there is no submitted parent_fk to disagree with, so there is nothing here
+    to refuse.
+    """
+    if isinstance(value, UnresolvedReference):
+        return by_uuid.get(value.uuid)
+    if isinstance(value, int) and not isinstance(value, bool):
+        ref_info = get_json_ref_info(owner_type, field)
+        if ref_info is None or ref_info.is_generic or ref_info.is_generic_object:
+            return None
+        return by_pk.get((ref_info.object_type, value))
+    return None
+
+
 def _describe_identity(identity, by_uuid) -> str:
     """An identity in terms a producer can act on."""
     if identity is None:
@@ -2003,19 +2030,21 @@ def _check_reverse_side_resolves_to_its_parent(entities: list[dict]) -> None:
     the module landed in the nested bay, and the deferred reverse update
     re-planned against the empty outer bay on every ingest.
 
-    Only a reference this change set carries is checked. An installed_module
-    naming a module by primary key alone asserts nothing about which bay that
-    module is in, so there is no contradiction in the payload to find.
+    The child is found whether its reference survived as a reference or was
+    replaced by a primary key, which resolution does for an object that already
+    exists. What is genuinely not checked is a reference to a row this payload
+    does not DESCRIBE: with no submitted parent_fk there is nothing to
+    disagree with. See _referenced_node.
     """
     by_uuid = {e['_uuid']: e for e in entities}
+    by_pk = {(e.get('_object_type'), e['id']): e
+             for e in entities if e.get('id') is not None}
     for entity in entities:
         for (owner_type, field), parent_fk in _REVERSE_SIDE_PARENT_FK.items():
             if entity.get('_object_type') != owner_type or field not in entity:
                 continue
-            referenced = entity[field]
-            if not isinstance(referenced, UnresolvedReference):
-                continue
-            child = by_uuid.get(referenced.uuid)
+            child = _referenced_node(
+                owner_type, field, entity[field], by_uuid, by_pk)
             if child is None or parent_fk not in child:
                 continue
             mine = _resolved_identity(entity)
@@ -2025,7 +2054,7 @@ def _check_reverse_side_resolves_to_its_parent(entities: list[dict]) -> None:
             message = (
                 f"{owner_type}.{field} would write to "
                 f"{_describe_identity(mine, by_uuid)}, but the "
-                f"{referenced.object_type} it names has {parent_fk} pointing at "
+                f"{child.get('_object_type')} it names has {parent_fk} pointing at "
                 f"{_describe_identity(theirs, by_uuid)}. Only that "
                 f"{parent_fk} installs it, so this payload would install it "
                 f"there and leave the other empty while reporting success. "
