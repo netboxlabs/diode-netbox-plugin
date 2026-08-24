@@ -25,6 +25,7 @@ from .common import (
 )
 from .matcher import (
     annotate_vc_member_counts,
+    contradicting_vc_discriminator,
     find_existing_object,
     invalidate_find_obj_entry,
     narrow_vc_candidates,
@@ -576,6 +577,27 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
     lesson taken here is that the rule could not be narrowed into safety, not
     that a narrower version was needed.
     """
+    # A NON-EMPTY asserted discriminator excludes rows before ANY rule below
+    # reads them -- the same order matcher.resolve uses, and for the same
+    # reason. It is the payload saying "not that row", and rule 1 below is not
+    # entitled to overrule it: a device can sit in a chassis the payload is not
+    # talking about.
+    #
+    # Measured before this filter existed, on a row named "pa-stack" carrying
+    # domain "building-a", masterless, holding the requested master: a CREATE
+    # asserting domain "building-b" was adopted by rule 1 and then WRITTEN --
+    # the row came back labelled "building-b", 200, errors null. That is
+    # somebody's stack silently relabelled by a payload describing a different
+    # one. Adoption writes its payload (serializer.save() below), so getting
+    # the row wrong here is worse than getting it wrong in the matcher, which
+    # binds without writing.
+    #
+    # An EMPTY assertion is excluded here as it is in resolve: `domain: ""`
+    # narrows but never identifies, so it stays with narrow_vc_candidates below.
+    candidates = [c for c in candidates if not contradicting_vc_discriminator(c, data)]
+    if not candidates:
+        return None
+
     holders = set(
         model_class.objects.filter(
             pk__in=[c.pk for c in candidates], members__pk=master_pk

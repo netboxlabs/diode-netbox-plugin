@@ -990,6 +990,37 @@ class VirtualChassisAdoptionTests(TestCase):
         self.assertEqual(self.master.virtual_chassis_id, self.vc.pk)
         self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
 
+    def test_adoption_declines_a_row_whose_domain_the_payload_contradicts(self):
+        """
+        Rule 1 does not outrank an asserted discriminator. Adoption WRITES.
+
+        The requested master already sits in this row, so rule 1 ("the database
+        has already agreed") would take it -- but the row carries domain
+        "vca-dom-a" and the payload asserts "vca-dom-b". A device can sit in a
+        chassis the payload is not talking about, so membership is not licence
+        to write a payload that describes a different one.
+
+        Measured before the fix: the row came back labelled "vca-dom-b", 200,
+        errors null -- somebody's stack silently relabelled. That is worse here
+        than in the matcher, which binds without writing: adoption applies its
+        payload through serializer.save(), so choosing the wrong row rewrites
+        it. matcher.resolve excludes contradicted rows before its own member
+        hint for the same reason; these two must not disagree.
+        """
+        row = VirtualChassis.objects.create(name="vca-labelled", domain="vca-dom-a")
+        Device.objects.filter(pk=self.master.pk).update(
+            virtual_chassis=row, vc_position=2)
+
+        self._apply_create(
+            {"name": "vca-labelled", "domain": "vca-dom-b", "master": self.master.pk})
+
+        row.refresh_from_db()
+        self.assertEqual(row.domain, "vca-dom-a", "the contradicted row was relabelled")
+        self.assertIsNone(row.master_id, "the contradicted row was mastered")
+        own = VirtualChassis.objects.filter(name="vca-labelled").exclude(pk=row.pk)
+        self.assertEqual(own.count(), 1, "the payload did not get its own row")
+        self.assertEqual(own.first().domain, "vca-dom-b")
+
     def test_adoption_declines_a_populated_row_a_planned_device_change_names(self):
         """
         A planned Device change says WHICH CHASSIS, never WHICH ROW, so it licenses nothing.

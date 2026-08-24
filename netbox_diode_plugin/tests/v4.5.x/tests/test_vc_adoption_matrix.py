@@ -328,13 +328,39 @@ class VirtualChassisAdoptionMatrixTests(TestCase):
     @staticmethod
     def _check_no_refuse(cell, outcome, verdict):
         """NO-REFUSE: an error is only ever a fact about the master."""
-        master_state = cell[2]
+        shapes, _mastered, master_state, domain, _shape, _cross_site = cell
         problems = []
-        if verdict["kind"] == "conflict" and master_state != "in_other":
+        # "in_candidate" used to mean the master sits in the row adoption would
+        # take, so no conflict could arise there. That stopped being true when a
+        # non-empty asserted discriminator began excluding rows before any other
+        # rule (applier._choose_adoption_candidate, matching resolve): the row
+        # holding the master can now be excluded, adoption picks the row the
+        # payload actually identifies, and the master is then in a chassis this
+        # payload is not describing. The conflict is still a fact about the
+        # master -- "it is a member of a different chassis" -- and it still names
+        # a remedy, since a Device change asserting the membership licenses the
+        # move (_changeset_plans_membership). So the exemption is widened by
+        # exactly that case and no further.
+        master_row_domain = LABEL if shapes and shapes[0] == "L" else ""
+        master_row_excluded = (
+            master_state == "in_candidate"
+            and bool(domain)
+            and domain != master_row_domain
+        )
+        if (verdict["kind"] == "conflict"
+                and master_state != "in_other"
+                and not master_row_excluded):
             problems.append(f"conflict raised with master_state={master_state}")
         if verdict["kind"] == "dangling" and master_state != "missing":
             problems.append(f"dangling error raised with master_state={master_state}")
-        if master_state in ("free", "in_candidate", "masters_other") and outcome["error"]:
+        # Same widening, same reason: the master is only "usable" for this
+        # payload while the chassis it sits in is one this payload could be
+        # describing. Once an asserted discriminator excludes that row, the
+        # master is somewhere else as far as this payload is concerned, and
+        # saying so is the designed IN_OTHER_CHASSIS conflict -- which names the
+        # move to make and applies unchanged on the next pass.
+        usable = ("free", "in_candidate", "masters_other")
+        if master_state in usable and outcome["error"] and not master_row_excluded:
             problems.append(f"refused a cell with a usable master: {outcome['error']}")
         return problems
 
@@ -361,14 +387,26 @@ class VirtualChassisAdoptionMatrixTests(TestCase):
                 continue
             index = outcome["candidates"].index(pk)
             row_shape = shapes[index]
-            already_holds = master_state == "in_candidate" and index == 0
+            # A NON-EMPTY asserted discriminator the row does not carry
+            # excludes it before any rule, so holding the master no longer
+            # licenses writing it -- mirroring
+            # matcher.contradicting_vc_discriminator exactly, which is
+            # non-empty-only: `domain: ""` does NOT exclude a labelled row here
+            # either. Without this the licence table granted "holds-master"
+            # regardless, which is why 1824 cells passed while adoption
+            # relabelled a row whose domain the payload contradicted.
+            contradicted = bool(domain) and row_domain[row_shape] != domain
+            already_holds = (
+                master_state == "in_candidate" and index == 0 and not contradicted)
             sole = narrowed == [index]
             unasserted = row_shape == "L" and not domain
             licences = {
                 "holds-master": already_holds,
                 "domain-identified": identified and sole,
                 "single-empty": sole and row_shape == "E",
-                "member-first": sole and shape == "member_first" and not unasserted,
+                # No "member-first" licence: adoption on planned membership
+                # alone was removed, so granting it here would let that rule be
+                # re-added with the matrix still green.
             }
             granted = [key for key, value in licences.items() if value]
             outcome.setdefault("licences", []).extend(granted)
