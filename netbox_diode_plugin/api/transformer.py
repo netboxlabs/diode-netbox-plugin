@@ -178,16 +178,109 @@ _REVERSE_SIDE_PARENT_FK = {
 }
 
 
-def _reverse_side_identity(payload: dict) -> tuple | None:
-    """The (device, name) a nested parent reference names, when it names one."""
+def _asserted(payload, field):
+    """
+    Read a field from a payload that may not be snake_cased yet.
+
+    _ensure_snake_case is shallow: it rewrites the keys of the object being
+    transformed, and every nested object is normalized later by its own
+    recursion. So when the check below runs, a camelCase producer's nested
+    payload still carries camelCase keys, and reading only the snake spelling
+    would silently see nothing and wave the payload through.
+    """
     if not isinstance(payload, dict):
         return None
-    name = payload.get("name")
-    if not isinstance(name, str) or not name:
-        return None
-    device = payload.get("device")
-    device_name = device.get("name") if isinstance(device, dict) else device
-    return (device_name, name)
+    if field in payload:
+        value = payload[field]
+    else:
+        value = next(
+            (v for k, v in payload.items() if _camel_to_snake_case(k) == field),
+            None,
+        )
+    return value if value not in (None, "") else None
+
+
+def _referenced_name(ref, field="name"):
+    """The name (or slug) a reference asserts, whether given as a dict or bare."""
+    if isinstance(ref, dict):
+        value = _asserted(ref, field)
+        return value if isinstance(value, str) and value else None
+    if isinstance(ref, str) and ref and field == "name":
+        return ref
+    return None
+
+
+def _scope_conflict(a, b) -> bool:
+    """
+    Two Site or Tenant references that cannot be the same object.
+
+    Both models are unique on name alone and on slug alone, so either field
+    settles it and the walk stops here rather than recursing into their own
+    scopes.
+    """
+    for field in ("name", "slug"):
+        x, y = _referenced_name(a, field), _referenced_name(b, field)
+        if x is not None and y is not None and x != y:
+            return True
+    return False
+
+
+def _device_conflict(a, b) -> bool:
+    """
+    Two device references that cannot be the same device.
+
+    Device is unique on (Lower(name), site, tenant), so the name is compared
+    case-insensitively -- an exact compare here refused payloads that named one
+    device in two casings, reporting a bay as differing from itself.
+
+    Compatibility, not equality: a field only one side asserts cannot
+    contradict, which keeps the natural shape -- where the nested reference
+    names the device less fully than the outer one -- compatible. An omitted
+    tenant therefore reads as unconstrained rather than as NULL, matching how
+    the matcher layer treats a field the payload never mentions.
+    """
+    a_name, b_name = _referenced_name(a), _referenced_name(b)
+    if a_name is not None and b_name is not None and a_name.lower() != b_name.lower():
+        return True
+    for field in ("site", "tenant"):
+        if _scope_conflict(_asserted(a, field), _asserted(b, field)):
+            return True
+    return False
+
+
+def _reverse_side_conflict(mine, theirs) -> bool:
+    """
+    True when two ModuleBay payloads cannot name the same bay.
+
+    ModuleBay is unique on ('name', 'device'), so the bay name is compared
+    exactly and the device by its own identity. Comparing the name alone
+    collapsed two same-named bays on two same-named devices in different
+    sites, which let the contradiction below through.
+    """
+    my_name, their_name = _asserted(mine, "name"), _asserted(theirs, "name")
+    if my_name is None or their_name is None:
+        return False
+    if my_name != their_name:
+        return True
+    return _device_conflict(_asserted(mine, "device"), _asserted(theirs, "device"))
+
+
+def _bay_description(payload) -> str:
+    """
+    A bay rendered the way the payload identifies it, device scope included.
+
+    The scope is part of the message because it can be the only thing telling
+    the two sides apart, and an error naming the same bay twice is unactionable.
+    """
+    described = repr(_asserted(payload, "name"))
+    device = _asserted(payload, "device")
+    device_name = _referenced_name(device)
+    if device_name:
+        described += f" on device {device_name!r}"
+        site = _referenced_name(_asserted(device, "site"))
+        if site:
+            described += f" in {site!r}"
+    return described
 
 
 def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str) -> None:
@@ -213,8 +306,9 @@ def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str) -> 
     module, and the two statements are equally explicit -- there is nothing in
     the payload that makes one of them the mistake.
 
-    Only when BOTH sides name a comparable identity. A nested parent reference
-    that identifies its bay some other way is left alone rather than guessed at.
+    Only when the two sides CONFLICT, in the compatibility sense used above: a
+    nested reference that identifies its bay less fully than the outer one is
+    left alone rather than guessed at.
     """
     parent_fk = None
     for (owner_type, field), fk in _REVERSE_SIDE_PARENT_FK.items():
@@ -226,18 +320,20 @@ def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str) -> 
     nested = proto_json.get(reverse_field)
     if not isinstance(nested, dict):
         return
-    named_parent = _reverse_side_identity(nested.get(parent_fk))
-    mine = _reverse_side_identity(proto_json)
-    if named_parent is None or mine is None or named_parent == mine:
+    named_parent = _asserted(nested, parent_fk)
+    if not _reverse_side_conflict(proto_json, named_parent):
         return
+    ref_info = get_json_ref_info(object_type, reverse_field)
+    nested_type = ref_info.object_type if ref_info else "nested object"
     raise serializers.ValidationError({
         NON_FIELD_ERRORS: [
-            f"{object_type}.{reverse_field} names a "
-            f"{object_type.split('.')[0]}.module whose {parent_fk} is "
-            f"{named_parent[1]!r}, not {mine[1]!r}. Only the nested object's own "
+            f"{object_type}.{reverse_field} names a {nested_type} whose "
+            f"{parent_fk} is {_bay_description(named_parent)}, not "
+            f"{_bay_description(proto_json)}. Only the nested object's own "
             f"{parent_fk} installs it, so this payload would leave "
-            f"{mine[1]!r} empty and re-plan on every ingest. Send the module "
-            f"under the bay its {parent_fk} names, or correct that {parent_fk}."
+            f"{_bay_description(proto_json)} empty and re-plan on every "
+            f"ingest. Send it under the bay its {parent_fk} names, or "
+            f"correct that {parent_fk}."
         ]
     })
 

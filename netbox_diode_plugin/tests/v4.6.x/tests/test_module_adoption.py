@@ -5,8 +5,10 @@ from unittest import mock
 
 from core.models import ObjectChange
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Module, ModuleBay, ModuleType, Site
+from django.test import SimpleTestCase
 from utilities.testing import APITestCase
 
+from netbox_diode_plugin.api import transformer
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.plugin_config import get_diode_user
 
@@ -307,6 +309,88 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         bay = ModuleBay.objects.get(device=self.dev, name="im-bayok")
         self.assertEqual(bay.installed_module.module_bay_id, bay.pk)
 
+
+    def _mismatched_camel_entity(self, outer_bay, inner_bay):
+        """The same contradiction, in the camelCase protoJSON spelling."""
+        return {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": self._dev_ref(),
+            "name": outer_bay,
+            "installedModule": {
+                "device": self._dev_ref(),
+                "moduleBay": {"device": self._dev_ref(), "name": inner_bay},
+                "moduleType": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+                "serial": "IM-SER-1",
+            },
+        }}}
+
+    def test_a_camelcase_module_naming_another_bay_is_refused(self):
+        """
+        The refusal must not depend on which spelling the producer sent.
+
+        _ensure_snake_case is shallow: it rewrites the keys of the object being
+        transformed, and every nested object is normalized later by its own
+        recursion. So when the check runs, a camelCase producer's nested module
+        still carries `moduleBay`, and reading only the snake spelling saw
+        nothing at all.
+
+        Measured with the snake-only lookup: this payload planned
+        [create bay, create bay, create module, update bay], applied 200 with
+        errors null, left the outer bay empty with the module in the inner bay,
+        and re-planned the same no-op update on every later ingest -- the exact
+        non-converging success the check exists to refuse, reachable by sending
+        the supported camelCase form of a payload the check already caught.
+        """
+        r = self.client.post(
+            self.diff_url, data=self._mismatched_camel_entity("cc-bayX", "cc-bayY"),
+            format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = str(r.json().get("errors"))
+        self.assertIn("cc-bayX", errors)
+        self.assertIn("cc-bayY", errors)
+        self.assertEqual(ModuleBay.objects.filter(device=self.dev).count(), 0)
+        self.assertEqual(Module.objects.filter(device=self.dev).count(), 0)
+
+    def test_a_module_naming_a_same_named_bay_on_another_device_is_refused(self):
+        """
+        A bare device name is not a device, so the comparison carries its scope.
+
+        Device is unique on (Lower(name), site, tenant), so two devices may
+        share a name in different sites -- and then two bays sharing a name are
+        still two different bays. Comparing bays by (device_name, bay_name)
+        collapsed them into one.
+
+        Measured with the name-only comparison: this payload applied 200 with
+        errors null and installed the module in the OTHER site's bay, leaving
+        this site's bay empty and re-planning the reverse update on every later
+        ingest.
+        """
+        site2 = Site.objects.create(name="im-site2", slug="im-site2")
+        Device.objects.create(
+            name="im-rtr", site=site2, device_type=self.dev.device_type,
+            role=self.dev.role,
+        )
+        other_device = {"name": "im-rtr", "site": {"name": "im-site2"}}
+        entity = {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": self._dev_ref(),
+            "name": "sc-bay",
+            "installed_module": {
+                "device": other_device,
+                "module_bay": {"device": other_device, "name": "sc-bay"},
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+                "serial": "IM-SER-1",
+            },
+        }}}
+        r = self.client.post(self.diff_url, data=entity, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = str(r.json().get("errors"))
+        # both bays are named 'sc-bay' on a device named 'im-rtr', so the scope
+        # is the only thing that tells the two sides apart -- an error naming
+        # the same bay twice would be unactionable
+        self.assertIn("in 'im-site'", errors)
+        self.assertIn("in 'im-site2'", errors)
+        self.assertEqual(ModuleBay.objects.filter(name="sc-bay").count(), 0)
+        self.assertEqual(Module.objects.count(), 0)
+
     def test_reingest_of_an_already_installed_module_is_a_noop(self):
         """
         Rows already correct in the DB must survive a second pass.
@@ -377,3 +461,98 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         )
         # the failed bay update aborts the whole change set
         self.assertFalse(Module.objects.filter(device=self.dev).exists())
+
+
+class ReverseSideConflictRuleTests(SimpleTestCase):
+    """
+    The rule table for `_reverse_side_conflict`, without the pipeline.
+
+    The relation answers one question -- can these two payloads name the same
+    module bay? -- and it is a COMPATIBILITY relation, not equality: only a
+    field both sides assert, with values that disagree, proves two bays. A
+    field one side leaves out cannot contradict anything, which is what keeps
+    the natural shape (the nested module naming its bay less fully than the
+    outer payload does) from being refused.
+
+    The identity being compared is taken from the model constraints rather than
+    guessed: ModuleBay is unique on ('name', 'device'), Device on
+    (Lower(name), site, tenant), and Site and Tenant are each unique on name
+    alone and on slug alone, so the walk stops at their names.
+    """
+
+    def _bay(self, name, device=None):
+        payload = {"name": name}
+        if device is not None:
+            payload["device"] = device
+        return payload
+
+    def test_the_rule_table(self):
+        """Each decision the relation makes, and its symmetry, in one table."""
+        dev = {"name": "rtr", "site": {"name": "s1"}}
+        cases = [
+            # (description, mine, theirs, conflict?)
+            ("identical", self._bay("b", dev), self._bay("b", dev), False),
+            ("different bay name", self._bay("b1", dev), self._bay("b2", dev), True),
+            ("different bay name, no device anywhere",
+             self._bay("b1"), self._bay("b2"), True),
+            # Lower(name) is Device identity, so casing is not a difference.
+            # An exact compare here refused a bay as differing from itself.
+            ("device name differs only in case",
+             self._bay("b", {"name": "RTR", "site": {"name": "s1"}}),
+             self._bay("b", dev), False),
+            ("device name differs",
+             self._bay("b", {"name": "rtr-a"}), self._bay("b", {"name": "rtr-b"}), True),
+            # the finding: same names, different sites, two real devices
+            ("same device name, different site",
+             self._bay("b", {"name": "rtr", "site": {"name": "s2"}}),
+             self._bay("b", dev), True),
+            ("same device name, different site slug",
+             self._bay("b", {"name": "rtr", "site": {"slug": "s2"}}),
+             self._bay("b", {"name": "rtr", "site": {"slug": "s1"}}), True),
+            ("same device name, different tenant",
+             self._bay("b", {"name": "rtr", "tenant": {"name": "t2"}}),
+             self._bay("b", {"name": "rtr", "tenant": {"name": "t1"}}), True),
+            # compatibility, not equality: what one side omits cannot contradict
+            ("one side omits the site", self._bay("b", {"name": "rtr"}),
+             self._bay("b", dev), False),
+            ("one side omits the tenant",
+             self._bay("b", {"name": "rtr", "site": {"name": "s1"}, "tenant": {"name": "t"}}),
+             self._bay("b", dev), False),
+            ("one side omits the device", self._bay("b"), self._bay("b", dev), False),
+            ("device as a bare name string", self._bay("b", "rtr"),
+             self._bay("b", dev), False),
+            ("bare name string that disagrees", self._bay("b", "other"),
+             self._bay("b", dev), True),
+            # not comparable at all -> never a refusal
+            ("no bay name on one side", {"device": dev}, self._bay("b", dev), False),
+            ("empty bay name", self._bay("", dev), self._bay("b", dev), False),
+            ("nested side is not a dict", None, self._bay("b", dev), False),
+        ]
+        for description, mine, theirs, expected in cases:
+            with self.subTest(description):
+                self.assertEqual(
+                    transformer._reverse_side_conflict(mine, theirs), expected)
+                # the relation must not depend on which side is which
+                self.assertEqual(
+                    transformer._reverse_side_conflict(theirs, mine), expected,
+                    f"{description}: not symmetric")
+
+    def test_a_camelcase_parent_key_is_read(self):
+        """
+        The nested payload has not been snake_cased when the check reads it.
+
+        This is the whole of the camelCase finding in one assertion: the guard
+        looks up the nested object's `module_bay`, and a camelCase producer
+        spells it `moduleBay`.
+        """
+        nested = {"moduleBay": {"name": "b2", "device": {"name": "rtr"}}}
+        self.assertEqual(
+            transformer._asserted(nested, "module_bay"),
+            {"name": "b2", "device": {"name": "rtr"}},
+        )
+        self.assertIsNone(transformer._asserted(nested, "serial"))
+        # an explicit snake_case key still wins
+        self.assertEqual(
+            transformer._asserted({"module_bay": {"name": "snake"}}, "module_bay"),
+            {"name": "snake"},
+        )
