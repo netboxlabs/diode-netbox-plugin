@@ -990,6 +990,63 @@ class VirtualChassisAdoptionTests(TestCase):
         self.assertEqual(self.master.virtual_chassis_id, self.vc.pk)
         self.assertEqual(VirtualChassis.objects.filter(name="vca-stack").count(), 1)
 
+    def _move_licence_case(self, change_type, name):
+        """One adoption where a device in ANOTHER chassis is the requested master."""
+        foreign = VirtualChassis.objects.create(name=f"{name}-foreign")
+        Device.objects.filter(pk=self.master.pk).update(
+            virtual_chassis=foreign, vc_position=2)
+        empty = VirtualChassis.objects.create(name=name)
+        raised = None
+        try:
+            self._apply_create(
+                {"name": name, "master": self.master.pk},
+                extra_changes=[Change(
+                    change_type=change_type,
+                    object_type="dcim.device",
+                    object_id=self.master.pk,
+                    data={"virtual_chassis": "vc1", "vc_position": 1},
+                    new_refs=["virtual_chassis"],
+                )],
+            )
+        except ChangeSetException as exc:
+            raised = exc
+        self.master.refresh_from_db()
+        empty.refresh_from_db()
+        return raised, empty
+
+    def test_a_noop_device_change_does_not_authorize_a_move(self):
+        """
+        Only a change that will actually WRITE the membership may license a move.
+
+        apply_changeset skips NOOP outright, so a NOOP device change asserting
+        this chassis promises a membership that never lands -- but the licence
+        it bought was spent anyway. Measured before the fix, on a hand-built
+        changeset (reachable through apply-change-set and bulk-apply, not
+        through generate-diff): the master was relocated out of another
+        producer's chassis into the adopted row and made its master, 200,
+        errors null, with the IN_OTHER_CHASSIS conflict a standalone payload
+        gets bypassed entirely.
+
+        Nothing legitimate is lost. A device that really is already a member
+        never reaches _attach_master_to_virtualchassis at all, because the
+        caller checks existing.members first.
+        """
+        raised, empty = self._move_licence_case(ChangeType.NOOP, "vca-noop")
+        self.assertIsNotNone(raised, "a NOOP authorized the move")
+        self.assertIn("member of", str(raised))
+        self.assertNotEqual(
+            self.master.virtual_chassis_id, empty.pk,
+            "the device was relocated on the strength of a change that never runs",
+        )
+        self.assertIsNone(empty.master_id)
+
+    def test_an_update_device_change_still_authorizes_the_move(self):
+        """The control: a change that does write the membership still licenses it."""
+        raised, empty = self._move_licence_case(ChangeType.UPDATE, "vca-update")
+        self.assertIsNone(raised, f"the move was refused: {raised}")
+        self.assertEqual(self.master.virtual_chassis_id, empty.pk)
+        self.assertEqual(empty.master_id, self.master.pk)
+
     def test_adoption_declines_a_row_whose_domain_the_payload_contradicts(self):
         """
         Rule 1 does not outrank an asserted discriminator. Adoption WRITES.

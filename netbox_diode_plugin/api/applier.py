@@ -445,6 +445,21 @@ def _changeset_plans_membership(change: Change, change_set: ChangeSet, created: 
     for other in change_set.changes:
         if other.object_type != "dcim.device":
             continue
+        if other.change_type not in (ChangeType.CREATE, ChangeType.UPDATE):
+            # Only a change that will actually WRITE the membership authorizes
+            # the move. apply_changeset skips NOOP outright, so a NOOP device
+            # change asserting this chassis promises a membership that never
+            # lands -- and the licence it bought moved the device anyway.
+            # Measured on a hand-built changeset (reachable through
+            # apply-change-set and bulk-apply, not through generate-diff): a
+            # device sitting in another producer's chassis was relocated into
+            # the adopted row and made its master, 200, errors null, with the
+            # IN_OTHER_CHASSIS conflict that a standalone payload gets bypassed
+            # entirely. Nothing legitimate is lost by this: a device that
+            # really is already a member never reaches
+            # _attach_master_to_virtualchassis, because the caller checks
+            # existing.members first.
+            continue
         if (other.data or {}).get("virtual_chassis") != ref:
             continue
         if other.object_id is not None:
