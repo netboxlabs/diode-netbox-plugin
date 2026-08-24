@@ -274,11 +274,12 @@ def _device_conflict(a, b) -> bool:
     and (virtual_chassis, vc_position) are positional; comparing any of them
     textually would invent a refusal from two spellings of one row, which is
     the failure mode this helper was rewritten to remove. And no comparison
-    here can settle two references that name the device through DISJOINT
-    selectors -- an asset_tag on one side, a name on the other. They share no
-    criterion, so they stay compatible and the guard says nothing, which is
-    the per-criterion identity bound this branch already states: closing it
-    needs resolved identities, and resolution runs after this point.
+    here can settle two DEVICE references that name their device through
+    disjoint selectors -- an asset_tag on one side, a name on the other. They
+    share no criterion, so they stay compatible and the guard says nothing.
+    That residue is now confined to the device: a BAY addressed by pk alone is
+    resolved (see _resolved_bay_payload) rather than left incomparable, because
+    there the missing criterion made a non-converging success reachable.
     """
     # asset_tag is unique on its own, so when both sides carry one it settles
     # the question outright: equal is one device however much else disagrees,
@@ -299,6 +300,68 @@ def _device_conflict(a, b) -> bool:
         if _scope_conflict(_asserted(a, field), _asserted(b, field)):
             return True
     return False
+
+
+def _resolved_bay_payload(object_type: str, row_id: int):
+    """
+    What an explicitly addressed row actually is, as a payload.
+
+    Reached only when ONE side of the comparison is addressed by primary key
+    and says nothing else -- a partial reference need not repeat the name. That
+    side then asserts nothing a selector comparison can read, so the two sides
+    share no criterion and look compatible, which accepted the contradiction.
+    Measured: an outer bay addressed by pk alone, carrying a module whose
+    module_bay named a different bay, applied 200 with errors null, installed
+    the module in the named bay and left the addressed one empty, re-planning
+    the ineffective update on every later ingest.
+
+    Resolving turns that side into a fully specified payload so the ordinary
+    compatibility relation can do the rest. It adds a lookup, not a second
+    notion of identity -- which is why the row is expanded into a payload here
+    rather than compared as a pk against selectors.
+
+    A missing row is not this check's error to report: _resolve_by_netbox_id
+    raises for an id that resolves to nothing, with a message about the id.
+    """
+    model_class = get_object_type_model(object_type)
+    row = model_class.objects.filter(pk=row_id).select_related(
+        "device__site", "device__tenant").first()
+    if row is None:
+        return None
+    device = {"name": row.device.name}
+    if row.device.site_id is not None:
+        device["site"] = {"name": row.device.site.name}
+    if row.device.tenant_id is not None:
+        device["tenant"] = {"name": row.device.tenant.name}
+    if row.device.asset_tag:
+        device["asset_tag"] = row.device.asset_tag
+    # the id is carried so the message can still name the row the producer
+    # addressed, alongside what that row turns out to be
+    return {"name": row.name, "device": device,
+            "metadata": {"source_match": {"netbox_id": row_id}}}
+
+
+def _comparable_bay_sides(mine, theirs, object_type):
+    """
+    Resolve whichever side is addressed by pk alone, so the two can be compared.
+
+    Kept out of _reverse_side_conflict so that relation stays a pure function of
+    two payloads -- it is table-tested that way -- and so the resolved payload is
+    available to the error message, which would otherwise report a row by id
+    while this code knows its name.
+
+    Only the addressed-AND-nameless side needs it: an addressed side that also
+    carries a name is already comparable, and resolving it anyway would add a
+    query to every ordinary payload.
+    """
+    my_row, their_row = _addressed_row_of(mine), _addressed_row_of(theirs)
+    if my_row is not None and their_row is not None:
+        return mine, theirs
+    if my_row is not None and _asserted(mine, "name") is None:
+        mine = _resolved_bay_payload(object_type, my_row) or mine
+    elif their_row is not None and _asserted(theirs, "name") is None:
+        theirs = _resolved_bay_payload(object_type, their_row) or theirs
+    return mine, theirs
 
 
 def _reverse_side_conflict(mine, theirs) -> bool:
@@ -394,6 +457,7 @@ def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str,
     # side cannot say which row it addresses, and two PK-addressed bays
     # compared as anonymous payloads look compatible.
     mine = proto_json if metadata is None else {**proto_json, "metadata": metadata}
+    mine, named_parent = _comparable_bay_sides(mine, named_parent, object_type)
     if not _reverse_side_conflict(mine, named_parent):
         return
     ref_info = get_json_ref_info(object_type, reverse_field)

@@ -5,7 +5,7 @@ from unittest import mock
 
 from core.models import ObjectChange
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Module, ModuleBay, ModuleType, Site
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 from rest_framework import serializers
 from utilities.testing import APITestCase
 
@@ -483,6 +483,68 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         self.assertIsNone(getattr(bay_a, "installed_module", None))
         self.assertIsNone(getattr(bay_b, "installed_module", None))
 
+    def _pk_addressed_entity(self, bay_pk, nested_bay_name):
+        """Outer bay addressed by pk ALONE; nested module_bay named normally."""
+        return {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "metadata": {"source_match": {"netbox_id": bay_pk}},
+            "installed_module": {
+                "device": self._dev_ref(),
+                "module_bay": {"device": self._dev_ref(), "name": nested_bay_name},
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+                "serial": "IM-SER-1",
+            },
+        }}}
+
+    def test_a_module_naming_another_bay_than_the_addressed_one_is_refused(self):
+        """
+        A partial reference need not repeat the name, so one side can be silent.
+
+        With the outer bay addressed by pk alone, a comparison over asserted
+        selectors finds nothing on that side to read: the two sides share no
+        criterion and look compatible. Measured before the fix: 200 with errors
+        null, the module installed in the NAMED bay, the addressed bay left
+        empty, and the ineffective reverse update re-planned on every ingest.
+
+        The addressed side is now resolved -- the row is the authority on what
+        it is -- and the ordinary compatibility relation does the rest.
+        """
+        bay_a = ModuleBay.objects.create(device=self.dev, name="os-bayA")
+        ModuleBay.objects.create(device=self.dev, name="os-bayB")
+
+        r = self.client.post(
+            self.diff_url, data=self._pk_addressed_entity(bay_a.pk, "os-bayB"),
+            format="json", **self.auth)
+
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = str(r.json().get("errors"))
+        self.assertIn("whose module_bay is", errors)
+        # resolving means the message can name the row, not just its id
+        self.assertIn("os-bayA", errors)
+        self.assertIn("os-bayB", errors)
+        self.assertIn(str(bay_a.pk), errors)
+        self.assertEqual(Module.objects.count(), 0)
+
+    def test_a_module_naming_the_addressed_bay_itself_still_applies(self):
+        """
+        The control, and the reason the fix resolves instead of refusing.
+
+        Naming by pk on one side and by name on the other is a legitimate way
+        to describe ONE bay. Treating an incomparable pair as a conflict would
+        have closed the hole above by breaking this, so it is asserted right
+        beside it: it applies, installs the module in the addressed bay, and
+        converges.
+        """
+        bay_a = ModuleBay.objects.create(device=self.dev, name="os-bayA")
+        ModuleBay.objects.create(device=self.dev, name="os-bayB")
+
+        entity = self._pk_addressed_entity(bay_a.pk, "os-bayA")
+        self._apply(self._diff(entity))
+
+        bay_a.refresh_from_db()
+        self.assertEqual(bay_a.installed_module.module_bay_id, bay_a.pk)
+        self.assertEqual(Module.objects.count(), 1)
+        self.assertEqual(self._non_noop(self._diff(entity)), [])
+
     def test_reingest_of_an_already_installed_module_is_a_noop(self):
         """
         Rows already correct in the DB must survive a second pass.
@@ -732,3 +794,93 @@ class AddressedRowMergeTests(SimpleTestCase):
         for a, b in ((self._node(1547), self._node()),
                      (self._node(), self._node(1547))):
             self.assertEqual(transformer._merge_nodes(a, b)["_netbox_id"], 1547)
+
+
+class ComparableBaySidesTests(TestCase):
+    """
+    Which side of the reverse-side comparison gets resolved, and which does not.
+
+    The lookup exists for one shape -- a side addressed by primary key that
+    names nothing -- because there the missing criterion made a non-converging
+    success reachable. Every other shape must stay a pure payload comparison,
+    so the query is not paid on ordinary ingest.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        """One device and one bay, to resolve against."""
+        site = Site.objects.create(name="cb-site", slug="cb-site")
+        mfr = Manufacturer.objects.create(name="cb-mfr", slug="cb-mfr")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="cb-dt", slug="cb-dt")
+        role = DeviceRole.objects.create(name="cb-role", slug="cb-role")
+        cls.dev = Device.objects.create(
+            name="cb-rtr", site=site, device_type=dt, role=role, asset_tag="CB-1")
+        cls.bay = ModuleBay.objects.create(device=cls.dev, name="cb-bay")
+
+    def _sides(self, mine, theirs):
+        return transformer._comparable_bay_sides(mine, theirs, "dcim.modulebay")
+
+    def test_an_addressed_nameless_side_is_resolved(self):
+        """It gains the row's real name and device, including the asset tag."""
+        addressed = {"metadata": {"source_match": {"netbox_id": self.bay.pk}}}
+        named = {"name": "other", "device": {"name": "cb-rtr"}}
+
+        mine, theirs = self._sides(addressed, named)
+
+        self.assertEqual(mine["name"], "cb-bay")
+        self.assertEqual(mine["device"]["name"], "cb-rtr")
+        self.assertEqual(mine["device"]["site"], {"name": "cb-site"})
+        self.assertEqual(mine["device"]["asset_tag"], "CB-1")
+        # the id survives, so the message can name what the producer addressed
+        self.assertEqual(transformer._addressed_row_of(mine), self.bay.pk)
+        self.assertIs(theirs, named, "the named side was resolved too")
+        # and the resolved pair is now comparable, which is the whole point
+        self.assertTrue(transformer._reverse_side_conflict(mine, theirs))
+
+    def test_the_nested_side_is_resolved_the_same_way(self):
+        """Either side may be the addressed one."""
+        named = {"name": "other", "device": {"name": "cb-rtr"}}
+        addressed = {"metadata": {"source_match": {"netbox_id": self.bay.pk}}}
+
+        mine, theirs = self._sides(named, addressed)
+
+        self.assertIs(mine, named)
+        self.assertEqual(theirs["name"], "cb-bay")
+
+    def test_an_addressed_side_that_names_itself_is_left_alone(self):
+        """Already comparable, so the lookup is not paid."""
+        addressed = {"name": "given", "device": {"name": "cb-rtr"},
+                     "metadata": {"source_match": {"netbox_id": self.bay.pk}}}
+        named = {"name": "other"}
+
+        with self.assertNumQueries(0):
+            mine, theirs = self._sides(addressed, named)
+
+        self.assertIs(mine, addressed)
+        self.assertIs(theirs, named)
+
+    def test_two_addressed_sides_are_left_alone(self):
+        """The ids decide each other; neither needs resolving."""
+        a = {"metadata": {"source_match": {"netbox_id": self.bay.pk}}}
+        b = {"metadata": {"source_match": {"netbox_id": self.bay.pk + 1}}}
+
+        with self.assertNumQueries(0):
+            mine, theirs = self._sides(a, b)
+
+        self.assertIs(mine, a)
+        self.assertIs(theirs, b)
+
+    def test_an_unknown_row_is_left_for_the_resolver_to_report(self):
+        """
+        A bad id is not this check's error to raise.
+
+        _resolve_by_netbox_id already fails with a message about the id, and
+        refusing here first would replace it with one about bay names.
+        """
+        missing = {"metadata": {"source_match": {"netbox_id": self.bay.pk + 10_000}}}
+        named = {"name": "other"}
+
+        mine, theirs = self._sides(missing, named)
+
+        self.assertIs(mine, missing)
+        self.assertFalse(transformer._reverse_side_conflict(mine, theirs))
