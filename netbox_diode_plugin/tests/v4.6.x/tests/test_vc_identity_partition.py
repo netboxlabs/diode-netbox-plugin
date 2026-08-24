@@ -793,6 +793,47 @@ class VCPartitionKeyScopeTests(TestCase):
                     "the addressed row was dropped by arrival order",
                 )
 
+    def test_an_addressed_node_still_meets_an_unaddressed_one_on_their_master(self):
+        """
+        Only two CLAIMS on one master may keep it apart, not one claim and silence.
+
+        unique_master is a DB unique constraint, so two nodes naming one master
+        are one row and the key is left bare so they meet. The exception is two
+        nodes ADDRESSING DIFFERENT rows while naming that master -- merging
+        those drops an addressed row silently.
+
+        Withholding the exemption from any node carrying a _netbox_id was too
+        broad a reading of that exception. Here the addressed node (row 41,
+        master M, in a name bucket that splits) and an UNADDRESSED node naming M
+        under another name never met either, though the unaddressed one
+        contradicts nothing: both resolve to row 41 through unique_master, the
+        differ emits two updates, and the later name silently wins. Measured
+        before the fix: three survivors where the first and third are one row.
+
+        They meet now, and meeting surfaces the real disagreement -- one row
+        cannot be called two things -- which is a report rather than a silent
+        write. The contest is decided over the MASTER, across names: only a
+        master claimed by more than one distinct id qualifies its key.
+        """
+        nodes = [
+            dict(self._addressed("vc-a", "fpk-x", 41),
+                 master=UnresolvedReference(object_type="dcim.device", uuid="dev-m")),
+            # splits the "fpk-x" bucket, so vc-a is partitioned
+            {"_uuid": "vc-c", "_object_type": "dcim.virtualchassis", "_refs": set(),
+             "name": "fpk-x",
+             "master": UnresolvedReference(object_type="dcim.device", uuid="dev-m2")},
+            # another name, same master as vc-a, addresses nothing
+            {"_uuid": "vc-b", "_object_type": "dcim.virtualchassis", "_refs": set(),
+             "name": "fpk-y",
+             "master": UnresolvedReference(object_type="dcim.device", uuid="dev-m")},
+        ]
+        with self.assertRaises(serializers.ValidationError) as caught:
+            transformer._fingerprint_dedupe(nodes)
+        message = str(caught.exception)
+        self.assertIn("Conflicting values for 'name'", message)
+        self.assertIn("fpk-x", message)
+        self.assertIn("fpk-y", message)
+
     def test_two_addressed_rows_are_not_remerged_by_a_shared_master(self):
         """
         The unique_master exemption must not undo the partition's own answer.

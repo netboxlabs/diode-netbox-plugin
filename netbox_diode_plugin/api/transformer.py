@@ -891,20 +891,64 @@ def _vc_identity_partition(entities: list[dict]) -> dict[str, int]:
         name = entity.get('name')
         if isinstance(name, str) and name:
             buckets.setdefault(name, []).append(entity)
-    buckets = {name: nodes for name, nodes in buckets.items() if len(nodes) > 1}
-    if not buckets:
-        return {}
-
+    split_buckets = {name: nodes for name, nodes in buckets.items() if len(nodes) > 1}
     canonical = _canonical_uuids(entities)
+
     partition = {}
-    for nodes in buckets.values():
+    for nodes in split_buckets.values():
         identities = [_canonical_vc_identity(node, canonical) for node in nodes]
         groups = partition_vc_identities(identities)
         if len(set(groups)) < 2:
             continue
         for node, group in zip(nodes, groups, strict=True):
             partition[node['_uuid']] = group
-    return partition
+
+    return partition, _contested_master_nodes(buckets, canonical)
+
+
+def _contested_master_nodes(buckets: dict, canonical: dict) -> set:
+    """
+    Nodes whose unique_master key must be qualified: two ids claim one master.
+
+    unique_master is a DB unique constraint, so two nodes naming one master are
+    one row and must meet -- that is why the key is normally left bare. The one
+    exception is two nodes ADDRESSING DIFFERENT rows while naming that master:
+    merging those drops one addressed row silently, because _merge_nodes ignores
+    private fields.
+
+    The exception has to be decided over the master, ACROSS names, not per node.
+    An earlier revision withheld the exemption from any node carrying a
+    _netbox_id, which is too broad: an addressed node and an UNADDRESSED one
+    naming the same master under a different name then never met either, though
+    the unaddressed one contradicts nothing -- both later resolved to that same
+    row and the differ emitted two updates, the later name silently winning.
+    Measured: three nodes, one addressing row 41 with master M, one splitting
+    its name bucket, one naming M under another name -- three survivors where
+    the first and third should have been one.
+
+    So: a master claimed by more than one distinct id is CONTESTED, and only
+    the nodes naming a contested master get their key qualified (by their own
+    id, so equal ids still meet and different ones stay apart). A node with no
+    id naming a contested master is qualified too, with None -- it is
+    compatible with both claims and must not silently join either.
+    """
+    ids_by_master: dict[str, set] = {}
+    nodes_by_master: dict[str, list] = {}
+    for nodes in buckets.values():
+        for node in nodes:
+            master = node.get('master')
+            if not isinstance(master, UnresolvedReference):
+                continue
+            key = canonical.get(master.uuid, master.uuid)
+            nodes_by_master.setdefault(key, []).append(node['_uuid'])
+            netbox_id = node.get('_netbox_id')
+            if netbox_id is not None:
+                ids_by_master.setdefault(key, set()).add(netbox_id)
+    contested = set()
+    for key, ids in ids_by_master.items():
+        if len(ids) > 1:
+            contested.update(nodes_by_master.get(key, ()))
+    return contested
 
 
 @profiled("fingerprint_dedupe")
@@ -922,7 +966,7 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
     deduplicated = []
     new_refs = {} # uuid -> uuid
     refs_released = False
-    partition = _vc_identity_partition(entities)
+    partition, contested_masters = _vc_identity_partition(entities)
 
     for entity in entities:
         if entity.get('_is_post_create'):
@@ -935,37 +979,35 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
             _update_unresolved_refs(entity, new_refs)
             fps = fingerprints(entity, entity['_object_type'])
             group = partition.get(entity['_uuid'])
-            if group is not None:
-                # Keep the groups apart, rather than teaching this loop a second,
-                # type-aware notion of "is this the same node". Two nodes in one
-                # group are qualified identically and merge exactly as before; two
-                # in different groups no longer meet.
+            master_fp = vc_unique_master_fingerprint(entity)
+            if group is not None or entity['_uuid'] in contested_masters:
+                # Two independent qualifiers, because the two keys answer to
+                # different things.
                 #
-                # Every key EXCEPT unique_master. That one is a DB unique
-                # constraint, so two nodes naming one master are one row whatever
-                # their names or groups say and must still meet -- qualifying it
-                # separated a partitioned node from every UNPARTITIONED one (the
-                # qualifier is bucket-local, assigned only inside a name bucket
-                # that actually splits), so two nodes naming ONE master under
-                # DIFFERENT names stopped merging and the second create bound the
-                # first row. Qualifying ONLY the name key was equally wrong the
-                # other way: the whole-payload key ignores private fields, so two
-                # nodes differing only in _netbox_id hashed identically and merged
-                # straight back together, dropping one addressed row.
-                # ...unless this node ADDRESSES a row. The exemption rests on
-                # "two nodes naming one master are one row", which is true only
-                # while neither says which row it is. Two nodes explicitly
-                # addressing DIFFERENT rows have said they are two, so a shared
-                # master is contradictory data rather than evidence of sameness
-                # -- and merging them dropped one addressed row silently,
-                # because _merge_nodes ignores conflicts in private fields, so
-                # nothing reported the _netbox_id disagreement. Qualified, they
-                # stay apart and the impossible request (one unique master on
-                # two rows) is refused by the constraint that owns it.
-                keep = (None if entity.get('_netbox_id') is not None
-                        else vc_unique_master_fingerprint(entity))
-                fps = [fp if keep is not None and fp == keep else (fp, group)
-                       for fp in fps]
+                # unique_master is a DB unique constraint: two nodes naming one
+                # master ARE one row, whatever their names or name-buckets say,
+                # so this key stays BARE and lets them meet. It is qualified
+                # only where two distinct addressed row ids claim that same
+                # master (_contested_master_nodes), which is the one case where
+                # meeting would silently drop an addressed row -- and then by
+                # the node's own id, so equal ids still meet.
+                #
+                # Every other key -- the name key and the whole-payload key --
+                # is qualified by the name-bucket group, which is what keeps two
+                # same-named nodes with incompatible identity apart. The
+                # whole-payload key needs it too: it ignores private fields, so
+                # two nodes differing only in _netbox_id hash identically.
+                contested = entity['_uuid'] in contested_masters
+                qualified = []
+                for fp in fps:
+                    if master_fp is not None and fp == master_fp:
+                        qualified.append(
+                            (fp, entity.get('_netbox_id')) if contested else fp)
+                    elif group is not None:
+                        qualified.append((fp, group))
+                    else:
+                        qualified.append(fp)
+                fps = qualified
             for fp in fps:
                 existing_uuid = by_fp.get(fp)
                 if existing_uuid is not None:
