@@ -262,6 +262,9 @@ def _defer_nested_companions(parent_type, field_name, parent_uuid, nested):
     The reference must go on the post-create node rather than the device's own:
     the chassis already references the device, so asserting the reverse on the
     main node is the cycle _IS_CIRCULAR_REFERENCE exists to break.
+
+    An existing post-create step is extended, not taken as proof the job is
+    done -- see the comment on the lookup below.
     """
     companion = _NESTED_DEFERRED_COMPANIONS.get((parent_type, field_name))
     if companion is None or not nested:
@@ -273,22 +276,40 @@ def _defer_nested_companions(parent_type, field_name, parent_uuid, nested):
     scalars = _POST_CREATE_COMPANIONS.get((nested_type, ref_field), ())
     if not any(scalar in device for scalar in scalars):
         return
-    if any(n.get('_is_post_create') and n.get('_instance') == device['_uuid'] for n in nested):
-        # The device nested the chassis back into itself, so it already has the
-        # step and _move_deferred_companions has already used it.
+    # EXTEND an existing post-create step rather than treating one as proof this
+    # relationship was already deferred. A device has a post-create node for any
+    # of _IS_CIRCULAR_REFERENCE["dcim.device"] -- primary_ip4, primary_ip6,
+    # oob_ip, virtual_chassis -- so "some node exists" says nothing about which
+    # field is on it. Measured with a master carrying vc_position AND oob_ip and
+    # no virtual_chassis nested back: the oob_ip step existed,
+    # _move_deferred_companions left the position alone because that step has no
+    # virtual_chassis, and this helper then bailed on seeing the step at all --
+    # so the position stayed on the device's own change and the signal
+    # overwrote it, exactly the loss this function was added to stop.
+    post_create = next(
+        (n for n in nested
+         if n.get('_is_post_create') and n.get('_instance') == device['_uuid']),
+        None,
+    )
+    if post_create is None:
+        post_create = {
+            "_uuid": str(uuid4()),
+            "_object_type": nested_type,
+            "_refs": {device['_uuid']},
+            "_instance": device['_uuid'],
+            "_is_post_create": True,
+        }
+        nested.append(post_create)
+    elif ref_field in post_create:
+        # This exact relationship is already deferred -- the device nested the
+        # chassis back into itself, and _move_deferred_companions has run.
         return
-    post_create = {
-        "_uuid": str(uuid4()),
-        "_object_type": nested_type,
-        "_refs": {device['_uuid'], parent_uuid},
-        "_instance": device['_uuid'],
-        "_is_post_create": True,
-        ref_field: UnresolvedReference(object_type=parent_type, uuid=parent_uuid),
-    }
+    post_create[ref_field] = UnresolvedReference(
+        object_type=parent_type, uuid=parent_uuid)
+    post_create['_refs'].add(parent_uuid)
     for scalar in scalars:
         if scalar in device:
             post_create[scalar] = device.pop(scalar)
-    nested.append(post_create)
 
 
 def _move_deferred_companions(object_type, node, post_create):

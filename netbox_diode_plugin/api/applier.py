@@ -424,12 +424,19 @@ def _changeset_plans_membership(change: Change, change_set: ChangeSet, created: 
     is true for a device payload nesting virtual_chassis -- the member-first
     shape, which plans exactly the pair "create chassis mastered by R, then
     update R with its chassis and position" -- and false for a STANDALONE
-    dcim.virtualchassis payload, which plans no device change at all. That is
-    the line _choose_adoption_candidate's rule 4 draws, and its limit is stated
-    there: within the member-first shape it cannot tell this producer's own
-    earlier pass from another producer's identically named stack, because the
-    difference is a fact about the pre-existing row and the change names only
-    the planned one.
+    dcim.virtualchassis payload, which plans no device change at all.
+
+    What it is USED for has narrowed. It once licensed adoption of a populated
+    same-named row; that rule is gone, because the change names the row the
+    preview creates and never the pre-existing one adoption would redirect it
+    onto, so it could not tell this producer's own earlier pass from another
+    producer's identically named stack. The single remaining caller is
+    _attach_master_to_virtualchassis's move_is_planned: whether the changeset
+    itself asked for the membership, which is what makes moving the device
+    something the producer requested rather than something adoption inferred.
+
+    Only a change that will actually WRITE that membership counts -- see the
+    change_type gate below.
 
     Matching is by ref string, not by pk, because the chassis does not have one
     yet: differ.diff_to_change puts the create's stringified UnresolvedReference
@@ -522,10 +529,8 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
 
     What is bounded is ADOPTION, not the request. A row is adopted only where
     identity is strong enough that no device is moved OUT of a chassis it
-    already belongs to on the strength of a name. Read that as the guarantee it
-    is and not a stronger one: rule 4 below can still let a chassis-LESS device
-    JOIN a same-named row another producer owns, and that residual is stated
-    under it rather than counted as identity:
+    already belongs to on the strength of a name, and no row is written that
+    the payload has not identified:
 
     1. the requested master is ALREADY a member of exactly one candidate. The
        database has already agreed with the payload; nothing moves. This is the
@@ -726,14 +731,14 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
 
     Bounds, stated as bounds rather than as accepted collateral. Adoption can
     bind a row this payload only described: rule 2 (name plus a non-empty
-    discriminator the payload asserted), rule 3 (a single EMPTY row) and rule 4
-    (a single populated row whose membership this changeset plans). Rule 1 is
-    not among them -- it binds only a row the requested master is already IN,
-    which the payload does not merely describe. Rule 4 is
-    the one that can still land a member-first payload on a same-named row
-    another producer owns, and _choose_adoption_candidate says why no narrowing
-    of it survived measurement. What adoption never does is bind a row on a
-    NAME alone: where identity is not strong it returns None and the payload
+    discriminator the payload asserted) and rule 3 (a single EMPTY row, which
+    is nobody's stack). Rule 1 is not among them -- it binds only a row the
+    requested master is already IN, which the payload does not merely describe.
+    The rule that once bound a POPULATED row on a planned device change is
+    gone: that change names the row the preview creates, never the pre-existing
+    one, so it could not separate this producer's own earlier pass from another
+    producer's identically named stack. What adoption never does is bind a row
+    on a NAME alone: where identity is not strong it returns None and the payload
     gets its own chassis from the ordinary create path, which is what the
     pre-save match does for masterless payloads by declining to write the row
     it matched (matcher._PRE_SAVE_MATCH_BIND_ONLY). Nothing is refused for
@@ -944,8 +949,8 @@ def _lowest_free_vc_position(virtual_chassis) -> int:
 # CREATE. It exists for the case where the row to bind can only be chosen from
 # live database state AND from the rest of the changeset -- for
 # dcim.virtualchassis, "the same-named masterless chassis that already holds
-# this master, or that an explicit discriminator identifies, or that is empty,
-# or that a planned device change names" is not something find_existing_object
+# this master, or that an explicit discriminator identifies, or that is empty"
+# is not something find_existing_object
 # can express: it answers from the payload alone and it may not raise a
 # conflict.
 _CREATE_ADOPTERS = {

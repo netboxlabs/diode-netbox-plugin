@@ -2019,6 +2019,70 @@ class VirtualChassisIngestE2ETests(APITestCase):
                 self.assertEqual(Device.objects.get(name=dev_name).vc_position, 5)
                 self._assert_noop_rediff(payload)
 
+    def test_a_position_survives_an_unrelated_deferred_field_on_the_master(self):
+        """
+        An existing post-create step must be EXTENDED, not read as job done.
+
+        dcim.device has four circular references -- primary_ip4, primary_ip6,
+        oob_ip and virtual_chassis -- so a nested master can already own a
+        post-create step for a reason that has nothing to do with the chassis.
+        Keying on "a step exists" rather than "this relationship is deferred"
+        let the position stay behind:
+
+          master {vc_position: 5, oob_ip: ...}, no virtual_chassis nested back
+          -> the oob_ip step exists, so _move_deferred_companions leaves the
+             position alone (that step carries no virtual_chassis) and the
+             deferral bailed on seeing the step at all
+          -> plan: create device WITH vc_position=5 and no virtual_chassis
+          -> the signal attaches the master and overwrites it with 1
+
+        The same silent loss the deferral was added to stop, one field away.
+        Both the position and the unrelated reference now ride the one step.
+        """
+        for label, seed in (("new", False), ("existing", True)):
+            with self.subTest(label):
+                vc_name, dev_name = f"vce-pcx-{label}", f"vce-pcxd-{label}"
+                if seed:
+                    Device.objects.create(
+                        name=dev_name, site=self.site,
+                        device_type=self.dt, role=self.role)
+                master = {
+                    "name": dev_name,
+                    "site": {"name": "vce-site"},
+                    "role": {"name": "vce-role"},
+                    "device_type": {"manufacturer": {"name": "vce-mfr"}, "model": "vce-dt"},
+                    "vc_position": 5,
+                    # Assigned through an interface on the device itself, which
+                    # is what NetBox requires of an oob_ip -- and it is also the
+                    # realistic shape, since a bare address is rejected.
+                    "oob_ip": {
+                        "address": f"10.99.{1 if seed else 2}.1/24",
+                        "assigned_object_interface": {
+                            "device": {
+                                "name": dev_name,
+                                "site": {"name": "vce-site"},
+                                "role": {"name": "vce-role"},
+                                "device_type": {
+                                    "manufacturer": {"name": "vce-mfr"},
+                                    "model": "vce-dt",
+                                },
+                            },
+                            "name": "mgmt0",
+                            "type": "1000base-t",
+                        },
+                    },
+                }
+                payload = {"timestamp": 1, "object_type": "dcim.virtualchassis",
+                           "entity": {"virtual_chassis": {"name": vc_name, "master": master}}}
+                self._diff_apply(payload)
+
+                device = Device.objects.get(name=dev_name)
+                self.assertEqual(device.vc_position, 5, "the position was overwritten")
+                self.assertIsNotNone(device.virtual_chassis_id)
+                self.assertIsNotNone(
+                    device.oob_ip_id, "the unrelated deferred field was dropped")
+                self._assert_noop_rediff(payload)
+
     def test_a_master_with_no_position_gains_no_deferred_step(self):
         """
         The deferral fires only when a position is actually there.
