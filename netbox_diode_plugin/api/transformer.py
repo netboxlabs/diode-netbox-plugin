@@ -39,6 +39,7 @@ from .matcher import (
     asserted_vc_identity,
     find_existing_object,
     fingerprints,
+    get_model_matchers,
     partition_vc_identities,
     vc_unique_master_fingerprint,
 )
@@ -240,66 +241,161 @@ def _referenced_name(ref, field="name"):
     return None
 
 
-def _scope_conflict(a, b) -> bool:
+# Three-valued, because "cannot tell" is a distinct answer from "the same" and
+# from "different" -- and collapsing it into either is what produced this
+# branch's identity bugs in both directions. Read as UNKNOWN it invented
+# refusals; read as SAME it accepted contradictions.
+_SAME, _DIFFERENT, _UNKNOWN = "same", "different", "unknown"
+
+# References are compared by recursing into the referenced type's own identity
+# (a bay's device, that device's site). The depth bound is a backstop against a
+# reference cycle in the payload, not a semantic choice; exceeding it is
+# UNKNOWN, which refuses nothing.
+_MAX_REFERENCE_DEPTH = 3
+
+
+def _as_reference_payload(ref):
     """
-    Two Site or Tenant references that cannot be the same object.
+    A reference in payload form, whatever shape the producer used.
 
-    Both models are unique on name alone and on slug alone, so either field
-    settles it and the walk stops here rather than recursing into their own
-    scopes.
+    A bare string is the object's name -- that is how a diode payload names a
+    reference without describing it. A bare int is NOT read as a primary key:
+    that would be a guess about the producer's intent, and guessing here is
+    what an identity comparison must not do.
     """
-    for field in ("name", "slug"):
-        x, y = _referenced_name(a, field), _referenced_name(b, field)
-        if x is not None and y is not None and x != y:
-            return True
-    return False
+    if isinstance(ref, dict):
+        return ref
+    if isinstance(ref, str) and ref:
+        return {"name": ref}
+    return None
 
 
-def _device_conflict(a, b) -> bool:
+def _matcher_field_sets(object_type: str):
     """
-    Two device references that cannot be the same device.
+    The identity criteria for a type, as (fields, case-insensitive, exact-row).
 
-    Device is unique on (Lower(name), site, tenant), so the name is compared
-    case-insensitively -- an exact compare here refused payloads that named one
-    device in two casings, reporting a bay as differing from itself.
+    Read off the matchers rather than restated here, because every restatement
+    of this in the branch's history has been incomplete: bay name without the
+    device, the device without its site, the device without its asset_tag, the
+    row without its primary key. get_model_matchers already knows all of them,
+    including which fields Lower() makes case-insensitive.
 
-    Compatibility, not equality: a field only one side asserts cannot
-    contradict, which keeps the natural shape -- where the nested reference
-    names the device less fully than the outer one -- compatible. An omitted
-    tenant therefore reads as unconstrained rather than as NULL, matching how
-    the matcher layer treats a field the payload never mentions.
+    The six hand-written matcher classes (CustomFieldMatcher,
+    VirtualChassisNameMatcher, AutoSlugMatcher and friends) declare no field
+    set, so they are skipped: they answer "does this payload match THIS row",
+    which is a different question from "can these two payloads be one object".
+    A skipped matcher only ever costs evidence, never invents it.
 
-    Device's other unique selectors are left out deliberately. primary_ip4,
-    primary_ip6 and oob_ip are reference-valued, and (rack, position, face)
-    and (virtual_chassis, vc_position) are positional; comparing any of them
-    textually would invent a refusal from two spellings of one row, which is
-    the failure mode this helper was rewritten to remove. And no comparison
-    here can settle two DEVICE references that name their device through
-    disjoint selectors -- an asset_tag on one side, a name on the other. They
-    share no criterion, so they stay compatible and the guard says nothing.
-    That residue is now confined to the device: a BAY addressed by pk alone is
-    resolved (see _resolved_bay_payload) rather than left incomparable, because
-    there the missing criterion made a non-converging success reachable.
+    ``exact_row`` marks a matcher whose equality proves sameness. A CONDITIONAL
+    matcher does not: dcim_device_unique_name_site only applies where tenant IS
+    NULL, and a payload silent about tenant has not said that, so reading its
+    equality as one row would be the guess this whole relation exists to avoid.
     """
-    # asset_tag is unique on its own, so when both sides carry one it settles
-    # the question outright: equal is one device however much else disagrees,
-    # different is two devices however much else agrees. Deciding it here
-    # rather than alongside the name is what keeps a differing name from
-    # refusing two references to ONE device -- the same precedence _netbox_id
-    # already takes over master in vc_identities_conflict.
+    try:
+        model_class = get_object_type_model(object_type)
+    except Exception:
+        return []
+    criteria = []
+    for matcher in get_model_matchers(model_class):
+        get_refs = getattr(matcher, "_get_refs", None)
+        if get_refs is None:
+            continue
+        refs = get_refs()
+        if not refs:
+            continue
+        insensitive = getattr(matcher, "_get_insensitive_refs", lambda: frozenset())()
+        criteria.append(
+            (tuple(sorted(refs)), frozenset(insensitive),
+             getattr(matcher, "condition", None) is None))
+    return criteria
+
+
+def _compare_field(object_type: str, field: str, a, b, insensitive: bool, depth: int) -> str:
+    """One field of two payloads: the same value, a different one, or unknown."""
+    if a is None or b is None:
+        return _UNKNOWN
+    ref_info = get_json_ref_info(object_type, field)
+    if ref_info is not None:
+        if ref_info.is_generic or ref_info.is_generic_object:
+            # the target type lives in a sibling field; not resolvable here
+            return _UNKNOWN
+        return _compare_references(ref_info.object_type, a, b, depth + 1)
+    if isinstance(a, dict | list | tuple) or isinstance(b, dict | list | tuple):
+        return _UNKNOWN
+    if insensitive and isinstance(a, str) and isinstance(b, str):
+        return _SAME if a.lower() == b.lower() else _DIFFERENT
+    return _SAME if a == b else _DIFFERENT
+
+
+def _compare_references(object_type: str, a, b, depth: int = 0) -> str:
+    """
+    Can these two payloads denote the same object of this type?
+
+    Two asymmetric rules, and the asymmetry is the whole design:
+
+    - DIFFERENCE needs only ONE identity field asserted on both sides with
+      different values. That follows from a field being single-valued, not from
+      uniqueness: a row has one name, so two payloads disagreeing about the
+      name are two rows even where the name alone identifies nothing.
+    - SAMENESS needs a whole unconditional matcher asserted and equal. That is
+      where uniqueness is doing the work -- a unique constraint satisfied
+      identically on both sides can only be one row.
+
+    Sameness OUTRANKS difference, because it is the stronger statement: two
+    references carrying one asset_tag are one device even if they spell its
+    name differently, and that disagreement is then a field conflict on that
+    row for _merge_nodes to report, not evidence of a second row.
+
+    Anything else is UNKNOWN, which refuses nothing. A field only one side
+    asserts cannot contradict, so an under-specified reference stays compatible
+    with a fuller one -- that is what keeps the natural nested shape ingestable.
+    """
+    if depth > _MAX_REFERENCE_DEPTH:
+        return _UNKNOWN
+    a, b = _as_reference_payload(a), _as_reference_payload(b)
+    if a is None or b is None:
+        return _UNKNOWN
+
+    # An explicit primary key is the one identity statement in this pipeline
+    # that needs no interpretation, so it decides before any selector.
     a_row, b_row = _addressed_row_of(a), _addressed_row_of(b)
     if a_row is not None and b_row is not None:
-        return a_row != b_row
-    a_tag, b_tag = _asserted(a, "asset_tag"), _asserted(b, "asset_tag")
-    if isinstance(a_tag, str) and isinstance(b_tag, str):
-        return a_tag != b_tag
-    a_name, b_name = _referenced_name(a), _referenced_name(b)
-    if a_name is not None and b_name is not None and a_name.lower() != b_name.lower():
-        return True
-    for field in ("site", "tenant"):
-        if _scope_conflict(_asserted(a, field), _asserted(b, field)):
-            return True
-    return False
+        return _SAME if a_row == b_row else _DIFFERENT
+
+    same = different = False
+    for fields, insensitive, exact_row in _matcher_field_sets(object_type):
+        verdicts = [
+            _compare_field(object_type, field, _asserted(a, field), _asserted(b, field),
+                           field in insensitive, depth)
+            for field in fields
+        ]
+        if _DIFFERENT in verdicts:
+            different = True
+        elif exact_row and all(v == _SAME for v in verdicts):
+            same = True
+    if same:
+        return _SAME
+    return _DIFFERENT if different else _UNKNOWN
+
+
+def references_conflict(object_type: str, a, b) -> bool:
+    """
+    True when two payloads CANNOT denote the same object of this type.
+
+    The single payload-level identity comparison. It replaced three
+    hand-written ones -- bay, device and scope -- which between them accreted
+    five separate findings, each the same shape: a selector the comparison did
+    not know about. Deriving the criteria from the matchers is what stops the
+    sixth, because adding a type or a constraint is then data, not code.
+
+    Payload-level is the operative limit, and it is a real one: two references
+    naming an object through DISJOINT selectors -- an asset_tag on one side, a
+    name on the other -- share no criterion and are UNKNOWN here, whatever the
+    database would say. Where that residue makes a wrong write reachable, the
+    caller resolves the addressed side first (_comparable_bay_sides) rather
+    than this relation guessing. See docs/payload-identity.md.
+    """
+    return _compare_references(object_type, a, b) == _DIFFERENT
 
 
 def _resolved_bay_payload(object_type: str, row_id: int):
@@ -345,7 +441,7 @@ def _comparable_bay_sides(mine, theirs, object_type):
     """
     Resolve whichever side is addressed by pk alone, so the two can be compared.
 
-    Kept out of _reverse_side_conflict so that relation stays a pure function of
+    Kept out of references_conflict so that relation stays a pure function of
     two payloads -- it is table-tested that way -- and so the resolved payload is
     available to the error message, which would otherwise report a row by id
     while this code knows its name.
@@ -362,26 +458,6 @@ def _comparable_bay_sides(mine, theirs, object_type):
     elif their_row is not None and _asserted(theirs, "name") is None:
         theirs = _resolved_bay_payload(object_type, their_row) or theirs
     return mine, theirs
-
-
-def _reverse_side_conflict(mine, theirs) -> bool:
-    """
-    True when two ModuleBay payloads cannot name the same bay.
-
-    ModuleBay is unique on ('name', 'device'), so the bay name is compared
-    exactly and the device by its own identity. Comparing the name alone
-    collapsed two same-named bays on two same-named devices in different
-    sites, which let the contradiction below through.
-    """
-    my_row, their_row = _addressed_row_of(mine), _addressed_row_of(theirs)
-    if my_row is not None and their_row is not None:
-        return my_row != their_row
-    my_name, their_name = _asserted(mine, "name"), _asserted(theirs, "name")
-    if my_name is None or their_name is None:
-        return False
-    if my_name != their_name:
-        return True
-    return _device_conflict(_asserted(mine, "device"), _asserted(theirs, "device"))
 
 
 def _bay_description(payload) -> str:
@@ -458,7 +534,7 @@ def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str,
     # compared as anonymous payloads look compatible.
     mine = proto_json if metadata is None else {**proto_json, "metadata": metadata}
     mine, named_parent = _comparable_bay_sides(mine, named_parent, object_type)
-    if not _reverse_side_conflict(mine, named_parent):
+    if not references_conflict(object_type, mine, named_parent):
         return
     ref_info = get_json_ref_info(object_type, reverse_field)
     nested_type = ref_info.object_type if ref_info else "nested object"

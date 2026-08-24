@@ -106,6 +106,8 @@ make docker-compose-netbox-plugin-test
 
 ## Generating Documentation
 Generates documentation on how diode entities are matched. The generated documentation is output to [here](./docs/matching-criteria-documentation.md).
+
+For how those criteria are applied to compare two *payloads* — what the plugin may conclude about identity before anything is looked up, and at which pipeline stage — see [payload identity](./docs/payload-identity.md).
 ```shell
 make docker-compose-generate-matching-docs
 ```

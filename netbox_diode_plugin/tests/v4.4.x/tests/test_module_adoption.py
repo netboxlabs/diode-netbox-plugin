@@ -617,21 +617,28 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         self.assertFalse(Module.objects.filter(device=self.dev).exists())
 
 
-class ReverseSideConflictRuleTests(SimpleTestCase):
+class ReferencesConflictRuleTests(TestCase):
     """
-    The rule table for `_reverse_side_conflict`, without the pipeline.
+    The rule table for `references_conflict`, without the pipeline.
 
-    The relation answers one question -- can these two payloads name the same
-    module bay? -- and it is a COMPATIBILITY relation, not equality: only a
-    field both sides assert, with values that disagree, proves two bays. A
-    field one side leaves out cannot contradict anything, which is what keeps
-    the natural shape (the nested module naming its bay less fully than the
-    outer payload does) from being refused.
+    The relation answers one question -- can these two payloads denote the same
+    object? -- and it is a COMPATIBILITY relation, not equality: only a field
+    both sides assert, with values that disagree, proves two objects. A field
+    one side leaves out cannot contradict anything, which is what keeps the
+    natural shape (the nested module naming its bay less fully than the outer
+    payload does) from being refused.
 
-    The identity being compared is taken from the model constraints rather than
-    guessed: ModuleBay is unique on ('name', 'device'), Device on
-    (Lower(name), site, tenant), and Site and Tenant are each unique on name
-    alone and on slug alone, so the walk stops at their names.
+    Every row here predates the relation being DERIVED from the matchers. They
+    are kept, unchanged, precisely for that: three hand-written comparisons
+    (bay, device, scope) were replaced by one that reads its criteria from
+    get_model_matchers, and this table is the evidence the replacement decides
+    every case the hand-written ones did -- ModuleBay unique on
+    ('name', 'device'), Device on (Lower(name), site, tenant) and on asset_tag,
+    Site and Tenant on name alone and slug alone.
+
+    It is a TestCase rather than a SimpleTestCase because the criteria now come
+    from the model registry, and reference fields recurse into the referenced
+    type's own identity. No row queries a row.
     """
 
     def _bay(self, name, device=None):
@@ -725,10 +732,10 @@ class ReverseSideConflictRuleTests(SimpleTestCase):
         for description, mine, theirs, expected in cases:
             with self.subTest(description):
                 self.assertEqual(
-                    transformer._reverse_side_conflict(mine, theirs), expected)
+                    transformer.references_conflict("dcim.modulebay", mine, theirs), expected)
                 # the relation must not depend on which side is which
                 self.assertEqual(
-                    transformer._reverse_side_conflict(theirs, mine), expected,
+                    transformer.references_conflict("dcim.modulebay", theirs, mine), expected,
                     f"{description}: not symmetric")
 
     def test_a_camelcase_parent_key_is_read(self):
@@ -835,7 +842,7 @@ class ComparableBaySidesTests(TestCase):
         self.assertEqual(transformer._addressed_row_of(mine), self.bay.pk)
         self.assertIs(theirs, named, "the named side was resolved too")
         # and the resolved pair is now comparable, which is the whole point
-        self.assertTrue(transformer._reverse_side_conflict(mine, theirs))
+        self.assertTrue(transformer.references_conflict("dcim.modulebay", mine, theirs))
 
     def test_the_nested_side_is_resolved_the_same_way(self):
         """Either side may be the addressed one."""
@@ -883,4 +890,122 @@ class ComparableBaySidesTests(TestCase):
         mine, theirs = self._sides(missing, named)
 
         self.assertIs(mine, missing)
-        self.assertFalse(transformer._reverse_side_conflict(mine, theirs))
+        self.assertFalse(transformer.references_conflict("dcim.modulebay", mine, theirs))
+
+
+class DerivedIdentityCriteriaTests(TestCase):
+    """
+    The relation reads its criteria from the matchers, for any type.
+
+    The table above proves the derivation reproduces what three hand-written
+    comparisons decided for one shape. These assert the part that makes the
+    replacement worth having: the same rules applied to types nobody wrote a
+    comparison for, and the two asymmetric rules stated once.
+    """
+
+    def _conflict(self, object_type, a, b):
+        first = transformer.references_conflict(object_type, a, b)
+        self.assertEqual(
+            first, transformer.references_conflict(object_type, b, a),
+            "the relation is not symmetric")
+        return first
+
+    def test_a_type_nobody_wrote_a_comparison_for(self):
+        """dcim.site was only ever compared by a hardcoded (name, slug) pair."""
+        self.assertTrue(self._conflict("dcim.site", {"name": "s1"}, {"name": "s2"}))
+        self.assertTrue(self._conflict("dcim.site", {"slug": "s1"}, {"slug": "s2"}))
+        # unique on name alone, so equal names are one site
+        self.assertFalse(self._conflict("dcim.site", {"name": "s"}, {"name": "s"}))
+        # disjoint selectors: no criterion in common, so nothing is proved
+        self.assertFalse(self._conflict("dcim.site", {"name": "s"}, {"slug": "s"}))
+
+    def test_sameness_outranks_difference(self):
+        """
+        A satisfied unique constraint is the stronger statement.
+
+        Site is unique on name alone AND on slug alone, so two payloads
+        agreeing on the name are one site even where the slugs disagree -- that
+        disagreement is a field conflict on that row for _merge_nodes to
+        report, not evidence of a second row.
+        """
+        self.assertFalse(self._conflict(
+            "dcim.site", {"name": "s", "slug": "x"}, {"name": "s", "slug": "y"}))
+
+    def test_difference_needs_only_one_field(self):
+        """
+        Because a field is single-valued, not because it is unique.
+
+        A device's name identifies nothing on its own -- Device is unique on
+        (Lower(name), site, tenant) -- but a row still has one name, so two
+        payloads disagreeing about it are two rows.
+        """
+        self.assertTrue(self._conflict(
+            "dcim.device", {"name": "rtr-a"}, {"name": "rtr-b"}))
+
+    def test_case_insensitivity_comes_from_the_constraint(self):
+        """
+        Lower(F(name)) in the constraint is why the name compares insensitively.
+
+        Asserted with tenant on both sides so the (Lower(name), site, tenant)
+        matcher is complete: it then reports SAME, which it can only do if the
+        casing was folded. Without that, the differing name would be DIFFERENT
+        and this pair would conflict.
+        """
+        scope = {"site": {"name": "s"}, "tenant": {"name": "t"}}
+        self.assertFalse(self._conflict(
+            "dcim.device", {"name": "RTR", **scope}, {"name": "rtr", **scope}))
+        # and the same shape with a genuinely different name still conflicts
+        self.assertTrue(self._conflict(
+            "dcim.device", {"name": "rtr-a", **scope}, {"name": "rtr-b", **scope}))
+
+    def test_a_conditional_constraint_does_not_prove_sameness(self):
+        """
+        dcim_device_unique_name_site applies only where tenant IS NULL.
+
+        A payload silent about tenant has not said that, so its equality on
+        (name, site) is not proof of one row -- two devices with that name and
+        site can exist under different tenants. Left UNKNOWN, which refuses
+        nothing, rather than read as SAME.
+        """
+        pair = {"name": "rtr", "site": {"name": "s"}}
+        # equal on (name, site) and NOT declared the same object...
+        self.assertFalse(self._conflict("dcim.device", dict(pair), dict(pair)))
+        # ...which is visible here: a tenant disagreement still conflicts,
+        # where a SAME verdict on (name, site) would have outranked it
+        self.assertTrue(self._conflict(
+            "dcim.device",
+            {**pair, "tenant": {"name": "t1"}}, {**pair, "tenant": {"name": "t2"}}))
+
+    def test_references_recurse_into_their_own_identity(self):
+        """A device's site is compared as a site, not as text."""
+        # same site named two ways -> no criterion in common -> not a conflict
+        self.assertFalse(self._conflict(
+            "dcim.device",
+            {"name": "rtr", "site": {"name": "s"}},
+            {"name": "rtr", "site": {"slug": "s"}}))
+        # a site that is definitely another site -> conflict, from depth 2
+        self.assertTrue(self._conflict(
+            "dcim.device",
+            {"name": "rtr", "site": {"name": "s1"}},
+            {"name": "rtr", "site": {"name": "s2"}}))
+
+    def test_identity_the_model_does_not_have_is_not_invented(self):
+        """
+        dcim.virtualchassis has no unique name, so two names prove nothing.
+
+        This is the property that makes deriving safer than restating: the
+        relation cannot claim identity the constraints do not give it, which is
+        the whole reason VirtualChassis needed its own partition in the first
+        place.
+        """
+        self.assertFalse(self._conflict(
+            "dcim.virtualchassis", {"name": "stack-a"}, {"name": "stack-b"}))
+
+    def test_an_unknown_type_refuses_nothing(self):
+        """No criteria to read means no evidence, not an error."""
+        self.assertFalse(self._conflict(
+            "nosuch.type", {"name": "a"}, {"name": "b"}))
+
+    def test_a_bare_int_is_not_read_as_a_primary_key(self):
+        """Guessing that would be exactly the interpretation this must not do."""
+        self.assertFalse(self._conflict("dcim.site", 1, 2))
