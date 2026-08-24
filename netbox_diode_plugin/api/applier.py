@@ -45,6 +45,10 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     _validate_change_set(change_set)
 
     created = {}
+    # ref_id -> object_type for CREATEs that BOUND to an existing row and wrote
+    # nothing to it (_try_bind_existing_instance). The UPDATE branch refuses to
+    # write through such a ref, see _apply_change.
+    bound_only: dict[str, str] = {}
     warnings: list[dict] = []
     for change in change_set.changes:
         change_type = change.change_type
@@ -56,7 +60,8 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         try:
             model_class = get_object_type_model(object_type)
             data = _pre_apply(model_class, change, created)
-            _apply_change(data, model_class, change, created, request, change_set, warnings)
+            _apply_change(data, model_class, change, created, request, change_set, warnings,
+                          bound_only)
         except ValidationError as e:
             raise error_from_validation_error(e, object_type)
         except ObjectDoesNotExist:
@@ -171,24 +176,23 @@ def _try_bind_existing_instance(data: dict, object_type: str, serializer_class, 
     called -- the cached match is still accurate, precisely because nothing was
     written.
 
-    That guarantee covers the CREATE path, and only it. It is not a promise
-    that no changeset can write this row. _apply_change's UPDATE branch that
-    resolves through created[ref_id] takes an ordinary serializer.save(), so a
-    hand-built changeset pairing a create with a ref_id-only update of the SAME
-    object_type (no object_id) writes the update's payload onto the row this
-    bind chose. The parent commit does the same -- note the scoping, which is
-    exact: for a ref_id-only update of a DIFFERENT object_type the parent and
-    this branch also agree, but only because _instance_for_deferred_update
-    declines the re-read there; without it the write lands on an unrelated row
-    of the update's own type. origin/develop does not do either, because it
-    inserts a duplicate and writes to that instead -- so the same-type case is
-    a divergence from develop in the destructive direction and it is stated
-    rather than implied. Nothing plannable reaches it: dcim.virtualchassis is
-    absent from transformer._IS_CIRCULAR_REFERENCE, so generate-diff never
-    emits a VC update without an object_id (0 of 960 planned changes across
-    three matrix runs). test_bind_only_types_are_not_circular_references pins
-    exactly that, so adding the type there cannot turn this gap reachable in
-    silence.
+    The no-write guarantee is a property of this path, so a later change in the
+    same changeset must not be able to launder a write through it. It cannot:
+    _apply_change records every ref bound here in ``bound_only`` and REFUSES a
+    same-type UPDATE addressed only by that ref, because such an update would
+    save the payload onto exactly the row this bind declined to touch. An
+    earlier revision documented that hole instead of closing it, on the
+    argument that nothing plannable reaches it -- true, and pinned
+    (dcim.virtualchassis is absent from transformer._IS_CIRCULAR_REFERENCE, so
+    generate-diff emitted 0 VC updates without an object_id across 960 planned
+    changes in three matrix runs, and
+    test_bind_only_types_are_not_circular_references keeps it that way). But
+    apply-change-set and bulk-apply take a changeset from the client, so
+    "unplannable" is not "unreachable", and the same shape arises from a
+    changeset planned before another worker created the row this bind now
+    finds. A caller that means to write the row can still say so with an
+    explicit object_id. Scoping: a ref-only update of a DIFFERENT object_type
+    was already declined by _instance_for_deferred_update.
 
     The lookup is _find_existing_object_or_none rather than a bare
     find_existing_object for the same reason its other callers use it: a
@@ -1239,8 +1243,60 @@ def _warn_create_bound_to_existing(warnings: list, instance, object_type: str,
     })
 
 
+def _record_bound_only(bound_only: dict, change: Change, pre_save_matched: bool) -> None:
+    """
+    Remember a ref whose CREATE resolved onto an existing row and wrote nothing.
+
+    The row is a pre-existing object matched on criteria no DB constraint
+    enforces, so it may be a different object that merely matches, and
+    _try_bind_existing_instance deliberately declines the write.
+    _refuse_write_through_bound_ref is what stops a later change in the same
+    changeset making that write instead.
+    """
+    if pre_save_matched and pre_save_match_binds_only(change.object_type):
+        bound_only[change.ref_id] = change.object_type
+
+
+def _refuse_write_through_bound_ref(change: Change, bound_only: dict) -> None:
+    """
+    Refuse an UPDATE addressed only by a ref whose CREATE merely bound a row.
+
+    The UPDATE branch is an ordinary serializer.save(), so writing through such
+    a ref lands the payload on exactly the row the CREATE refused to touch --
+    laundering a write past the bind-only no-write guarantee, one change later.
+
+    Only the same object_type; a ref-only update of a DIFFERENT type is already
+    declined by _instance_for_deferred_update. Nothing plannable reaches either
+    case, and that is pinned rather than assumed: dcim.virtualchassis is the
+    only bind-only type and it is absent from
+    transformer._IS_CIRCULAR_REFERENCE, so generate-diff never emits a VC
+    update without an object_id (test_bind_only_types_are_not_circular_
+    references fails the moment that changes). This guard is for the two ways
+    the shape arrives anyway -- a changeset a client hands to apply-change-set
+    or bulk-apply directly, and one planned before another worker created the
+    row the bind now finds.
+
+    A caller that means to write the row can still say so, with an explicit
+    object_id.
+    """
+    if bound_only.get(change.ref_id) != change.object_type:
+        return
+    raise _err(
+        f"{change.object_type} update addresses ref {change.ref_id!r}, whose "
+        "create resolved onto an existing row without writing to it -- that "
+        "row was matched on criteria no unique constraint enforces, so it may "
+        "be a different object. Send the update with an explicit object_id to "
+        "write it deliberately.",
+        change.object_type, "ref_id",
+    )
+
+
 def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict, request,
-                  change_set: ChangeSet, warnings: list | None = None):
+                  change_set: ChangeSet, warnings: list | None = None,
+                  bound_only: dict | None = None):
+    # apply_changeset is the only caller and always passes one; the default
+    # keeps the signature usable from a test that does not care about binding.
+    bound_only = bound_only if bound_only is not None else {}
     serializer_class = get_serializer_for_model(model_class)
     change_type = change.change_type
 
@@ -1271,9 +1327,11 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         # is then allowed to receive is a second, separate question, which
         # _try_pre_save_match answers per type.
         instance = None
+        pre_save_matched = False
         if _is_auto_created_component(change.object_type) or requires_pre_save_match(change.object_type, data):
             instance = _try_pre_save_match(
                 data, change.object_type, serializer_class, request, warnings)
+            pre_save_matched = instance is not None
 
         if not instance and (adopt := _CREATE_ADOPTERS.get(change.object_type)):
             # The whole changeset is passed, not just this change: whether a row
@@ -1291,6 +1349,7 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         # Always add the instance to created dict so it can be referenced by subsequent changes
         if change.ref_id:
             created[change.ref_id] = instance
+            _record_bound_only(bound_only, change, pre_save_matched)
 
     elif change_type == ChangeType.UPDATE:
         if object_id := change.object_id:
@@ -1302,6 +1361,7 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             invalidate_find_obj_entry(change.object_type, instance.id)
         # create and update in a same change set
         elif change.ref_id and (created_instance := created[change.ref_id]):
+            _refuse_write_through_bound_ref(change, bound_only)
             # Re-read the row instead of updating the in-memory instance the
             # CREATE returned earlier in this changeset. Between the two,
             # NetBox's own signals write to that row directly -- the natural
@@ -1334,16 +1394,13 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             # A row loaded fresh has an empty tracker, which is also exactly
             # what the object_id branch above operates on.
             #
-            # This branch is an ordinary serializer.save(), and it is NOT
-            # covered by the bind-only no-write guarantee
+            # This branch is an ordinary serializer.save(), so on its own it
+            # is not covered by the bind-only no-write guarantee
             # (_try_bind_existing_instance), which is a property of the CREATE
-            # path alone. A hand-built changeset that pairs a create with a
+            # path alone. The bound_only check above is what extends it here:
+            # without that check, a changeset pairing a bind-only create with a
             # ref_id-only update of the same type writes the update's payload
-            # onto whatever row the create bound -- including a row the create
-            # itself refused to touch. Unreachable from generate-diff today,
-            # and test_bind_only_types_are_not_circular_references keeps it
-            # that way by failing the moment a bind-only type is added to
-            # transformer._IS_CIRCULAR_REFERENCE.
+            # onto the very row the create refused to touch.
             #
             # No prechange snapshot is taken here, and that is a decision
             # rather than an omission. snapshot_for_apply does not only add
@@ -1364,11 +1421,11 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
             # route takes no snapshot at all by design, so a HAND-BUILT ref_id
             # update following a bind has no prechange to carry and records one
             # row with prechange null where base recorded two populated ones.
-            # dcim.virtualchassis is absent from _IS_CIRCULAR_REFERENCE, so the
-            # differ cannot plan that shape (test_bind_only_types_are_not_
-            # circular_references pins it), and the row it leaves is correct --
-            # it is the audit trail that is thinner, in exchange for not making
-            # the destructive write at all.
+            # That case is now refused outright by the bound_only check above,
+            # so the thin audit trail it would have left is unreachable; the
+            # differ could not plan the shape either (dcim.virtualchassis is
+            # absent from _IS_CIRCULAR_REFERENCE, pinned by
+            # test_bind_only_types_are_not_circular_references).
             # Re-read only when the ref resolves to this change's own type;
             # _instance_for_deferred_update has the cross-type case.
             instance = _instance_for_deferred_update(created_instance, model_class)

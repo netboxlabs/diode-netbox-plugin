@@ -391,6 +391,48 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         self.assertEqual(ModuleBay.objects.filter(name="sc-bay").count(), 0)
         self.assertEqual(Module.objects.count(), 0)
 
+    def test_a_module_naming_a_bay_on_a_device_with_another_asset_tag_is_refused(self):
+        """
+        A device reference can identify its device without naming it.
+
+        Device is unique on asset_tag alone, so two references carrying
+        different asset_tags are two devices even with no name on either side.
+        Comparing only name/site/tenant found nothing asserted on both sides
+        and read that as compatible.
+
+        Measured with name/site/tenant only: this payload applied 200 with
+        errors null, installed the module in the OTHER device's bay, and left
+        this one empty to be re-planned on every later ingest.
+        """
+        dev_a = Device.objects.create(
+            name="im-at-a", site=self.dev.site, device_type=self.dev.device_type,
+            role=self.dev.role, asset_tag="AT-A",
+        )
+        Device.objects.create(
+            name="im-at-b", site=self.dev.site, device_type=self.dev.device_type,
+            role=self.dev.role, asset_tag="AT-B",
+        )
+        other = {"asset_tag": "AT-B"}
+        entity = {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": {"asset_tag": "AT-A"},
+            "name": "at-bay",
+            "installed_module": {
+                "device": other,
+                "module_bay": {"device": other, "name": "at-bay"},
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+                "serial": "IM-SER-1",
+            },
+        }}}
+        r = self.client.post(self.diff_url, data=entity, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = str(r.json().get("errors"))
+        # both bays are named 'at-bay' and neither device is named, so the
+        # asset tags are the only thing telling the two sides apart
+        self.assertIn("AT-A", errors)
+        self.assertIn("AT-B", errors)
+        self.assertEqual(ModuleBay.objects.filter(device=dev_a).count(), 0)
+        self.assertEqual(Module.objects.count(), 0)
+
     def test_reingest_of_an_already_installed_module_is_a_noop(self):
         """
         Rows already correct in the DB must survive a second pass.
@@ -523,6 +565,27 @@ class ReverseSideConflictRuleTests(SimpleTestCase):
              self._bay("b", dev), False),
             ("bare name string that disagrees", self._bay("b", "other"),
              self._bay("b", dev), True),
+            # asset_tag is unique on its own, so it settles the question
+            # outright -- and settling it FIRST is what stops a differing name
+            # from refusing two references to one device
+            ("different asset_tag, neither side named",
+             self._bay("b", {"asset_tag": "A1"}),
+             self._bay("b", {"asset_tag": "A2"}), True),
+            ("different asset_tag, same name",
+             self._bay("b", {"asset_tag": "A1", "name": "rtr"}),
+             self._bay("b", {"asset_tag": "A2", "name": "rtr"}), True),
+            ("same asset_tag, different names",
+             self._bay("b", {"asset_tag": "A1", "name": "rtr-a"}),
+             self._bay("b", {"asset_tag": "A1", "name": "rtr-b"}), False),
+            ("same asset_tag, different sites",
+             self._bay("b", {"asset_tag": "A1", "site": {"name": "s1"}}),
+             self._bay("b", {"asset_tag": "A1", "site": {"name": "s2"}}), False),
+            ("asset_tag on one side only falls back to the name",
+             self._bay("b", {"asset_tag": "A1", "name": "rtr"}),
+             self._bay("b", {"name": "other"}), True),
+            # the stated bound: no criterion in common, so nothing to compare
+            ("disjoint selectors stay compatible",
+             self._bay("b", {"asset_tag": "A1"}), self._bay("b", {"name": "rtr"}), False),
             # not comparable at all -> never a refusal
             ("no bay name on one side", {"device": dev}, self._bay("b", dev), False),
             ("empty bay name", self._bay("", dev), self._bay("b", dev), False),

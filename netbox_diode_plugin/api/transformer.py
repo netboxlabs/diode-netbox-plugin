@@ -238,7 +238,27 @@ def _device_conflict(a, b) -> bool:
     names the device less fully than the outer one -- compatible. An omitted
     tenant therefore reads as unconstrained rather than as NULL, matching how
     the matcher layer treats a field the payload never mentions.
+
+    Device's other unique selectors are left out deliberately. primary_ip4,
+    primary_ip6 and oob_ip are reference-valued, and (rack, position, face)
+    and (virtual_chassis, vc_position) are positional; comparing any of them
+    textually would invent a refusal from two spellings of one row, which is
+    the failure mode this helper was rewritten to remove. And no comparison
+    here can settle two references that name the device through DISJOINT
+    selectors -- an asset_tag on one side, a name on the other. They share no
+    criterion, so they stay compatible and the guard says nothing, which is
+    the per-criterion identity bound this branch already states: closing it
+    needs resolved identities, and resolution runs after this point.
     """
+    # asset_tag is unique on its own, so when both sides carry one it settles
+    # the question outright: equal is one device however much else disagrees,
+    # different is two devices however much else agrees. Deciding it here
+    # rather than alongside the name is what keeps a differing name from
+    # refusing two references to ONE device -- the same precedence _netbox_id
+    # already takes over master in vc_identities_conflict.
+    a_tag, b_tag = _asserted(a, "asset_tag"), _asserted(b, "asset_tag")
+    if isinstance(a_tag, str) and isinstance(b_tag, str):
+        return a_tag != b_tag
     a_name, b_name = _referenced_name(a), _referenced_name(b)
     if a_name is not None and b_name is not None and a_name.lower() != b_name.lower():
         return True
@@ -280,6 +300,13 @@ def _bay_description(payload) -> str:
         site = _referenced_name(_asserted(device, "site"))
         if site:
             described += f" in {site!r}"
+        return described
+    # A device named only by asset_tag has no name to print, and the bay names
+    # are equal in every payload that gets this far, so without the tag the
+    # message would name the same bay twice.
+    asset_tag = _asserted(device, "asset_tag")
+    if isinstance(asset_tag, str) and asset_tag:
+        described += f" on the device with asset_tag {asset_tag!r}"
     return described
 
 

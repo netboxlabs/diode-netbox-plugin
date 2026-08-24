@@ -2027,6 +2027,130 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(existing.domain, "owned-by-someone",
                          "the colliding payload was written after all")
 
+    def _bind_then_update_changeset(self, name, update_change):
+        """A masterless CREATE that binds by name, plus an UPDATE on its ref."""
+        return {
+            "id": str(uuid.uuid4()),
+            "changes": [
+                {
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.virtualchassis",
+                    "object_id": None,
+                    "ref_id": "vcb",
+                    # masterless, so the pre-save match binds it by name alone
+                    "data": {"name": name},
+                },
+                update_change,
+            ],
+        }
+
+    def test_a_ref_only_update_after_a_bind_only_create_is_refused(self):
+        """
+        A bind writes nothing, so no later change may write through its ref.
+
+        _try_bind_existing_instance resolves a masterless CREATE onto a
+        same-named existing row and deliberately writes nothing to it: the name
+        carries no DB uniqueness, so the row may be a different stack that
+        merely matches. The ref_id UPDATE branch is an ordinary
+        serializer.save(), so a changeset pairing the two lands the update's
+        payload on exactly the row the create refused to touch -- one change
+        later, and past the guarantee.
+
+        Measured before this guard: 200 with errors null, and a stranger's
+        chassis domain rewritten.
+
+        generate-diff cannot plan the shape -- dcim.virtualchassis is absent
+        from _IS_CIRCULAR_REFERENCE, pinned by
+        test_bind_only_types_are_not_circular_references -- but
+        apply-change-set and bulk-apply take the changeset from the client, and
+        the same pairing arrives from a changeset planned before another worker
+        created the row this bind now finds.
+        """
+        existing = VirtualChassis.objects.create(
+            name="vce-bound", domain="owned-by-someone")
+
+        r = self.client.post(
+            self.apply_url,
+            data=self._bind_then_update_changeset("vce-bound", {
+                "change_id": str(uuid.uuid4()),
+                "change_type": "update",
+                "object_version": None,
+                "object_type": "dcim.virtualchassis",
+                "object_id": None,
+                "ref_id": "vcb",
+                "data": {"domain": "stolen"},
+            }),
+            format="json", **self.auth,
+        )
+
+        self.assertEqual(r.status_code, 400, r.content)
+        # the error must say what to send instead, not merely refuse
+        self.assertIn("object_id", r.content.decode())
+        existing.refresh_from_db()
+        self.assertEqual(existing.domain, "owned-by-someone",
+                         "the update wrote through a bind-only ref")
+        self.assertEqual(
+            VirtualChassis.objects.filter(name="vce-bound").count(), 1,
+            "the refused changeset left a duplicate behind")
+
+    def test_an_update_with_an_explicit_object_id_still_writes_the_bound_row(self):
+        """
+        The guard refuses the ref-only form, not the deliberate one.
+
+        Naming the row by object_id is a caller saying which row it means,
+        which is exactly what the bind declined to guess. That still applies.
+        """
+        existing = VirtualChassis.objects.create(
+            name="vce-explicit", domain="before")
+
+        r = self.client.post(
+            self.apply_url,
+            data=self._bind_then_update_changeset("vce-explicit", {
+                "change_id": str(uuid.uuid4()),
+                "change_type": "update",
+                "object_version": None,
+                "object_type": "dcim.virtualchassis",
+                "object_id": existing.pk,
+                "ref_id": None,
+                "data": {"domain": "after"},
+            }),
+            format="json", **self.auth,
+        )
+
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+        existing.refresh_from_db()
+        self.assertEqual(existing.domain, "after")
+
+    def test_a_ref_only_update_after_an_ordinary_create_still_writes(self):
+        """
+        Only a BOUND ref is refused; a ref that really created a row is not.
+
+        Without this, the guard would look like it works while actually
+        refusing every ref_id update -- including the deferred writes the
+        differ plans for dcim.device and dcim.modulebay.
+        """
+        r = self.client.post(
+            self.apply_url,
+            data=self._bind_then_update_changeset("vce-fresh-name", {
+                "change_id": str(uuid.uuid4()),
+                "change_type": "update",
+                "object_version": None,
+                "object_type": "dcim.virtualchassis",
+                "object_id": None,
+                "ref_id": "vcb",
+                "data": {"domain": "written"},
+            }),
+            format="json", **self.auth,
+        )
+
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIsNone(r.json().get("errors"))
+        created = VirtualChassis.objects.get(name="vce-fresh-name")
+        self.assertEqual(created.domain, "written")
+
     def test_an_ordinary_apply_carries_no_warnings_key(self):
         """The key is absent unless something happened, so a clean apply is unchanged."""
         payload = self._device_payload("vce-nowarn", {
