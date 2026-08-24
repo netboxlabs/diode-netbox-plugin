@@ -761,6 +761,38 @@ class VCPartitionKeyScopeTests(TestCase):
         self.assertEqual(self._distinct(result), 2, "two separately addressed rows merged")
         self.assertEqual({e["_netbox_id"] for e in result}, {4001, 4002})
 
+    def test_a_merge_keeps_the_addressed_row_whichever_node_arrived_first(self):
+        """
+        An explicit row id must survive a merge, and not depend on arrival order.
+
+        A silent node and a node addressing row 12 carry the same name and do
+        not conflict -- silence conflicts with nothing -- so they are one group
+        and merge, which is correct. But _merge_nodes prefers a's value for
+        every key beginning with an underscore, so the id survived only when the
+        addressed node happened to be first.
+
+        Measured before the fix: silent first gave a survivor with no id at all,
+        so the row the producer explicitly named was dropped and the node fell
+        back to matching by name; addressed first kept it. Same inputs, two
+        answers -- the order dependence the partition exists to remove.
+        """
+        for label, order in (
+            ("silent first", ["silent", "addressed"]),
+            ("addressed first", ["addressed", "silent"]),
+        ):
+            with self.subTest(label):
+                built = {
+                    "silent": {"_uuid": f"s-{label}", "_object_type": "dcim.virtualchassis",
+                               "_refs": set(), "name": "fpo-order"},
+                    "addressed": self._addressed(f"a-{label}", "fpo-order", 12),
+                }
+                result, _ = transformer._fingerprint_dedupe([built[k] for k in order])
+                self.assertEqual(self._distinct(result), 1, "the pair stopped merging")
+                self.assertEqual(
+                    result[0].get("_netbox_id"), 12,
+                    "the addressed row was dropped by arrival order",
+                )
+
     def test_two_addressed_rows_are_not_remerged_by_a_shared_master(self):
         """
         The unique_master exemption must not undo the partition's own answer.

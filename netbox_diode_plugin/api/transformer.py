@@ -951,6 +951,7 @@ def _merge_nodes(a: dict, b: dict) -> dict:
     _union_warnings(merged, a, b)
 
     _union_private_context(merged, a, b)
+    _carry_addressed_row(merged, a, b)
     deferred = dict(a.get('_deferred_conflicts') or {})
     rejected = []
     for k, v in b.items():
@@ -974,6 +975,29 @@ def _merge_nodes(a: dict, b: dict) -> dict:
     if deferred:
         merged['_deferred_conflicts'] = deferred
     return merged
+
+
+def _carry_addressed_row(merged: dict, a: dict, b: dict) -> None:
+    """
+    Keep an explicit ``_netbox_id`` through a merge, whichever node carried it.
+
+    Underscore keys are otherwise "prefer a's value", which for an addressed row
+    means arrival order decides. Measured: a silent node and a node addressing
+    row 12, same name, merged into one -- silent first gave a survivor with no
+    id at all, so the row the producer explicitly named was dropped and the node
+    fell back to matching by name; addressed first kept it. Same inputs, two
+    answers, which is exactly the order dependence the identity partition exists
+    to remove.
+
+    Taking whichever side has one is unambiguous rather than a tie-break,
+    because two nodes carrying DIFFERENT ids never reach a merge: they conflict
+    in vc_identities_conflict and are qualified apart in _fingerprint_dedupe. So
+    the only cases here are neither, one, or both-and-equal.
+    """
+    for node in (a, b):
+        if node.get('_netbox_id') is not None:
+            merged['_netbox_id'] = node['_netbox_id']
+            return
 
 
 def _union_warnings(merged: dict, a: dict, b: dict) -> None:
