@@ -625,6 +625,14 @@ def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str,
     Only when the two sides CONFLICT, in the compatibility sense used above: a
     nested reference that identifies its bay less fully than the outer one is
     left alone rather than guessed at.
+
+    This check is allowed to be approximate, and that is a deliberate division
+    of labour rather than a gap. It exists for its MESSAGE: it refuses in the
+    producer's own vocabulary, naming the selectors the payload actually used,
+    before any lookup. Coverage is _check_reverse_side_resolves_to_its_parent's
+    job -- it runs after resolution, where every way of expressing identity has
+    collapsed to a primary key or a node this change set creates, so a payload
+    this check cannot compare is still refused, just less specifically.
     """
     parent_fk = None
     for (owner_type, field), fk in _REVERSE_SIDE_PARENT_FK.items():
@@ -855,6 +863,7 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     output = _handle_post_creates(_consolidate_post_creates(defaulted))
 
     _check_unresolved_refs(output)
+    _check_reverse_side_resolves_to_its_parent(output)
     for entity in output:
         entity.pop('_refs', None)
         # Matching is done; the hint must not reach a change. differ pops the
@@ -1943,6 +1952,92 @@ def _handle_post_creates(entities: list[dict]) -> list[str]:
             out.append(entity)
 
     return out
+
+def _resolved_identity(node) -> tuple | None:
+    """A node's identity as the change set will use it: an existing row, or a new one."""
+    if node is None:
+        return None
+    if node.get('id') is not None:
+        return ("pk", node['id'])
+    return ("new", node['_uuid'])
+
+
+def _referenced_identity(value, by_uuid) -> tuple | None:
+    """The identity a resolved reference points at, or None if it says nothing."""
+    if isinstance(value, UnresolvedReference):
+        return _resolved_identity(by_uuid.get(value.uuid))
+    if isinstance(value, int) and not isinstance(value, bool):
+        return ("pk", value)
+    return None
+
+
+def _describe_identity(identity, by_uuid) -> str:
+    """An identity in terms a producer can act on."""
+    if identity is None:
+        return "nothing"
+    kind, value = identity
+    if kind == "pk":
+        return f"the existing row with id {value}"
+    node = by_uuid.get(value)
+    name = (node or {}).get('name')
+    return f"a new object this payload creates{f' named {name!r}' if name else ''}"
+
+
+def _check_reverse_side_resolves_to_its_parent(entities: list[dict]) -> None:
+    """
+    Refuse a reverse-side write whose object resolves into a DIFFERENT parent.
+
+    The authoritative form of _check_reverse_side_names_its_parent, and the
+    reason that one is allowed to be approximate. This runs after
+    _resolve_existing_references, so both sides are a primary key or a node
+    this change set creates -- no selector, no spelling, no criterion to be
+    incomplete about. Every way the payload could have expressed identity has
+    already collapsed to the same two kinds of answer.
+
+    The earlier check exists for its message, not its coverage: it refuses in
+    the producer's own vocabulary, before any lookup. What it cannot see -- two
+    references identifying their devices through DISJOINT selectors, an
+    asset_tag on one side and a (name, site) on the other -- reaches here.
+    Measured before this pass: the outer bay resolved to one device's bay and
+    the nested module_bay to another's, apply answered 200 with errors null,
+    the module landed in the nested bay, and the deferred reverse update
+    re-planned against the empty outer bay on every ingest.
+
+    Only a reference this change set carries is checked. An installed_module
+    naming a module by primary key alone asserts nothing about which bay that
+    module is in, so there is no contradiction in the payload to find.
+    """
+    by_uuid = {e['_uuid']: e for e in entities}
+    for entity in entities:
+        for (owner_type, field), parent_fk in _REVERSE_SIDE_PARENT_FK.items():
+            if entity.get('_object_type') != owner_type or field not in entity:
+                continue
+            referenced = entity[field]
+            if not isinstance(referenced, UnresolvedReference):
+                continue
+            child = by_uuid.get(referenced.uuid)
+            if child is None or parent_fk not in child:
+                continue
+            mine = _resolved_identity(entity)
+            theirs = _referenced_identity(child[parent_fk], by_uuid)
+            if theirs is None or mine == theirs:
+                continue
+            message = (
+                f"{owner_type}.{field} would write to "
+                f"{_describe_identity(mine, by_uuid)}, but the "
+                f"{referenced.object_type} it names has {parent_fk} pointing at "
+                f"{_describe_identity(theirs, by_uuid)}. Only that "
+                f"{parent_fk} installs it, so this payload would install it "
+                f"there and leave the other empty while reporting success. "
+                f"Send it under the object its {parent_fk} names, or correct "
+                f"that {parent_fk}."
+            )
+            # the message goes in the errors body too: that is what a producer
+            # reads back, and "resolves to a different parent" alone is not
+            # something it could act on
+            raise ChangeSetException(
+                message, errors={owner_type: {field: [message]}})
+
 
 def _check_unresolved_refs(entities: list[dict]) -> list[str]:
     seen = set()

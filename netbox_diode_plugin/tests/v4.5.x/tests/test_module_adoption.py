@@ -587,6 +587,79 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         self.assertIn("name='hy-rtrB'", errors)
         self.assertEqual(Module.objects.count(), 0)
 
+    def test_a_module_naming_a_bay_reached_by_a_disjoint_selector_is_refused(self):
+        """
+        The residue the payload comparison cannot see, refused after resolution.
+
+        The outer bay's device is named by asset_tag and the nested module's by
+        (name, site). Those criteria do not overlap, so no payload comparison
+        can settle them -- and that limit was stated as a bound for several
+        revisions while remaining a non-converging success, which is the one
+        outcome this branch does not accept.
+
+        Measured before the post-resolution pass: the outer bay resolved to one
+        device's bay and the nested module_bay to another's, apply answered 200
+        with errors null, the module landed in the nested bay, and the deferred
+        reverse update re-planned against the empty outer bay forever.
+
+        Refused now by _check_reverse_side_resolves_to_its_parent, which sees
+        primary keys rather than selectors.
+        """
+        dev_a = Device.objects.create(
+            name="dj-rtrA", site=self.dev.site, device_type=self.dev.device_type,
+            role=self.dev.role, asset_tag="DJ-A")
+        dev_b = Device.objects.create(
+            name="dj-rtrB", site=self.dev.site, device_type=self.dev.device_type,
+            role=self.dev.role, asset_tag="DJ-B")
+        bay_a = ModuleBay.objects.create(device=dev_a, name="dj-bay")
+        bay_b = ModuleBay.objects.create(device=dev_b, name="dj-bay")
+        nested_dev = {"name": "dj-rtrB", "site": {"name": "im-site"}}
+
+        entity = {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": {"asset_tag": "DJ-A"},
+            "name": "dj-bay",
+            "installed_module": {
+                "device": nested_dev,
+                "module_bay": {"device": nested_dev, "name": "dj-bay"},
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+                "serial": "IM-SER-1",
+            },
+        }}}
+        r = self.client.post(self.diff_url, data=entity, format="json", **self.auth)
+
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = str(r.json().get("errors"))
+        # the message names both resolved rows, which is all that is left to
+        # distinguish them once the selectors are gone
+        self.assertIn(str(bay_a.pk), errors)
+        self.assertIn(str(bay_b.pk), errors)
+        self.assertEqual(Module.objects.count(), 0)
+        bay_a.refresh_from_db()
+        self.assertIsNone(getattr(bay_a, "installed_module", None))
+
+    def test_the_natural_shape_survives_the_post_resolution_check(self):
+        """
+        The control for the pass above: it must not refuse the ordinary case.
+
+        Both sides resolve to the SAME bay here -- whether that bay already
+        exists or is created by this very change set -- so a check comparing
+        resolved identities has to accept both, and converge.
+        """
+        # a bay this change set creates
+        entity = self._installed_module_entity("pr-newbay")
+        self._apply(self._diff(entity))
+        bay = ModuleBay.objects.get(device=self.dev, name="pr-newbay")
+        self.assertEqual(bay.installed_module.module_bay_id, bay.pk)
+        self.assertEqual(self._non_noop(self._diff(entity)), [])
+
+        # and a bay that already existed before the payload arrived
+        existing = ModuleBay.objects.create(device=self.dev, name="pr-oldbay")
+        again = self._installed_module_entity("pr-oldbay")
+        self._apply(self._diff(again))
+        existing.refresh_from_db()
+        self.assertEqual(existing.installed_module.module_bay_id, existing.pk)
+        self.assertEqual(self._non_noop(self._diff(again)), [])
+
     def test_reingest_of_an_already_installed_module_is_a_noop(self):
         """
         Rows already correct in the DB must survive a second pass.

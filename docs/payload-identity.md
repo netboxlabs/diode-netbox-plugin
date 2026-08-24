@@ -121,6 +121,22 @@ reachable, the caller hydrates the addressed side and compares fully specified
 payloads (`_hydrate_addressed_sides`, `_describe_row`) rather than this relation
 guessing. A lookup is a legitimate answer; a guess is not.
 
+**The backstop is a second check, after resolution.**
+`_check_reverse_side_resolves_to_its_parent` runs after
+`_resolve_existing_references`, where every way of expressing identity has
+already collapsed to a primary key or a node this change set creates. It
+compares those, so no selector, spelling or criterion can be incomplete about
+it — including the disjoint-selector case above, which no payload comparison
+can settle.
+
+That is the division of labour, and it is why the payload check is *allowed* to
+be approximate: it exists for its **message**, refusing in the producer's own
+vocabulary before any lookup, while coverage is the post-resolution pass's job.
+A payload the first check cannot compare is still refused, just less specifically.
+If you find yourself extending the payload comparison to reach a new case, ask
+first whether the backstop already covers it — it probably does, and the
+question is only whether the message is good enough.
+
 **The hydration trigger is the verdict, not a field.** Hydrate when the payload
 comparison returned UNKNOWN and a side says which row it is. An earlier
 revision gated it on a side merely *carrying a name*, which went stale against
@@ -144,10 +160,11 @@ after `_resolve_existing_references`, not here — see the staging table.
 
 | Stage | Identity available |
 |---|---|
-| `transform_proto_json` | payload selectors only; nested payloads not yet snake-cased; `metadata` already popped from the entity |
+| `transform_proto_json` (entity body) | payload selectors only; nested payloads not yet snake-cased; `metadata` already popped from the entity |
 | `_topo_sort` | as above, plus reference edges |
 | `_fingerprint_dedupe` | payload selectors; `_netbox_id` present but only *qualifying* fingerprints for a contested VC master |
 | `_resolve_existing_references` | real primary keys, for the first time |
+| after `_handle_post_creates` | primary keys, or a node this change set creates — where `_check_reverse_side_resolves_to_its_parent` runs |
 | differ / applier | rows |
 
 Two consequences worth keeping in mind. `_ensure_snake_case` is **shallow** — it
