@@ -1311,23 +1311,41 @@ def _consolidate_post_creates(entities: list[dict]) -> list[dict]:
     harmless), and steps that disagree raise the same conflict the main nodes
     would have raised, through the same _merge_nodes path.
     """
-    first_index: dict[str, int] = {}
+    merged_by_instance: dict[str, dict] = {}
+    last_index: dict[str, int] = {}
+    for index, entity in enumerate(entities):
+        if not entity.get('_is_post_create'):
+            continue
+        instance = entity.get('_instance')
+        prior = merged_by_instance.get(instance)
+        if prior is None:
+            merged_by_instance[instance] = entity
+        else:
+            merged = _merge_nodes(prior, entity)
+            # The first step's uuid survives, so the choice is deterministic.
+            # Nothing references a post-create node, so either would do.
+            merged['_uuid'] = prior['_uuid']
+            merged_by_instance[instance] = merged
+        last_index[instance] = index
+
+    # Emit the merged step where the LAST of its contributors sat, never where
+    # the first did. Merging unions the refs, so a step placed at the earlier
+    # position can end up referencing a node that comes after it -- and
+    # _check_unresolved_refs rejects the whole payload as circular. Measured:
+    # a chassis-dependent step at index 2 and an IP-dependent step at index 4
+    # with the IP at index 3 merged to index 2, referencing index 3.
+    #
+    # The last position is always sound: each step was individually ordered
+    # after its own dependencies, so the union is ordered after the later of
+    # the two indices.
     out: list[dict] = []
-    for entity in entities:
+    for index, entity in enumerate(entities):
         if not entity.get('_is_post_create'):
             out.append(entity)
             continue
         instance = entity.get('_instance')
-        index = first_index.get(instance)
-        if index is None:
-            first_index[instance] = len(out)
-            out.append(entity)
-            continue
-        merged = _merge_nodes(out[index], entity)
-        # Keep the survivor's identity: later nodes may already reference it,
-        # and its position in the list is the order the step was planned for.
-        merged['_uuid'] = out[index]['_uuid']
-        out[index] = merged
+        if last_index[instance] == index:
+            out.append(merged_by_instance[instance])
     return out
 
 

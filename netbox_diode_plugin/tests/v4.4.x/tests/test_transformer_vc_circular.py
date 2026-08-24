@@ -181,3 +181,61 @@ class MemberHintMergeTests(SimpleTestCase):
         transformer._merge_nodes(a, b)
         self.assertEqual(a[VC_MEMBER_HINT], [7])
         self.assertEqual(b[VC_MEMBER_HINT], [9])
+
+
+class ConsolidatedPostCreateOrderTests(SimpleTestCase):
+    """Merging two deferred steps must not move a reference before its node."""
+
+    @staticmethod
+    def _step(uuid, instance, refs, **extra):
+        return dict({
+            "_uuid": uuid, "_object_type": "dcim.device", "_refs": set(refs),
+            "_instance": instance, "_is_post_create": True,
+        }, **extra)
+
+    def test_the_merged_step_lands_after_every_reference_it_inherited(self):
+        """
+        Consolidation unions the refs, so it must take the LATER position.
+
+        Two deferred steps for one device can depend on different nodes -- one
+        on the chassis it is joining, one on a primary_ip4 created for it -- and
+        those nodes sit at different points in the order. Merging into the
+        EARLIER step's slot carries the later step's reference back with it, so
+        the step can precede a node it now depends on, and
+        _check_unresolved_refs rejects the whole payload as circular.
+
+        Measured with the chassis-dependent step at index 2, the IP at index 3
+        and the IP-dependent step at index 4: the merged step landed at index 2
+        holding a reference to index 3.
+
+        The last contributor's position is always sound, because each step was
+        individually ordered after its own dependencies.
+        """
+        device = {"_uuid": "dev", "_object_type": "dcim.device",
+                  "_refs": set(), "name": "d"}
+        chassis = {"_uuid": "vc", "_object_type": "dcim.virtualchassis", "_refs": set()}
+        ip = {"_uuid": "ip", "_object_type": "ipam.ipaddress", "_refs": set()}
+        entities = [
+            device,
+            chassis,
+            self._step("sa", "dev", {"dev", "vc"}, vc_position=5),
+            ip,
+            self._step("sb", "dev", {"dev", "ip"}, primary_ip4="held"),
+        ]
+
+        out = transformer._consolidate_post_creates(entities)
+
+        steps = [e for e in out if e.get("_is_post_create")]
+        self.assertEqual(len(steps), 1, "the two steps for one device did not merge")
+        merged = steps[0]
+        self.assertEqual(merged["vc_position"], 5)
+        self.assertEqual(merged["primary_ip4"], "held")
+
+        order = [e["_uuid"] for e in out]
+        step_at = order.index(merged["_uuid"])
+        for ref in merged["_refs"]:
+            if ref in order:
+                self.assertLessEqual(
+                    order.index(ref), step_at,
+                    f"reference {ref} is ordered after the step that needs it",
+                )
