@@ -699,10 +699,19 @@ def _locked_adoption_candidates(model_class, name: str, master_pk: int) -> list:
     unlocked, those rows are locked by pk, and the decision runs on state read
     AFTER the lock.
 
-    Re-applying the eligibility filter on that second read is the point, not a
-    repetition: a row the other transaction has just mastered no longer matches,
-    so this one drops it, declines adoption, and creates its own chassis instead
-    of overwriting somebody's master.
+    The second read repeats the WHOLE predicate -- name included -- and that is
+    the point of it rather than a repetition of the scan. The unlocked query
+    only discovers which rows need locking; the locked read decides which are
+    still candidates. A row the other transaction mastered no longer matches
+    `eligible`, and a row it RENAMED no longer matches `name`, so either way
+    this transaction drops it, declines adoption, and creates its own chassis.
+
+    Leaving `name` off that read was a real hole rather than a tidiness point:
+    the pks are already fixed by then, so a row renamed out from under the lock
+    stayed "eligible" on pk alone and got adopted -- this payload's name written
+    over a row that had become somebody else's. The lock stops two workers
+    fighting over one unchanged row; only re-checking identity stops a worker
+    adopting a row whose identity moved while it waited.
 
     Both statements order by pk so two transactions contending for the same rows
     take them in the same order and queue instead of deadlocking.
@@ -721,7 +730,8 @@ def _locked_adoption_candidates(model_class, name: str, master_pk: int) -> list:
     )
     return list(
         annotate_vc_member_counts(
-            model_class.objects.filter(pk__in=candidate_pks).filter(eligible).distinct()
+            model_class.objects.filter(pk__in=candidate_pks, name=name)
+            .filter(eligible).distinct()
         ).order_by("pk")
     )
 

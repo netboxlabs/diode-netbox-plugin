@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
+from django.db.models import QuerySet
 from django.test import SimpleTestCase, TestCase
 
 from netbox_diode_plugin.api.applier import (
@@ -1090,6 +1091,42 @@ class VirtualChassisAdoptionTests(TestCase):
         after = [s for s in sql[locking[0] + 1:] if "COUNT(" in s.upper()]
         self.assertTrue(
             after, "the annotated re-read must run AFTER the lock, not before")
+
+    def test_a_row_renamed_under_the_lock_is_no_longer_a_candidate(self):
+        """
+        The locked re-read decides; the unlocked scan only says what to lock.
+
+        The pks are fixed by the time the lock is taken, so a re-read filtered on
+        pk and eligibility alone still returns a row that another transaction
+        RENAMED while this one waited -- masterless and empty, therefore still
+        "eligible", but no longer the chassis this payload names. Adopting it
+        writes this payload's name over a row that had become somebody else's:
+        silent wrong-row mutation, which the lock alone does not prevent.
+
+        The interleaving is simulated rather than raced, deterministically: the
+        rename happens during the lock acquisition, which is exactly the window
+        a second worker committing in would occupy. A genuine two-connection
+        race would need a TransactionTestCase and threads; what matters here is
+        that the re-read repeats the NAME predicate, and that is what this pins.
+        """
+        row = VirtualChassis.objects.create(name="vca-renamed")
+        original = QuerySet.select_for_update
+
+        def rename_then_lock(queryset, *args, **kwargs):
+            # Another worker renames this row and commits while we wait.
+            VirtualChassis.objects.filter(pk=row.pk).update(name="vca-moved-on")
+            return original(queryset, *args, **kwargs)
+
+        with mock.patch.object(QuerySet, "select_for_update", rename_then_lock):
+            candidates = _locked_adoption_candidates(
+                VirtualChassis, "vca-renamed", self.master.pk)
+
+        self.assertEqual(
+            candidates, [],
+            "adopted a row whose name changed while the lock was being taken",
+        )
+        row.refresh_from_db()
+        self.assertEqual(row.name, "vca-moved-on", "the renamed row was written")
 
     def test_adoption_declines_a_row_whose_domain_the_payload_contradicts(self):
         """
