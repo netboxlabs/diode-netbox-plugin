@@ -1979,6 +1979,70 @@ class VirtualChassisIngestE2ETests(APITestCase):
         self.assertEqual(r.status_code, 200, r.content)
         self.assertNotIn("warnings", r.json())
 
+    def _chassis_with_master(self, vc_name, dev_name, position=None):
+        """A dcim.virtualchassis payload nesting its master, optionally with a position."""
+        master = {
+            "name": dev_name,
+            "site": {"name": "vce-site"},
+            "role": {"name": "vce-role"},
+            "device_type": {"manufacturer": {"name": "vce-mfr"}, "model": "vce-dt"},
+        }
+        if position is not None:
+            master["vc_position"] = position
+        return {"timestamp": 1, "object_type": "dcim.virtualchassis",
+                "entity": {"virtual_chassis": {"name": vc_name, "master": master}}}
+
+    def test_a_position_on_a_nested_master_survives_the_chassis_signal(self):
+        """
+        A position supplied on the chassis's own master must not be overwritten.
+
+        A device that nests virtual_chassis itself has its position moved onto a
+        deferred step, because the position only means anything once the chassis
+        exists. A device nested the OTHER way -- as the chassis payload's master,
+        with no virtual_chassis nested back -- had no such step, so the position
+        stayed on the device's change, which is ordered BEFORE the chassis.
+
+        Measured before the fix: both a new and an existing device applied 200
+        and ended at vc_position 1, because NetBox's signal sets the master's
+        position when the chassis attaches and overwrote the submitted 5.
+        Silently -- nothing errored, the value was just gone.
+        """
+        for label, seed in (("new", False), ("existing", True)):
+            with self.subTest(label):
+                vc_name, dev_name = f"vce-npos-{label}", f"vce-nposd-{label}"
+                if seed:
+                    Device.objects.create(
+                        name=dev_name, site=self.site,
+                        device_type=self.dt, role=self.role)
+                payload = self._chassis_with_master(vc_name, dev_name, position=5)
+                self._diff_apply(payload)
+                self.assertEqual(Device.objects.get(name=dev_name).vc_position, 5)
+                self._assert_noop_rediff(payload)
+
+    def test_a_master_with_no_position_gains_no_deferred_step(self):
+        """
+        The deferral fires only when a position is actually there.
+
+        This is the real orb-agent shape -- its master stub carries a name, a
+        device_type, a role, a serial and a site, and no position at all -- so an
+        unconditional deferred step would change the plan for that producer to no
+        purpose. The plan here is the device and the chassis, nothing else, and
+        the master still ends up at NetBox's own choice of position 1.
+        """
+        payload = self._chassis_with_master("vce-nopos", "vce-noposd")
+        cs = self._diff(payload)
+        planned = [(c["change_type"], c["object_type"]) for c in cs["changes"]
+                   if c["change_type"] != "noop"]
+        self.assertEqual(
+            planned,
+            [("create", "dcim.device"), ("create", "dcim.virtualchassis")],
+            "a deferred step was planned for a master carrying no position",
+        )
+        self._diff_apply(payload)
+        device = Device.objects.get(name="vce-noposd")
+        self.assertEqual(device.vc_position, 1)
+        self.assertIsNotNone(device.virtual_chassis_id)
+
     def test_a_contradicting_domain_takes_its_own_row(self):
         """
         The other half of the bind-only contract: a domain the row lacks is identity.

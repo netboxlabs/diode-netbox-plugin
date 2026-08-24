@@ -231,6 +231,66 @@ _POST_CREATE_COMPANIONS = {
 }
 
 
+# The mirror of _POST_CREATE_COMPANIONS, for the shape where the PARENT nests
+# the device instead of the device nesting the parent: keyed by (parent type,
+# field nesting the device) -> (nested type, the ref that must be deferred).
+_NESTED_DEFERRED_COMPANIONS = {
+    ("dcim.virtualchassis", "master"): ("dcim.device", "virtual_chassis"),
+}
+
+
+def _defer_nested_companions(parent_type, field_name, parent_uuid, nested):
+    """
+    Give a nested device the deferred step its position needs, if it has one.
+
+    A device that nests ``virtual_chassis`` itself gets its position moved onto
+    a post-create step (_POST_CREATE_COMPANIONS), because the position only
+    means anything once the chassis exists. A device nested the OTHER way --
+    as a chassis payload's ``master`` -- had no such step, so its position
+    stayed on the device's own change, which is ordered BEFORE the chassis.
+
+    Measured: chassis {name, master: {..., vc_position: 5}}, with no
+    ``virtual_chassis`` nested back into the master. Both a new and an existing
+    device applied 200 and ended at vc_position 1 -- NetBox's signal sets the
+    master's position when the chassis attaches, overwriting the submitted 5.
+    Silently, since nothing errored.
+
+    Only fires when a companion scalar is actually present. The real orb-agent
+    master stub carries none, and adding an unconditional deferred step would
+    change the plan for every producer sending that shape to no purpose.
+
+    The reference must go on the post-create node rather than the device's own:
+    the chassis already references the device, so asserting the reverse on the
+    main node is the cycle _IS_CIRCULAR_REFERENCE exists to break.
+    """
+    companion = _NESTED_DEFERRED_COMPANIONS.get((parent_type, field_name))
+    if companion is None or not nested:
+        return
+    nested_type, ref_field = companion
+    device = nested[0]
+    if device.get('_object_type') != nested_type:
+        return
+    scalars = _POST_CREATE_COMPANIONS.get((nested_type, ref_field), ())
+    if not any(scalar in device for scalar in scalars):
+        return
+    if any(n.get('_is_post_create') and n.get('_instance') == device['_uuid'] for n in nested):
+        # The device nested the chassis back into itself, so it already has the
+        # step and _move_deferred_companions has already used it.
+        return
+    post_create = {
+        "_uuid": str(uuid4()),
+        "_object_type": nested_type,
+        "_refs": {device['_uuid'], parent_uuid},
+        "_instance": device['_uuid'],
+        "_is_post_create": True,
+        ref_field: UnresolvedReference(object_type=parent_type, uuid=parent_uuid),
+    }
+    for scalar in scalars:
+        if scalar in device:
+            post_create[scalar] = device.pop(scalar)
+    nested.append(post_create)
+
+
 def _move_deferred_companions(object_type, node, post_create):
     """Move companion scalars off the main node onto its deferred post-create node."""
     for (companion_type, ref_field), scalar_fields in _POST_CREATE_COMPANIONS.items():
@@ -458,6 +518,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
                     refs.append(ref_uuid)
         else:
             nested = _transform_proto_json_1(value, ref_info.object_type, supported_models, nested_context)
+            _defer_nested_companions(object_type, ref_info.field_name, uuid, nested)
             nodes += nested
             ref_uuid = nested[0]['_uuid']
             ref_value = UnresolvedReference(
