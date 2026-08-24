@@ -258,6 +258,55 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         # and it converges: a second plan of the same payload is a no-op
         self.assertEqual(self._non_noop(self._diff(self._installed_module_entity())), [])
 
+    def _mismatched_entity(self, outer_bay, inner_bay):
+        """A bay carrying a module whose own module_bay names a DIFFERENT bay."""
+        return {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": self._dev_ref(),
+            "name": outer_bay,
+            "label": "IM-X",
+            "installed_module": self._module_ref(inner_bay),
+        }}}
+
+    def test_a_module_naming_another_bay_is_refused(self):
+        """
+        The two sides must name one bay, because only one of them installs it.
+
+        Deferring installed_module buys a plannable ORDER, not a write: the
+        module's own module_bay FK is what installs it, and the deferred reverse
+        update only touches the related object in memory. So a bay carrying a
+        module whose module_bay names a different bay describes something no
+        write can produce.
+
+        Measured before this check, bay A carrying a module naming bay B: both
+        bays and the module were created, apply answered 200 with errors null,
+        the module landed in B with A empty, and every later ingest of the
+        identical payload re-planned the same reverse-side update to no effect.
+        A success that never converges.
+
+        Refused rather than resolved in the outer bay's favour: the two
+        statements are equally explicit and nothing in the payload marks either
+        as the mistake, so silently rewriting the module's own module_bay would
+        be a guess.
+        """
+        r = self.client.post(
+            self.diff_url, data=self._mismatched_entity("im-bayX", "im-bayY"),
+            format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = str(r.json().get("errors"))
+        self.assertIn("im-bayY", errors)
+        self.assertIn("im-bayX", errors)
+        self.assertEqual(
+            ModuleBay.objects.filter(device=self.dev, name="im-bayX").count(), 0,
+            "the refused payload created a bay anyway",
+        )
+        self.assertEqual(Module.objects.filter(device=self.dev).count(), 0)
+
+    def test_a_module_naming_its_own_bay_is_still_accepted(self):
+        """The control: the natural shape names the outer bay and still applies."""
+        self._apply(self._diff(self._installed_module_entity("im-bayok")))
+        bay = ModuleBay.objects.get(device=self.dev, name="im-bayok")
+        self.assertEqual(bay.installed_module.module_bay_id, bay.pk)
+
     def test_reingest_of_an_already_installed_module_is_a_noop(self):
         """
         Rows already correct in the DB must survive a second pass.

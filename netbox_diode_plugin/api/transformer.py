@@ -169,6 +169,79 @@ _NESTED_CONTEXT = {
     },
 }
 
+# A reverse-side nested reference, and the forward FK the nested object must
+# use to name its parent back. Declaring the pair circular buys a plannable
+# ORDER, not a write -- the forward FK is what persists the relation -- so the
+# two sides naming different parents is a payload that cannot be carried out.
+_REVERSE_SIDE_PARENT_FK = {
+    ("dcim.modulebay", "installed_module"): "module_bay",
+}
+
+
+def _reverse_side_identity(payload: dict) -> tuple | None:
+    """The (device, name) a nested parent reference names, when it names one."""
+    if not isinstance(payload, dict):
+        return None
+    name = payload.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    device = payload.get("device")
+    device_name = device.get("name") if isinstance(device, dict) else device
+    return (device_name, name)
+
+
+def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str) -> None:
+    """
+    Refuse a reverse-side payload whose nested object names a DIFFERENT parent.
+
+    dcim.modulebay.installed_module is the reverse of Module.module_bay, and
+    deferring it buys a plannable order rather than a write: the module's own
+    module_bay FK is what installs it, and the deferred reverse update only
+    touches the related object in memory. So when bay A carries a module whose
+    module_bay names bay B, nothing installs the module into A -- and nothing
+    said so.
+
+    Measured before this check, bay A carrying a module naming bay B: the plan
+    created both bays and the module, applied 200 with errors null, and left the
+    module in B with A empty. Every later ingest of the identical payload
+    re-planned the same reverse-side update and applied it to no effect -- a
+    success that never converges, which is the failure this branch exists to
+    remove.
+
+    Refused rather than resolved in the outer bay's favour. Making the outer bay
+    authoritative would silently overwrite what the producer said about the
+    module, and the two statements are equally explicit -- there is nothing in
+    the payload that makes one of them the mistake.
+
+    Only when BOTH sides name a comparable identity. A nested parent reference
+    that identifies its bay some other way is left alone rather than guessed at.
+    """
+    parent_fk = None
+    for (owner_type, field), fk in _REVERSE_SIDE_PARENT_FK.items():
+        if owner_type == object_type and field in proto_json:
+            parent_fk, reverse_field = fk, field
+            break
+    if parent_fk is None:
+        return
+    nested = proto_json.get(reverse_field)
+    if not isinstance(nested, dict):
+        return
+    named_parent = _reverse_side_identity(nested.get(parent_fk))
+    mine = _reverse_side_identity(proto_json)
+    if named_parent is None or mine is None or named_parent == mine:
+        return
+    raise serializers.ValidationError({
+        NON_FIELD_ERRORS: [
+            f"{object_type}.{reverse_field} names a "
+            f"{object_type.split('.')[0]}.module whose {parent_fk} is "
+            f"{named_parent[1]!r}, not {mine[1]!r}. Only the nested object's own "
+            f"{parent_fk} installs it, so this payload would leave "
+            f"{mine[1]!r} empty and re-plan on every ingest. Send the module "
+            f"under the bay its {parent_fk} names, or correct that {parent_fk}."
+        ]
+    })
+
+
 def _no_context(object_type, uuid):
     return None
 
@@ -385,6 +458,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
     proto_json = _ensure_snake_case(proto_json, object_type)
     apply_format_transformations(proto_json, object_type)
     apply_entity_migrations(proto_json, object_type)
+    _check_reverse_side_names_its_parent(proto_json, object_type)
 
     # context pushed down from parent nodes
     if context is not None:
