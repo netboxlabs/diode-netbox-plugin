@@ -3,9 +3,11 @@ import uuid
 from types import SimpleNamespace
 from unittest import mock
 
-from core.models import ObjectChange
+from core.models import ObjectChange, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Module, ModuleBay, ModuleType, Site
 from django.test import SimpleTestCase, TestCase
+from extras.choices import CustomFieldTypeChoices
+from extras.models import CustomField
 from rest_framework import serializers
 from utilities.testing import APITestCase
 
@@ -387,8 +389,8 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         # both bays are named 'sc-bay' on a device named 'im-rtr', so the scope
         # is the only thing that tells the two sides apart -- an error naming
         # the same bay twice would be unactionable
-        self.assertIn("in 'im-site'", errors)
-        self.assertIn("in 'im-site2'", errors)
+        self.assertIn("name='im-site'", errors)
+        self.assertIn("name='im-site2'", errors)
         self.assertEqual(ModuleBay.objects.filter(name="sc-bay").count(), 0)
         self.assertEqual(Module.objects.count(), 0)
 
@@ -544,6 +546,46 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         self.assertEqual(bay_a.installed_module.module_bay_id, bay_a.pk)
         self.assertEqual(Module.objects.count(), 1)
         self.assertEqual(self._non_noop(self._diff(entity)), [])
+
+    def test_a_module_naming_a_same_named_bay_when_the_addressed_side_omits_its_device(self):
+        """
+        Carrying a name does not make a bay comparable; its criterion is (name, device).
+
+        The addressed side here gives its pk AND its name but no device, which
+        a partial reference may do. The old hydration gate declined to resolve
+        it for exactly that reason -- it had a name -- and the equal names then
+        compared as compatible with a same-named bay on ANOTHER device.
+
+        Measured before the fix: 200 with errors null, the module installed in
+        the other device's bay, this one left empty, and the ineffective
+        reverse update re-planned on every ingest.
+        """
+        other_dev = Device.objects.create(
+            name="hy-rtrB", site=self.dev.site, device_type=self.dev.device_type,
+            role=self.dev.role)
+        mine = ModuleBay.objects.create(device=self.dev, name="hy-bay")
+        ModuleBay.objects.create(device=other_dev, name="hy-bay")
+        other_ref = {"name": "hy-rtrB", "site": {"name": "im-site"}}
+
+        entity = {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "metadata": {"source_match": {"netbox_id": mine.pk}},
+            "name": "hy-bay",
+            "installed_module": {
+                "device": other_ref,
+                "module_bay": {"device": other_ref, "name": "hy-bay"},
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+                "serial": "IM-SER-1",
+            },
+        }}}
+        r = self.client.post(self.diff_url, data=entity, format="json", **self.auth)
+
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = str(r.json().get("errors"))
+        self.assertIn("whose module_bay is", errors)
+        # the bay names are equal, so only the devices tell the sides apart
+        self.assertIn("name='im-rtr'", errors)
+        self.assertIn("name='hy-rtrB'", errors)
+        self.assertEqual(Module.objects.count(), 0)
 
     def test_reingest_of_an_already_installed_module_is_a_noop(self):
         """
@@ -803,19 +845,21 @@ class AddressedRowMergeTests(SimpleTestCase):
             self.assertEqual(transformer._merge_nodes(a, b)["_netbox_id"], 1547)
 
 
-class ComparableBaySidesTests(TestCase):
+class HydrateAddressedSidesTests(TestCase):
     """
-    Which side of the reverse-side comparison gets resolved, and which does not.
+    What hydration produces, and when the caller asks for it at all.
 
-    The lookup exists for one shape -- a side addressed by primary key that
-    names nothing -- because there the missing criterion made a non-converging
-    success reachable. Every other shape must stay a pure payload comparison,
-    so the query is not paid on ordinary ingest.
+    The lookup exists for one situation -- the payload comparison did not reach
+    a verdict and one side says which row it is. An earlier revision gated it on
+    a side merely CARRYING a name, which went stale against the criteria
+    immediately: ModuleBay is identified by (name, device), so an addressed bay
+    that named itself but omitted its device was treated as comparable and a
+    same-named bay on another device compared as compatible.
     """
 
     @classmethod
     def setUpTestData(cls):
-        """One device and one bay, to resolve against."""
+        """One device and one bay, to hydrate against."""
         site = Site.objects.create(name="cb-site", slug="cb-site")
         mfr = Manufacturer.objects.create(name="cb-mfr", slug="cb-mfr")
         dt = DeviceType.objects.create(manufacturer=mfr, model="cb-dt", slug="cb-dt")
@@ -825,10 +869,10 @@ class ComparableBaySidesTests(TestCase):
         cls.bay = ModuleBay.objects.create(device=cls.dev, name="cb-bay")
 
     def _sides(self, mine, theirs):
-        return transformer._comparable_bay_sides(mine, theirs, "dcim.modulebay")
+        return transformer._hydrate_addressed_sides("dcim.modulebay", mine, theirs)
 
-    def test_an_addressed_nameless_side_is_resolved(self):
-        """It gains the row's real name and device, including the asset tag."""
+    def test_an_addressed_side_gains_what_the_row_actually_is(self):
+        """Derived from the row, in the terms the comparison reads."""
         addressed = {"metadata": {"source_match": {"netbox_id": self.bay.pk}}}
         named = {"name": "other", "device": {"name": "cb-rtr"}}
 
@@ -836,16 +880,16 @@ class ComparableBaySidesTests(TestCase):
 
         self.assertEqual(mine["name"], "cb-bay")
         self.assertEqual(mine["device"]["name"], "cb-rtr")
-        self.assertEqual(mine["device"]["site"], {"name": "cb-site"})
+        self.assertEqual(mine["device"]["site"]["name"], "cb-site")
         self.assertEqual(mine["device"]["asset_tag"], "CB-1")
         # the id survives, so the message can name what the producer addressed
         self.assertEqual(transformer._addressed_row_of(mine), self.bay.pk)
-        self.assertIs(theirs, named, "the named side was resolved too")
-        # and the resolved pair is now comparable, which is the whole point
+        self.assertIs(theirs, named, "the un-addressed side was hydrated too")
+        # and the hydrated pair is now comparable, which is the whole point
         self.assertTrue(transformer.references_conflict("dcim.modulebay", mine, theirs))
 
-    def test_the_nested_side_is_resolved_the_same_way(self):
-        """Either side may be the addressed one."""
+    def test_either_side_may_be_the_addressed_one(self):
+        """Symmetric, like the relation it feeds."""
         named = {"name": "other", "device": {"name": "cb-rtr"}}
         addressed = {"metadata": {"source_match": {"netbox_id": self.bay.pk}}}
 
@@ -854,28 +898,49 @@ class ComparableBaySidesTests(TestCase):
         self.assertIs(mine, named)
         self.assertEqual(theirs["name"], "cb-bay")
 
-    def test_an_addressed_side_that_names_itself_is_left_alone(self):
-        """Already comparable, so the lookup is not paid."""
-        addressed = {"name": "given", "device": {"name": "cb-rtr"},
+    def test_an_addressed_side_naming_only_itself_is_still_incomplete(self):
+        """
+        The finding the old gate missed, as a property rather than a payload.
+
+        A bay carrying its name has NOT become comparable, because its identity
+        criterion is (name, device). So the comparison must still return
+        UNKNOWN here -- which is what makes the caller hydrate.
+        """
+        addressed = {"name": "cb-bay",
                      "metadata": {"source_match": {"netbox_id": self.bay.pk}}}
-        named = {"name": "other"}
+        named = {"name": "cb-bay", "device": {"name": "somewhere-else"}}
 
-        with self.assertNumQueries(0):
-            mine, theirs = self._sides(addressed, named)
+        self.assertEqual(
+            transformer._compare_references("dcim.modulebay", addressed, named),
+            transformer._UNKNOWN)
+        # hydrating settles it
+        mine, theirs = self._sides(addressed, named)
+        self.assertTrue(transformer.references_conflict("dcim.modulebay", mine, theirs))
 
-        self.assertIs(mine, addressed)
-        self.assertIs(theirs, named)
+    def test_a_conclusive_comparison_needs_no_lookup(self):
+        """
+        The caller only hydrates on UNKNOWN, so these never reach the database.
 
-    def test_two_addressed_sides_are_left_alone(self):
-        """The ids decide each other; neither needs resolving."""
+        Two addressed sides decide each other by id, and a disagreeing name is
+        already proof -- asserted as verdicts because that is what the caller
+        branches on. The query count is what pins "no lookup": zero further
+        queries once the criteria are cached means no row was fetched.
+        """
         a = {"metadata": {"source_match": {"netbox_id": self.bay.pk}}}
         b = {"metadata": {"source_match": {"netbox_id": self.bay.pk + 1}}}
-
+        # Warm the criteria cache first. get_model_matchers reads the model's
+        # unique custom fields from the database, once per model and then
+        # cached, which is not a row lookup -- measuring it here would make
+        # this assert the wrong thing.
+        transformer._compare_references("dcim.modulebay", {"name": "w"}, {"name": "w"})
         with self.assertNumQueries(0):
-            mine, theirs = self._sides(a, b)
-
-        self.assertIs(mine, a)
-        self.assertIs(theirs, b)
+            self.assertEqual(
+                transformer._compare_references("dcim.modulebay", a, b),
+                transformer._DIFFERENT)
+            self.assertEqual(
+                transformer._compare_references(
+                    "dcim.modulebay", {"name": "x"}, {"name": "y"}),
+                transformer._DIFFERENT)
 
     def test_an_unknown_row_is_left_for_the_resolver_to_report(self):
         """
@@ -1009,3 +1074,103 @@ class DerivedIdentityCriteriaTests(TestCase):
     def test_a_bare_int_is_not_read_as_a_primary_key(self):
         """Guessing that would be exactly the interpretation this must not do."""
         self.assertFalse(self._conflict("dcim.site", 1, 2))
+
+
+class UniqueCustomFieldIdentityTests(TestCase):
+    """
+    A reference may be identified only by a unique custom field.
+
+    CustomFieldMatcher is built solely from CustomField(unique=True), so it is
+    a real identity criterion -- and for a producer keying devices by an
+    external id it can be the ONLY selector a reference carries. It declares no
+    field tuple, and an earlier revision skipped every such hand-written
+    matcher, so two different values compared as UNKNOWN and the contradiction
+    was accepted.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        """A unique text custom field on Device, and two devices keyed by it."""
+        site = Site.objects.create(name="cf-site", slug="cf-site")
+        mfr = Manufacturer.objects.create(name="cf-mfr", slug="cf-mfr")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="cf-dt", slug="cf-dt")
+        role = DeviceRole.objects.create(name="cf-role", slug="cf-role")
+        cls.field = CustomField.objects.create(
+            name="cf_key", type=CustomFieldTypeChoices.TYPE_TEXT,
+            required=False, unique=True)
+        cls.field.object_types.set([ObjectType.objects.get_for_model(Device)])
+        cls.field.save()
+        cls.dev_a = Device.objects.create(
+            name="cf-rtr-a", site=site, device_type=dt, role=role,
+            custom_field_data={"cf_key": "KEY-A"})
+        cls.dev_b = Device.objects.create(
+            name="cf-rtr-b", site=site, device_type=dt, role=role,
+            custom_field_data={"cf_key": "KEY-B"})
+
+    def _ref(self, value):
+        """A device reference carrying only the custom field, in payload form."""
+        return {"custom_fields": {"cf_key": {"text": value}}}
+
+    def test_two_values_of_a_unique_custom_field_are_two_objects(self):
+        """Unique, so different values cannot be one row."""
+        self.assertTrue(transformer.references_conflict(
+            "dcim.device", self._ref("KEY-A"), self._ref("KEY-B")))
+
+    def test_one_value_of_a_unique_custom_field_is_one_object(self):
+        """And equal values prove sameness, outranking a differing name."""
+        self.assertFalse(transformer.references_conflict(
+            "dcim.device", self._ref("KEY-A"), self._ref("KEY-A")))
+        self.assertFalse(transformer.references_conflict(
+            "dcim.device",
+            {**self._ref("KEY-A"), "name": "cf-rtr-a"},
+            {**self._ref("KEY-A"), "name": "something-else"}))
+
+    def test_the_untyped_form_compares_the_same_way(self):
+        """
+        The envelope is unwrapped later, so both forms reach this comparison.
+
+        _prepare_custom_fields turns {"text": v} into v, and this check runs
+        before that -- reading only one form would have been a second way to
+        miss the selector.
+        """
+        self.assertTrue(transformer.references_conflict(
+            "dcim.device",
+            {"custom_fields": {"cf_key": "KEY-A"}},
+            {"custom_fields": {"cf_key": "KEY-B"}}))
+
+    def test_values_of_different_primitive_kinds_are_not_compared(self):
+        """
+        A raw "5" and a raw 5 are one value that transform would coerce alike.
+
+        Calling those different would refuse a payload that ingests perfectly
+        well, so the comparison declines rather than guessing.
+        """
+        self.assertFalse(transformer.references_conflict(
+            "dcim.device",
+            {"custom_fields": {"cf_key": "5"}},
+            {"custom_fields": {"cf_key": 5}}))
+
+    def test_a_non_unique_custom_field_is_not_identity(self):
+        """Only unique=True produces a matcher, so nothing else may decide."""
+        other = CustomField.objects.create(
+            name="cf_note", type=CustomFieldTypeChoices.TYPE_TEXT,
+            required=False, unique=False)
+        other.object_types.set([ObjectType.objects.get_for_model(Device)])
+        other.save()
+        self.assertFalse(transformer.references_conflict(
+            "dcim.device",
+            {"custom_fields": {"cf_note": {"text": "A"}}},
+            {"custom_fields": {"cf_note": {"text": "B"}}}))
+
+    def test_the_message_shows_the_selector_that_decided(self):
+        """
+        Otherwise the error names the same bay twice.
+
+        Measured with the description hand-written: two bays named 'hy-bay' on
+        two devices distinguished only by this field rendered as
+        "module_bay is 'hy-bay', not 'hy-bay'".
+        """
+        described = transformer._describe_payload(
+            "dcim.modulebay", {"name": "b", "device": self._ref("KEY-A")})
+        self.assertIn("cf_key='KEY-A'", described)
+        self.assertIn("name='b'", described)

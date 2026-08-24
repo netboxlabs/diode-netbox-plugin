@@ -83,11 +83,25 @@ field set (from `fields` or from `expressions`), `_get_insensitive_refs()` for
 the fields a `Lower()` in the constraint makes case-insensitive, and
 `condition` for the conditional case above.
 
-Six matcher classes are hand-written and declare no field set:
-`CustomFieldMatcher`, `GlobalIPNetworkIPMatcher`, `VirtualChassisNameMatcher`,
-`CableTerminationSetMatcher`, `VRFIPNetworkIPMatcher`, `AutoSlugMatcher`. They
-answer the row-matching question, not this one, and are skipped. A skipped
-matcher costs evidence; it cannot invent it.
+Six matcher classes are hand-written and declare no field tuple. One of them
+*is* extracted: `CustomFieldMatcher`, because it is built only from
+`CustomField(unique=True)` — a genuine unique criterion, and for a producer
+keying devices by an external id it may be the only selector a reference
+carries. It is read as a custom-field name rather than a field tuple.
+
+The other five are skipped, and not merely for want of a field list:
+
+- `GlobalIPNetworkIPMatcher`, `VRFIPNetworkIPMatcher` — compare addresses,
+  where two spellings of one address (`::1` and `0:0:0:0:0:0:0:1`) are equal
+  values and unequal strings. A textual verdict would be wrong in the refusing
+  direction.
+- `CableTerminationSetMatcher` — compares a *set* of terminations.
+- `VirtualChassisNameMatcher` — matches a name carrying no uniqueness at all;
+  deriving identity from it is exactly what the VC partition exists to avoid.
+- `AutoSlugMatcher` — costs nothing, the plain `unique_slug` criterion already
+  covers that field.
+
+A skipped matcher costs evidence; it cannot invent it.
 
 Reference fields recurse into the referenced type's own identity — a bay's
 device, that device's site — so `site: {"name": "s"}` versus
@@ -102,10 +116,26 @@ nothing to compare and are UNKNOWN, whatever the database would say.
 
 This is a real limit, not a rounding error, and it is load-bearing: an earlier
 revision *documented* it and that documentation hid a non-converging success
-for a year of review rounds. So where the residue makes a wrong write
-reachable, the caller resolves the addressed side first and compares fully
-specified payloads (`_comparable_bay_sides`, `_resolved_bay_payload`) rather
-than this relation guessing. A lookup is a legitimate answer; a guess is not.
+across several review rounds. So where the residue makes a wrong write
+reachable, the caller hydrates the addressed side and compares fully specified
+payloads (`_hydrate_addressed_sides`, `_describe_row`) rather than this relation
+guessing. A lookup is a legitimate answer; a guess is not.
+
+**The hydration trigger is the verdict, not a field.** Hydrate when the payload
+comparison returned UNKNOWN and a side says which row it is. An earlier
+revision gated it on a side merely *carrying a name*, which went stale against
+the criteria immediately — `ModuleBay` is identified by `(name, device)`, so an
+addressed bay that named itself but omitted its device was treated as
+comparable, and a same-named bay on another device compared as compatible.
+Asking whether the comparison actually reached a verdict cannot go stale that
+way, and it means ordinary payloads pay no lookup at all.
+
+**Error messages are derived from the same criteria.** Whatever the comparison
+used to decide is what the message shows. Hand-written, that description gained
+the bay name, then the device name, then the site, then the `asset_tag`, each
+added only after a payload turned up that it described *identically on both
+sides* — `module_bay is 'case-bay', not 'case-bay'`. A unique custom field
+would have been the next one.
 
 If a check finds itself needing resolved identity for *both* sides, it belongs
 after `_resolve_existing_references`, not here — see the staging table.
@@ -156,3 +186,11 @@ the bay name, then the device's site and tenant, then `asset_tag`, then
 Each fix was correct and none made the next less likely, because nothing in
 the code stated what the complete set was. That is what this document and the
 derivation are for.
+
+Two more arrived *after* the derivation, and both were in what remained
+hand-written **around** it rather than in the derived comparison: the hydration
+gate (a field-presence test instead of a verdict test) and the blanket skip of
+hand-written matchers (which silently dropped unique custom fields). Both are
+now derived too. The lesson generalises past this file: a derived core with
+hand-written seams fails at the seams, so when adding one, ask what it restates
+that the criteria already say.

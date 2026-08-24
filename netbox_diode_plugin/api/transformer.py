@@ -231,16 +231,6 @@ def _addressed_row_of(payload):
     return _addressed_row(payload.get("metadata"))
 
 
-def _referenced_name(ref, field="name"):
-    """The name (or slug) a reference asserts, whether given as a dict or bare."""
-    if isinstance(ref, dict):
-        value = _asserted(ref, field)
-        return value if isinstance(value, str) and value else None
-    if isinstance(ref, str) and ref and field == "name":
-        return ref
-    return None
-
-
 # Three-valued, because "cannot tell" is a distinct answer from "the same" and
 # from "different" -- and collapsing it into either is what produced this
 # branch's identity bugs in both directions. Read as UNKNOWN it invented
@@ -290,6 +280,22 @@ def _matcher_field_sets(object_type: str):
     matcher does not: dcim_device_unique_name_site only applies where tenant IS
     NULL, and a payload silent about tenant has not said that, so reading its
     equality as one row would be the guess this whole relation exists to avoid.
+
+    CustomFieldMatcher is the one hand-written class that IS extracted, because
+    it is built only from CustomField(unique=True) -- a genuine unique
+    criterion, and for a producer keying devices by an external id it may be
+    the ONLY selector a reference carries. It declares no field tuple, so it is
+    returned as a ``custom_field`` name instead.
+
+    The others stay skipped, and not merely for want of a field list.
+    GlobalIPNetworkIPMatcher and VRFIPNetworkIPMatcher compare addresses, where
+    two spellings of one address (``::1`` and ``0:0:0:0:0:0:0:1``) are equal
+    values and unequal strings, so a textual verdict would be wrong in the
+    refusing direction. CableTerminationSetMatcher compares a SET of
+    terminations. VirtualChassisNameMatcher matches a name that carries no
+    uniqueness at all -- deriving identity from it is precisely what the VC
+    partition exists to avoid. AutoSlugMatcher costs nothing: the plain
+    unique_slug criterion already covers that field.
     """
     try:
         model_class = get_object_type_model(object_type)
@@ -297,6 +303,10 @@ def _matcher_field_sets(object_type: str):
         return []
     criteria = []
     for matcher in get_model_matchers(model_class):
+        custom_field = getattr(matcher, "custom_field", None)
+        if custom_field is not None:
+            criteria.append(((), frozenset(), True, custom_field))
+            continue
         get_refs = getattr(matcher, "_get_refs", None)
         if get_refs is None:
             continue
@@ -306,8 +316,59 @@ def _matcher_field_sets(object_type: str):
         insensitive = getattr(matcher, "_get_insensitive_refs", lambda: frozenset())()
         criteria.append(
             (tuple(sorted(refs)), frozenset(insensitive),
-             getattr(matcher, "condition", None) is None))
+             getattr(matcher, "condition", None) is None, None))
     return criteria
+
+
+# The custom field value types _prepare_custom_fields passes through as plain
+# scalars. date/datetime are excluded on purpose: transform reformats them, so
+# two spellings of one instant are unequal strings here and a verdict would be
+# wrong in the refusing direction. json/object/multiple_* are not scalars.
+_COMPARABLE_CUSTOM_FIELD_TYPES = frozenset({
+    "text", "long_text", "url", "selection", "boolean", "integer", "decimal",
+})
+
+
+def _custom_field_value(payload, field: str):
+    """
+    A custom field's comparable value, in either payload form.
+
+    Diode sends a custom field as a single-key ``{type: value}`` envelope and
+    _prepare_custom_fields unwraps it later; this runs BEFORE that, so both
+    forms are accepted. It deliberately does not call
+    _pop_custom_field_type_and_value, which pops the envelope and would consume
+    the payload before it is transformed.
+
+    The field NAME is read with a plain lookup, not the camelCase-tolerant one:
+    custom field names are user-defined, so folding ``myField`` to ``my_field``
+    could match the wrong field.
+    """
+    fields = _asserted(payload, "custom_fields")
+    if not isinstance(fields, dict):
+        return None
+    value = fields.get(field)
+    if isinstance(value, dict) and len(value) == 1:
+        value_type, inner = next(iter(value.items()))
+        if value_type not in _COMPARABLE_CUSTOM_FIELD_TYPES:
+            return None
+        value = inner
+    if value is None or value == "":
+        return None
+    return value if isinstance(value, str | int | float | bool) else None
+
+
+def _compare_custom_field(a, b, field: str) -> str:
+    """
+    One unique custom field of two payloads.
+
+    Compared only when both sides carry the same primitive kind. A raw ``"5"``
+    against a raw ``5`` is one value that transform would coerce alike, so
+    calling those different would refuse a payload that ingests perfectly well.
+    """
+    x, y = _custom_field_value(a, field), _custom_field_value(b, field)
+    if x is None or y is None or type(x) is not type(y):
+        return _UNKNOWN
+    return _SAME if x == y else _DIFFERENT
 
 
 def _compare_field(object_type: str, field: str, a, b, insensitive: bool, depth: int) -> str:
@@ -363,12 +424,15 @@ def _compare_references(object_type: str, a, b, depth: int = 0) -> str:
         return _SAME if a_row == b_row else _DIFFERENT
 
     same = different = False
-    for fields, insensitive, exact_row in _matcher_field_sets(object_type):
-        verdicts = [
-            _compare_field(object_type, field, _asserted(a, field), _asserted(b, field),
-                           field in insensitive, depth)
-            for field in fields
-        ]
+    for fields, insensitive, exact_row, custom_field in _matcher_field_sets(object_type):
+        if custom_field is not None:
+            verdicts = [_compare_custom_field(a, b, custom_field)]
+        else:
+            verdicts = [
+                _compare_field(object_type, field, _asserted(a, field), _asserted(b, field),
+                               field in insensitive, depth)
+                for field in fields
+            ]
         if _DIFFERENT in verdicts:
             different = True
         elif exact_row and all(v == _SAME for v in verdicts):
@@ -392,101 +456,146 @@ def references_conflict(object_type: str, a, b) -> bool:
     naming an object through DISJOINT selectors -- an asset_tag on one side, a
     name on the other -- share no criterion and are UNKNOWN here, whatever the
     database would say. Where that residue makes a wrong write reachable, the
-    caller resolves the addressed side first (_comparable_bay_sides) rather
+    caller hydrates the addressed side first (_hydrate_addressed_sides) rather
     than this relation guessing. See docs/payload-identity.md.
     """
     return _compare_references(object_type, a, b) == _DIFFERENT
 
 
-def _resolved_bay_payload(object_type: str, row_id: int):
+def _describe_row(object_type: str, row, depth: int = 0) -> dict | None:
     """
-    What an explicitly addressed row actually is, as a payload.
+    A database row as the payload that would name it, using the type's own criteria.
 
-    Reached only when ONE side of the comparison is addressed by primary key
-    and says nothing else -- a partial reference need not repeat the name. That
-    side then asserts nothing a selector comparison can read, so the two sides
-    share no criterion and look compatible, which accepted the contradiction.
-    Measured: an outer bay addressed by pk alone, carrying a module whose
-    module_bay named a different bay, applied 200 with errors null, installed
-    the module in the named bay and left the addressed one empty, re-planning
-    the ineffective update on every later ingest.
+    Derived from the same criteria as the comparison, so a hydrated side is
+    described in exactly the terms the comparison reads. An earlier revision
+    hand-wrote this for ModuleBay -- name, device, and the device's site, tenant
+    and asset_tag -- which is the restating this refactor removed everywhere
+    else, and it would have needed editing for the next type or constraint.
 
-    Resolving turns that side into a fully specified payload so the ordinary
-    compatibility relation can do the rest. It adds a lookup, not a second
-    notion of identity -- which is why the row is expanded into a payload here
-    rather than compared as a pk against selectors.
-
-    A missing row is not this check's error to report: _resolve_by_netbox_id
-    raises for an id that resolves to nothing, with a message about the id.
+    Decimal and other non-primitive column values are skipped rather than
+    coerced: a skipped field costs evidence, a coerced one can invent a
+    difference.
     """
-    model_class = get_object_type_model(object_type)
-    row = model_class.objects.filter(pk=row_id).select_related(
-        "device__site", "device__tenant").first()
-    if row is None:
+    if row is None or depth > _MAX_REFERENCE_DEPTH:
         return None
-    device = {"name": row.device.name}
-    if row.device.site_id is not None:
-        device["site"] = {"name": row.device.site.name}
-    if row.device.tenant_id is not None:
-        device["tenant"] = {"name": row.device.tenant.name}
-    if row.device.asset_tag:
-        device["asset_tag"] = row.device.asset_tag
-    # the id is carried so the message can still name the row the producer
-    # addressed, alongside what that row turns out to be
-    return {"name": row.name, "device": device,
-            "metadata": {"source_match": {"netbox_id": row_id}}}
+    described = {}
+    for fields, _insensitive, _exact_row, custom_field in _matcher_field_sets(object_type):
+        if custom_field is not None:
+            value = (getattr(row, "custom_field_data", None) or {}).get(custom_field)
+            if isinstance(value, str | int | float | bool) and value != "":
+                described.setdefault("custom_fields", {})[custom_field] = value
+            continue
+        for field in fields:
+            if field in described:
+                continue
+            value = _described_field(object_type, field, getattr(row, field, None), depth)
+            if value is not None:
+                described[field] = value
+    return described or None
 
 
-def _comparable_bay_sides(mine, theirs, object_type):
+def _described_field(object_type: str, field: str, value, depth: int):
+    """One column of a row in payload form, or None if it cannot be expressed."""
+    if value is None:
+        return None
+    ref_info = get_json_ref_info(object_type, field)
+    if ref_info is None:
+        return value if isinstance(value, str | int | float | bool) else None
+    if ref_info.is_generic or ref_info.is_generic_object:
+        return None
+    return _describe_row(ref_info.object_type, value, depth + 1)
+
+
+def _hydrate_addressed_sides(object_type: str, a, b):
     """
-    Resolve whichever side is addressed by pk alone, so the two can be compared.
+    Replace an explicitly addressed side with what that row actually is.
+
+    Called only when the payload comparison came back inconclusive, which is
+    the only situation a lookup can improve -- and that condition is why this
+    is no longer gated on a side merely CARRYING a name. It was: an addressed
+    bay that named itself but omitted its device was treated as comparable,
+    although ModuleBay's criterion is (name, device), so a same-named bay on
+    another device compared as compatible and the contradiction was accepted.
+    Asking whether the comparison actually reached a verdict cannot go stale
+    against the criteria the way that hand-written gate did.
 
     Kept out of references_conflict so that relation stays a pure function of
-    two payloads -- it is table-tested that way -- and so the resolved payload is
-    available to the error message, which would otherwise report a row by id
+    two payloads -- it is table-tested that way -- and so the hydrated payload
+    is available to the error message, which would otherwise report a row by id
     while this code knows its name.
 
-    Only the addressed-AND-nameless side needs it: an addressed side that also
-    carries a name is already comparable, and resolving it anyway would add a
-    query to every ordinary payload.
+    A missing row is left alone rather than refused: _resolve_by_netbox_id
+    already fails for an id that resolves to nothing, with a message about the
+    id rather than about names.
     """
-    my_row, their_row = _addressed_row_of(mine), _addressed_row_of(theirs)
-    if my_row is not None and their_row is not None:
-        return mine, theirs
-    if my_row is not None and _asserted(mine, "name") is None:
-        mine = _resolved_bay_payload(object_type, my_row) or mine
-    elif their_row is not None and _asserted(theirs, "name") is None:
-        theirs = _resolved_bay_payload(object_type, their_row) or theirs
-    return mine, theirs
+    try:
+        model_class = get_object_type_model(object_type)
+    except Exception:
+        return a, b
+    hydrated = []
+    for side in (a, b):
+        row_id = _addressed_row_of(side)
+        if row_id is None:
+            hydrated.append(side)
+            continue
+        described = _describe_row(object_type, model_class.objects.filter(pk=row_id).first())
+        if described is None:
+            hydrated.append(side)
+            continue
+        # the id is carried so the message can still name the row the producer
+        # addressed, alongside what that row turns out to be
+        hydrated.append({**described,
+                         "metadata": {"source_match": {"netbox_id": row_id}}})
+    return hydrated[0], hydrated[1]
 
 
-def _bay_description(payload) -> str:
+def _describe_payload(object_type: str, payload, depth: int = 0) -> str:
     """
-    A bay rendered the way the payload identifies it, device scope included.
+    A payload rendered by the identity it asserts, for an error message.
 
-    The scope is part of the message because it can be the only thing telling
-    the two sides apart, and an error naming the same bay twice is unactionable.
+    Derived from the same criteria as the comparison, because a message that
+    cannot tell the two sides apart is unactionable -- and that kept happening.
+    Hand-written, this printed the bay name, then the device name, then the
+    device's site, then its asset_tag, each added after a payload turned up that
+    the previous version described identically on both sides ("module_bay is
+    'case-bay', not 'case-bay'"). A unique custom field would have been the
+    next. Reading the criteria means whatever the comparison used to decide is
+    what the message shows.
     """
-    name, row = _asserted(payload, "name"), _addressed_row_of(payload)
-    if name is None:
-        described = f"the bay with id {row}" if row is not None else "an unnamed bay"
-    else:
-        described = repr(name) + (f" (id {row})" if row is not None else "")
-    device = _asserted(payload, "device")
-    device_name = _referenced_name(device)
-    if device_name:
-        described += f" on device {device_name!r}"
-        site = _referenced_name(_asserted(device, "site"))
-        if site:
-            described += f" in {site!r}"
-        return described
-    # A device named only by asset_tag has no name to print, and the bay names
-    # are equal in every payload that gets this far, so without the tag the
-    # message would name the same bay twice.
-    asset_tag = _asserted(device, "asset_tag")
-    if isinstance(asset_tag, str) and asset_tag:
-        described += f" on the device with asset_tag {asset_tag!r}"
-    return described
+    parts, seen = [], set()
+    for fields, _insensitive, _exact_row, custom_field in _matcher_field_sets(object_type):
+        if custom_field is not None:
+            value = _custom_field_value(payload, custom_field)
+            if value is not None and custom_field not in seen:
+                seen.add(custom_field)
+                parts.append(f"{custom_field}={value!r}")
+            continue
+        for field in fields:
+            if field in seen:
+                continue
+            value = _asserted(payload, field)
+            if value is None:
+                continue
+            seen.add(field)
+            rendered = _describe_payload_field(object_type, field, value, depth)
+            if rendered is not None:
+                parts.append(rendered)
+    row = _addressed_row_of(payload)
+    if row is not None:
+        parts.append(f"id {row}")
+    return ", ".join(parts) if parts else "an object the payload does not identify"
+
+
+def _describe_payload_field(object_type: str, field: str, value, depth: int) -> str | None:
+    """One asserted field of a payload, rendered; references recurse."""
+    ref_info = get_json_ref_info(object_type, field)
+    if ref_info is None:
+        return f"{field}={value!r}" if isinstance(value, str | int | float | bool) else None
+    if ref_info.is_generic or ref_info.is_generic_object or depth >= _MAX_REFERENCE_DEPTH:
+        return None
+    inner = _describe_payload(
+        ref_info.object_type, _as_reference_payload(value) or {}, depth + 1)
+    return f"{field}=({inner})"
 
 
 def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str,
@@ -533,8 +642,13 @@ def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str,
     # side cannot say which row it addresses, and two PK-addressed bays
     # compared as anonymous payloads look compatible.
     mine = proto_json if metadata is None else {**proto_json, "metadata": metadata}
-    mine, named_parent = _comparable_bay_sides(mine, named_parent, object_type)
-    if not references_conflict(object_type, mine, named_parent):
+    verdict = _compare_references(object_type, mine, named_parent)
+    if verdict == _UNKNOWN:
+        # the payloads did not settle it, so ask the rows -- but only now, and
+        # only for a side that says which row it is
+        mine, named_parent = _hydrate_addressed_sides(object_type, mine, named_parent)
+        verdict = _compare_references(object_type, mine, named_parent)
+    if verdict != _DIFFERENT:
         return
     ref_info = get_json_ref_info(object_type, reverse_field)
     nested_type = ref_info.object_type if ref_info else "nested object"
@@ -542,10 +656,10 @@ def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str,
     raise serializers.ValidationError({
         NON_FIELD_ERRORS: [
             f"{object_type}.{reverse_field} names a {nested_type} whose "
-            f"{parent_fk} is {_bay_description(named_parent)}, not "
-            f"{_bay_description(proto_json)}. Only the nested object's own "
+            f"{parent_fk} is [{_describe_payload(object_type, named_parent)}], not "
+            f"[{_describe_payload(object_type, proto_json)}]. Only the nested object's own "
             f"{parent_fk} installs it, so this payload would install it "
-            f"there and leave {_bay_description(proto_json)} empty while "
+            f"there and leave [{_describe_payload(object_type, proto_json)}] empty while "
             f"reporting success. Send it under the bay its {parent_fk} "
             f"names, or correct that {parent_fk}."
         ]
