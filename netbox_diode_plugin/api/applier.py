@@ -1183,8 +1183,20 @@ def _find_existing_object_or_none(data: dict, object_type: str):
         return None
 
 
-def _create_or_find_instance(data: dict, object_type: str, serializer_class, request):
-    """Create new instance or find existing one on conflict."""
+def _create_or_find_instance(data: dict, object_type: str, serializer_class, request,
+                             warnings: list | None = None):
+    """
+    Create new instance or find existing one on conflict.
+
+    The fallback answers 200 having stored nothing of what was submitted, which
+    is the same gap the bind-only pre-save match had: the caller is told its
+    change applied. It is reported for the same reason, and it matters here for
+    a case no earlier check can catch -- two payload nodes referencing ONE
+    existing object through DISJOINT selectors (an asset_tag in one, a
+    (name, site) in another) share no fingerprint, so dedupe cannot merge them
+    and nothing upstream knows they are one object until this lookup resolves
+    both to the same row. Whichever arrived second lands here and is dropped.
+    """
     serializer = serializer_class(data=data, context={"request": request})
     try:
         serializer.is_valid(raise_exception=True)
@@ -1194,7 +1206,37 @@ def _create_or_find_instance(data: dict, object_type: str, serializer_class, req
         instance = _find_existing_object_or_none(data, object_type)
         if not instance:
             raise e
+        if warnings is not None:
+            _warn_create_bound_to_existing(warnings, instance, object_type, data)
         return instance
+
+
+def _warn_create_bound_to_existing(warnings: list, instance, object_type: str,
+                                   data: dict) -> None:
+    """
+    Say that a colliding CREATE resolved onto an existing row and stored nothing.
+
+    Unlike the bind-only warning this does not name which values differ: the
+    payload was never validated against this row -- the serializer was built for
+    an insert and raised -- so there is no validated data to compare and
+    guessing which submitted value would have won would be worse than saying
+    plainly that none of them was applied.
+    """
+    submitted = sorted(
+        name for name in data
+        if not name.startswith("_") and name not in ("id",)
+    )
+    warnings.append({
+        "object_type": object_type,
+        "object_id": instance.pk,
+        "fields": submitted,
+        "message": (
+            f"This create collided with the existing {object_type} with id "
+            f"{instance.pk} and was resolved onto it, so none of the submitted "
+            f"fields ({', '.join(submitted)}) was stored. Re-plan this entity to "
+            f"apply them through an update addressed by object_id."
+        ),
+    })
 
 
 def _apply_change(data: dict, model_class: models.Model, change: Change, created: dict, request,
@@ -1243,7 +1285,8 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
                              change, change_set, created)
 
         if not instance:
-            instance = _create_or_find_instance(data, change.object_type, serializer_class, request)
+            instance = _create_or_find_instance(
+                data, change.object_type, serializer_class, request, warnings)
 
         # Always add the instance to created dict so it can be referenced by subsequent changes
         if change.ref_id:

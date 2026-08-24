@@ -1965,6 +1965,68 @@ class VirtualChassisIngestE2ETests(APITestCase):
         )
         self.assertIn("object_id", warning["message"])
 
+    def test_a_colliding_create_says_it_stored_nothing(self):
+        """
+        A create resolved onto an existing row must not report a silent success.
+
+        Two payload nodes can reference ONE existing object through DISJOINT
+        selectors -- an asset_tag in one, a (name, site) in another. Those share
+        no fingerprint, so dedupe cannot merge them and nothing upstream knows
+        they are one object; the second only meets the first at this lookup,
+        where the create collides and is resolved onto the existing row with its
+        payload dropped. Before this, that answered 200 with nothing stored and
+        nothing said, so which node's values survived was decided by arrival
+        order and invisible either way.
+
+        Seeded here with a plain unique collision, because the shape above needs
+        no special machinery to produce the same fall-through: what is pinned is
+        that the fall-through reports itself.
+        """
+        existing = VirtualChassis.objects.create(
+            name="vce-collide", domain="owned-by-someone")
+        master = Device.objects.create(
+            name="vce-collide-m", site=self.site,
+            device_type=self.dt, role=self.role)
+        Device.objects.filter(pk=master.pk).update(
+            virtual_chassis=existing, vc_position=1)
+        existing.refresh_from_db()
+        existing.master = master
+        existing.save()
+
+        r = self.client.post(
+            self.apply_url,
+            data={
+                "id": str(uuid.uuid4()),
+                "changes": [{
+                    "change_id": str(uuid.uuid4()),
+                    "change_type": "create",
+                    "object_version": None,
+                    "object_type": "dcim.virtualchassis",
+                    "object_id": None,
+                    "ref_id": "vc1",
+                    # same master, so the unique_master constraint collides
+                    "data": {"name": "vce-other-name", "domain": "mine",
+                             "master": master.pk},
+                }],
+            },
+            format="json", **self.auth,
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertIsNone(body.get("errors"))
+
+        warnings = body.get("warnings") or []
+        self.assertEqual(len(warnings), 1, body)
+        warning = warnings[0]
+        self.assertEqual(warning["object_type"], "dcim.virtualchassis")
+        self.assertEqual(warning["object_id"], existing.pk)
+        self.assertIn("domain", warning["fields"])
+        self.assertIn("object_id", warning["message"])
+
+        existing.refresh_from_db()
+        self.assertEqual(existing.domain, "owned-by-someone",
+                         "the colliding payload was written after all")
+
     def test_an_ordinary_apply_carries_no_warnings_key(self):
         """The key is absent unless something happened, so a clean apply is unchanged."""
         payload = self._device_payload("vce-nowarn", {
