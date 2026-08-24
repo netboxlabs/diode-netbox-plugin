@@ -6,6 +6,7 @@ from unittest import mock
 from core.models import ObjectChange
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Module, ModuleBay, ModuleType, Site
 from django.test import SimpleTestCase
+from rest_framework import serializers
 from utilities.testing import APITestCase
 
 from netbox_diode_plugin.api import transformer
@@ -433,6 +434,55 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         self.assertEqual(ModuleBay.objects.filter(device=dev_a).count(), 0)
         self.assertEqual(Module.objects.count(), 0)
 
+    def test_a_module_naming_a_different_addressed_bay_is_refused(self):
+        """
+        A payload can address its row by primary key and name nothing at all.
+
+        metadata.source_match.netbox_id is the strongest identity in the
+        pipeline, and a PK-addressed reference need carry no name, so a
+        comparison over names and selectors alone found nothing asserted on
+        both sides and read that as compatible.
+
+        The outer entity's metadata is popped before this check runs -- it
+        would not survive _ensure_snake_case -- so the check is handed it
+        explicitly; without that the outer side cannot say which row it
+        addresses.
+
+        Measured before the fix: 200 with errors null, the module installed in
+        bay B, and bay A given no change at all -- the two PK-addressed bay
+        nodes merged into one and arrival order decided which id survived. It
+        then CONVERGED on the wrong row, which is worse than the re-planning
+        shapes above: nothing further would ever mention it.
+        """
+        bay_a = ModuleBay.objects.create(device=self.dev, name="pk-bayA")
+        bay_b = ModuleBay.objects.create(device=self.dev, name="pk-bayB")
+        entity = {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "metadata": {"source_match": {"netbox_id": bay_a.pk}},
+            "installed_module": {
+                "device": self._dev_ref(),
+                "module_bay": {"metadata": {"source_match": {"netbox_id": bay_b.pk}}},
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+                "serial": "IM-SER-1",
+            },
+        }}}
+
+        r = self.client.post(self.diff_url, data=entity, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = str(r.json().get("errors"))
+        # It must be THIS guard that refused, not the addressed-row merge
+        # refusal downstream: that one catches the same payload (measured --
+        # they are independent layers), so asserting only on the status and the
+        # ids would pass with the outer metadata never reaching this check.
+        self.assertIn("whose module_bay is", errors)
+        # neither side names anything, so the ids are all the message has
+        self.assertIn(str(bay_a.pk), errors)
+        self.assertIn(str(bay_b.pk), errors)
+        self.assertEqual(Module.objects.count(), 0)
+        bay_a.refresh_from_db()
+        bay_b.refresh_from_db()
+        self.assertIsNone(getattr(bay_a, "installed_module", None))
+        self.assertIsNone(getattr(bay_b, "installed_module", None))
+
     def test_reingest_of_an_already_installed_module_is_a_noop(self):
         """
         Rows already correct in the DB must survive a second pass.
@@ -583,6 +633,25 @@ class ReverseSideConflictRuleTests(SimpleTestCase):
             ("asset_tag on one side only falls back to the name",
              self._bay("b", {"asset_tag": "A1", "name": "rtr"}),
              self._bay("b", {"name": "other"}), True),
+            # an explicit primary key is the strongest identity there is, so
+            # it decides ahead of every selector below it
+            ("different addressed rows, nothing else asserted",
+             {"metadata": {"source_match": {"netbox_id": 1}}},
+             {"metadata": {"source_match": {"netbox_id": 2}}}, True),
+            ("different addressed rows, same bay and device names",
+             {"name": "b", "device": {"name": "rtr"},
+              "metadata": {"source_match": {"netbox_id": 1}}},
+             {"name": "b", "device": {"name": "rtr"},
+              "metadata": {"source_match": {"netbox_id": 2}}}, True),
+            ("same addressed row, different bay names",
+             {"name": "b1", "metadata": {"source_match": {"netbox_id": 1}}},
+             {"name": "b2", "metadata": {"source_match": {"netbox_id": 1}}}, False),
+            ("addressed on one side only falls back to the names",
+             {"name": "b1", "metadata": {"source_match": {"netbox_id": 1}}},
+             {"name": "b2"}, True),
+            ("an unusable netbox_id is ignored, as the node builder ignores it",
+             {"name": "b", "metadata": {"source_match": {"netbox_id": "nope"}}},
+             {"name": "b", "metadata": {"source_match": {"netbox_id": 2}}}, False),
             # the stated bound: no criterion in common, so nothing to compare
             ("disjoint selectors stay compatible",
              self._bay("b", {"asset_tag": "A1"}), self._bay("b", {"name": "rtr"}), False),
@@ -619,3 +688,47 @@ class ReverseSideConflictRuleTests(SimpleTestCase):
             transformer._asserted({"module_bay": {"name": "snake"}}, "module_bay"),
             {"name": "snake"},
         )
+
+
+class AddressedRowMergeTests(SimpleTestCase):
+    """
+    Two nodes addressing DIFFERENT rows must not become one node.
+
+    _carry_addressed_row picks whichever side carries an explicit
+    metadata.source_match.netbox_id, which is only unambiguous if two different
+    ids never reach it. An earlier revision asserted they could not, on the
+    strength of vc_identities_conflict and the _fingerprint_dedupe
+    qualification -- but both are dcim.virtualchassis machinery, so for every
+    other type two differently-addressed nodes with nothing else to fingerprint
+    merged, and arrival order decided which row the plan then wrote.
+    """
+
+    def _node(self, netbox_id=None, **fields):
+        node = {"_object_type": "dcim.modulebay", "_uuid": "u", "_refs": set(),
+                "_warnings": {}, **fields}
+        if netbox_id is not None:
+            node["_netbox_id"] = netbox_id
+        return node
+
+    def test_two_different_addressed_rows_are_refused(self):
+        """Two primary keys are two rows; that needs no interpretation."""
+        with self.assertRaises(serializers.ValidationError) as caught:
+            transformer._merge_nodes(self._node(1547), self._node(1548))
+        message = str(caught.exception)
+        self.assertIn("1547", message)
+        self.assertIn("1548", message)
+        self.assertIn("netbox_id", message)
+
+    def test_the_same_addressed_row_still_merges(self):
+        """The refusal is about disagreement, not about being addressed."""
+        merged = transformer._merge_nodes(
+            self._node(1547, name="b"), self._node(1547, label="L"))
+        self.assertEqual(merged["_netbox_id"], 1547)
+        self.assertEqual(merged["name"], "b")
+        self.assertEqual(merged["label"], "L")
+
+    def test_one_addressed_side_still_carries_the_id(self):
+        """Either order keeps the id, which is what _carry_addressed_row is for."""
+        for a, b in ((self._node(1547), self._node()),
+                     (self._node(), self._node(1547))):
+            self.assertEqual(transformer._merge_nodes(a, b)["_netbox_id"], 1547)

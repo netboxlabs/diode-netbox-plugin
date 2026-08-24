@@ -200,6 +200,36 @@ def _asserted(payload, field):
     return value if value not in (None, "") else None
 
 
+def _addressed_row(metadata):
+    """
+    The row a payload's metadata explicitly addresses, or None.
+
+    Read exactly the way the node builder reads it -- plain keys, int coercion,
+    an unusable value ignored -- so a comparison against it models what the
+    pipeline will actually do with the payload rather than what it might have
+    meant. (The node builder is equally blind to a camelCase `sourceMatch`;
+    matching that blindness here is deliberate, because a guard that refused on
+    an id the pipeline then ignored would be refusing a payload that resolves
+    perfectly well by its other selectors.)
+    """
+    if not isinstance(metadata, dict):
+        return None
+    source_match = metadata.get("source_match")
+    if not isinstance(source_match, dict):
+        return None
+    try:
+        return int(source_match["netbox_id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _addressed_row_of(payload):
+    """The row a payload addresses, for a payload whose metadata is still inline."""
+    if not isinstance(payload, dict):
+        return None
+    return _addressed_row(payload.get("metadata"))
+
+
 def _referenced_name(ref, field="name"):
     """The name (or slug) a reference asserts, whether given as a dict or bare."""
     if isinstance(ref, dict):
@@ -256,6 +286,9 @@ def _device_conflict(a, b) -> bool:
     # rather than alongside the name is what keeps a differing name from
     # refusing two references to ONE device -- the same precedence _netbox_id
     # already takes over master in vc_identities_conflict.
+    a_row, b_row = _addressed_row_of(a), _addressed_row_of(b)
+    if a_row is not None and b_row is not None:
+        return a_row != b_row
     a_tag, b_tag = _asserted(a, "asset_tag"), _asserted(b, "asset_tag")
     if isinstance(a_tag, str) and isinstance(b_tag, str):
         return a_tag != b_tag
@@ -277,6 +310,9 @@ def _reverse_side_conflict(mine, theirs) -> bool:
     collapsed two same-named bays on two same-named devices in different
     sites, which let the contradiction below through.
     """
+    my_row, their_row = _addressed_row_of(mine), _addressed_row_of(theirs)
+    if my_row is not None and their_row is not None:
+        return my_row != their_row
     my_name, their_name = _asserted(mine, "name"), _asserted(theirs, "name")
     if my_name is None or their_name is None:
         return False
@@ -292,7 +328,11 @@ def _bay_description(payload) -> str:
     The scope is part of the message because it can be the only thing telling
     the two sides apart, and an error naming the same bay twice is unactionable.
     """
-    described = repr(_asserted(payload, "name"))
+    name, row = _asserted(payload, "name"), _addressed_row_of(payload)
+    if name is None:
+        described = f"the bay with id {row}" if row is not None else "an unnamed bay"
+    else:
+        described = repr(name) + (f" (id {row})" if row is not None else "")
     device = _asserted(payload, "device")
     device_name = _referenced_name(device)
     if device_name:
@@ -310,7 +350,8 @@ def _bay_description(payload) -> str:
     return described
 
 
-def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str) -> None:
+def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str,
+                                         metadata=None) -> None:
     """
     Refuse a reverse-side payload whose nested object names a DIFFERENT parent.
 
@@ -348,19 +389,25 @@ def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str) -> 
     if not isinstance(nested, dict):
         return
     named_parent = _asserted(nested, parent_fk)
-    if not _reverse_side_conflict(proto_json, named_parent):
+    # The caller has already popped metadata off proto_json (it would not
+    # survive _ensure_snake_case), so put it back on a copy: without it this
+    # side cannot say which row it addresses, and two PK-addressed bays
+    # compared as anonymous payloads look compatible.
+    mine = proto_json if metadata is None else {**proto_json, "metadata": metadata}
+    if not _reverse_side_conflict(mine, named_parent):
         return
     ref_info = get_json_ref_info(object_type, reverse_field)
     nested_type = ref_info.object_type if ref_info else "nested object"
+    proto_json = mine
     raise serializers.ValidationError({
         NON_FIELD_ERRORS: [
             f"{object_type}.{reverse_field} names a {nested_type} whose "
             f"{parent_fk} is {_bay_description(named_parent)}, not "
             f"{_bay_description(proto_json)}. Only the nested object's own "
-            f"{parent_fk} installs it, so this payload would leave "
-            f"{_bay_description(proto_json)} empty and re-plan on every "
-            f"ingest. Send it under the bay its {parent_fk} names, or "
-            f"correct that {parent_fk}."
+            f"{parent_fk} installs it, so this payload would install it "
+            f"there and leave {_bay_description(proto_json)} empty while "
+            f"reporting success. Send it under the bay its {parent_fk} "
+            f"names, or correct that {parent_fk}."
         ]
     })
 
@@ -581,7 +628,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
     proto_json = _ensure_snake_case(proto_json, object_type)
     apply_format_transformations(proto_json, object_type)
     apply_entity_migrations(proto_json, object_type)
-    _check_reverse_side_names_its_parent(proto_json, object_type)
+    _check_reverse_side_names_its_parent(proto_json, object_type, metadata)
 
     # context pushed down from parent nodes
     if context is not None:
@@ -1310,11 +1357,27 @@ def _carry_addressed_row(merged: dict, a: dict, b: dict) -> None:
     answers, which is exactly the order dependence the identity partition exists
     to remove.
 
-    Taking whichever side has one is unambiguous rather than a tie-break,
-    because two nodes carrying DIFFERENT ids never reach a merge: they conflict
-    in vc_identities_conflict and are qualified apart in _fingerprint_dedupe. So
-    the only cases here are neither, one, or both-and-equal.
+    Taking whichever side has one is then unambiguous rather than a tie-break,
+    because two nodes carrying DIFFERENT ids are refused here instead of merged.
+    An earlier revision asserted they could not reach this point at all --
+    vc_identities_conflict separates them, and _fingerprint_dedupe qualifies
+    them apart -- but both of those are dcim.virtualchassis machinery: the
+    conflict relation is only consulted for that type, and the id only
+    qualifies a fingerprint for a CONTESTED master. Measured on
+    dcim.modulebay: two bays addressing rows 1547 and 1548, each with no other
+    field to fingerprint, merged into one node whose surviving id was decided
+    by arrival order, and the plan then updated 1548 while the payload's outer
+    bay 1547 got no change at all. A success, converged, on the wrong row.
+
+    Two different primary keys are two different rows -- that is the one
+    identity statement in this pipeline that needs no interpretation -- so
+    merging them cannot be right for any type, and refusing costs nothing that
+    was working.
     """
+    a_id, b_id = a.get('_netbox_id'), b.get('_netbox_id')
+    if a_id is not None and b_id is not None and a_id != b_id:
+        raise serializers.ValidationError(
+            _conflict_error(a, 'metadata.source_match.netbox_id', a_id, b_id))
     for node in (a, b):
         if node.get('_netbox_id') is not None:
             merged['_netbox_id'] = node['_netbox_id']
