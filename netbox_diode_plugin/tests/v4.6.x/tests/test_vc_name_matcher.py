@@ -5,7 +5,11 @@ from unittest import mock
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site, VirtualChassis
 from django.test import SimpleTestCase, TestCase
 
-from netbox_diode_plugin.api.applier import _is_auto_created_component, apply_changeset
+from netbox_diode_plugin.api.applier import (
+    _is_auto_created_component,
+    _locked_adoption_candidates,
+    apply_changeset,
+)
 from netbox_diode_plugin.api.common import (
     VC_MEMBER_HINT,
     Change,
@@ -1046,6 +1050,46 @@ class VirtualChassisAdoptionTests(TestCase):
         self.assertIsNone(raised, f"the move was refused: {raised}")
         self.assertEqual(self.master.virtual_chassis_id, empty.pk)
         self.assertEqual(empty.master_id, self.master.pk)
+
+    def test_adoption_locks_its_candidates_before_deciding(self):
+        """
+        The candidate rows are locked, and the decision reads state after the lock.
+
+        Adoption reads a row, decides it is adoptable, then writes it. Unlocked,
+        two workers applying master-bearing CREATEs for one name both read the
+        same EMPTY row as adoptable, both attach their own device, and the later
+        save overwrites the first master -- two stacks merged into one row, both
+        told 200, one master gone.
+
+        Asserted on the SQL because that is what can be checked deterministically
+        here: a FOR UPDATE against the candidate pks, and the annotated re-read
+        issued after it rather than before. A genuine two-connection race needs
+        a TransactionTestCase and threads, which this suite has none of; what is
+        pinned is that the lock is taken and that nothing decides on state read
+        before it.
+
+        The lock is two statements because Postgres refuses FOR UPDATE beside a
+        DISTINCT -- "FOR UPDATE is not allowed with DISTINCT clause" -- and
+        beside the member-count aggregate, so a single locked query is not
+        available.
+        """
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        VirtualChassis.objects.create(name="vca-locked")
+        with CaptureQueriesContext(connection) as captured:
+            _locked_adoption_candidates(
+                VirtualChassis, "vca-locked", self.master.pk)
+
+        sql = [q["sql"] for q in captured.captured_queries]
+        locking = [i for i, s in enumerate(sql) if "FOR UPDATE" in s.upper()]
+        self.assertEqual(len(locking), 1, sql)
+        self.assertIn("ORDER BY", sql[locking[0]].upper(),
+                      "candidates must be locked in a deterministic order")
+
+        after = [s for s in sql[locking[0] + 1:] if "COUNT(" in s.upper()]
+        self.assertTrue(
+            after, "the annotated re-read must run AFTER the lock, not before")
 
     def test_adoption_declines_a_row_whose_domain_the_payload_contradicts(self):
         """

@@ -682,6 +682,50 @@ def _choose_adoption_candidate(model_class, candidates, data, master_pk, change,
     return None
 
 
+def _locked_adoption_candidates(model_class, name: str, master_pk: int) -> list:
+    """
+    The rows this CREATE may adopt, locked, and re-read after the lock.
+
+    Adoption reads a row, decides it is adoptable, and then writes it. Without a
+    lock two workers applying master-bearing CREATEs for the same name both read
+    the same EMPTY row as adoptable, both attach their own device, and the later
+    save overwrites the first master: two producers' stacks merged into one row,
+    both told 200, one master silently gone. Membership can be double-counted
+    the same way.
+
+    Two statements rather than one because Postgres refuses FOR UPDATE beside a
+    DISTINCT (measured: "FOR UPDATE is not allowed with DISTINCT clause") and
+    beside the aggregate annotate_vc_member_counts adds. So the pks are scanned
+    unlocked, those rows are locked by pk, and the decision runs on state read
+    AFTER the lock.
+
+    Re-applying the eligibility filter on that second read is the point, not a
+    repetition: a row the other transaction has just mastered no longer matches,
+    so this one drops it, declines adoption, and creates its own chassis instead
+    of overwriting somebody's master.
+
+    Both statements order by pk so two transactions contending for the same rows
+    take them in the same order and queue instead of deadlocking.
+    """
+    eligible = models.Q(master__isnull=True) | (
+        models.Q(members__pk=master_pk) & ~models.Q(master_id=master_pk))
+    candidate_pks = sorted(
+        model_class.objects.filter(name=name).filter(eligible)
+        .distinct().values_list("pk", flat=True)
+    )
+    if not candidate_pks:
+        return []
+    list(
+        model_class.objects.filter(pk__in=candidate_pks)
+        .order_by("pk").select_for_update()
+    )
+    return list(
+        annotate_vc_member_counts(
+            model_class.objects.filter(pk__in=candidate_pks).filter(eligible).distinct()
+        ).order_by("pk")
+    )
+
+
 def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_class, request,
                                          change, change_set, created):
     """
@@ -754,14 +798,7 @@ def _try_adopt_masterless_virtualchassis(data: dict, model_class, serializer_cla
         # Nothing to adopt BY: a master that is not a usable pk cannot pick a
         # candidate row, and must not reach the queryset below. See _coerce_pk.
         return None
-    candidates = list(
-        annotate_vc_member_counts(
-            model_class.objects.filter(name=name).filter(
-                models.Q(master__isnull=True)
-                | (models.Q(members__pk=master_pk) & ~models.Q(master_id=master_pk))
-            ).distinct()
-        ).order_by("pk")
-    )
+    candidates = _locked_adoption_candidates(model_class, name, master_pk)
     if not candidates:
         return None
     existing = _choose_adoption_candidate(
