@@ -136,8 +136,26 @@ child invisible to the check — a reminder that "after resolution" is not one
 uniform state: a reference to a new object and a reference to an existing one
 look different by then, and a pass over resolved data has to read both.
 
-What is genuinely not checked is a reference to a row the payload does not
-*describe*: with no submitted parent field, there is nothing to disagree with.
+It also reads the child's **current** forward FK when the payload asserts
+none. That case had been skipped on the grounds that a payload naming no parent
+has nothing to disagree with — true, and beside the point. The question a
+convergence check asks is not *does the payload contradict itself* but **will
+anything carry out the write it asks for**. Nesting an existing module without
+naming its bay contradicts nothing and moves nothing, so the reverse update
+re-plans forever.
+
+Two shapes still reach no verdict here, and both are refused upstream rather
+than left to converge — measured, because three successive revisions of this
+scope claim were wrong:
+
+- a child this change set creates that names no parent — the forward FK is
+  non-nullable, so validation answers `400 Field module_bay is required`;
+- a reference given as a bare primary key — any bare-int reference answers
+  `500` in the transform path, a pre-existing defect of every reference field
+  (present on the merge base, reported separately).
+
+If either upstream behaviour changes, the check needs revisiting; a test pins
+the first.
 
 That is the division of labour, and it is why the payload check is *allowed* to
 be approximate: it exists for its **message**, refusing in the producer's own
@@ -214,8 +232,13 @@ Each fix was correct and none made the next less likely, because nothing in
 the code stated what the complete set was. That is what this document and the
 derivation are for.
 
-Two more arrived *after* the derivation, and both were in what remained
-hand-written **around** it rather than in the derived comparison: the hydration
+Three more arrived *after* the derivation, and none were selector omissions in
+the derived comparison — they were in the seams and in my own scope claims. The
+last three findings each had the same shape: I wrote into a docstring why some
+case did not need checking, and the reasoning was locally valid but answered the
+wrong question. **A convergence check is not asking whether the payload is
+self-consistent. It is asking whether anything will perform the write.** Two
+findings were in what remained hand-written **around** the derivation: the hydration
 gate (a field-presence test instead of a verdict test) and the blanket skip of
 hand-written matchers (which silently dropped unique custom fields). Both are
 now derived too. The lesson generalises past this file: a derived core with

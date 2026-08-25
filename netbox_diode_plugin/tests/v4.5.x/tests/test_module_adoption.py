@@ -731,6 +731,95 @@ class ModuleBayInstalledModuleE2ETests(APITestCase):
         }}}
         self.assertEqual(self._non_noop(self._diff(entity)), [])
 
+    def test_a_bay_nesting_an_existing_module_without_naming_its_bay_is_refused(self):
+        """
+        A payload asserting no forward FK still has to be carried out by something.
+
+        Nesting an EXISTING module by asset_tag and omitting its module_bay
+        contradicts nothing -- and nothing performs the write either. The
+        deferred installed_module update does not persist a reverse one-to-one,
+        and the module's own forward FK is left exactly as it was.
+
+        Measured before the fix: plan [update dcim.modulebay <bay A>], apply 200
+        with errors null, the module still in its old bay, bay A still empty,
+        and the same ineffective update re-planned on every ingest.
+
+        So the child's CURRENT parent is what the deferred write must agree
+        with when the payload names none.
+        """
+        bay_a = ModuleBay.objects.create(device=self.dev, name="nb-bayA")
+        bay_b = ModuleBay.objects.create(device=self.dev, name="nb-bayB")
+        module = Module.objects.create(
+            device=self.dev, module_bay=bay_b, module_type=self.mt, asset_tag="NB-MOD")
+
+        entity = {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": self._dev_ref(),
+            "name": "nb-bayA",
+            "installed_module": {
+                "asset_tag": "NB-MOD",
+                "device": self._dev_ref(),
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+            },
+        }}}
+        r = self.client.post(self.diff_url, data=entity, format="json", **self.auth)
+
+        self.assertEqual(r.status_code, 400, r.content)
+        errors = str(r.json().get("errors"))
+        self.assertIn(str(bay_a.pk), errors)
+        self.assertIn(str(bay_b.pk), errors)
+        # the message must say the payload does not move it, not that it
+        # contradicts a submitted value -- there is no submitted value
+        self.assertIn("does not move it", errors)
+        module.refresh_from_db()
+        self.assertEqual(module.module_bay_id, bay_b.pk, "the module was moved")
+
+    def test_an_existing_module_already_in_the_bay_needs_no_forward_fk(self):
+        """
+        The control, and the reason this reads the row instead of refusing.
+
+        Omitting module_bay for a module that is ALREADY in this bay describes
+        the converged state. Refusing every payload that names no forward FK
+        would have closed the case above by breaking this one, so it is
+        asserted beside it: no changes planned at all.
+        """
+        bay = ModuleBay.objects.create(device=self.dev, name="nb-okbay")
+        Module.objects.create(
+            device=self.dev, module_bay=bay, module_type=self.mt, asset_tag="NB-OK")
+
+        entity = {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": self._dev_ref(),
+            "name": "nb-okbay",
+            "installed_module": {
+                "asset_tag": "NB-OK",
+                "device": self._dev_ref(),
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+            },
+        }}}
+        self.assertEqual(self._non_noop(self._diff(entity)), [])
+
+    def test_a_new_module_naming_no_bay_is_refused_by_the_required_field(self):
+        """
+        The third variant, pinned because the guard above relies on it.
+
+        _child_parent_identity returns no verdict for a child this change set
+        creates that names no parent -- there is nothing to read yet. That is
+        only safe because the forward FK is non-nullable, so validation refuses
+        it first. If that ever stopped being true, this test is what says so.
+        """
+        entity = {"timestamp": 1, "object_type": "dcim.modulebay", "entity": {"module_bay": {
+            "device": self._dev_ref(),
+            "name": "nb-newbay",
+            "installed_module": {
+                "device": self._dev_ref(),
+                "serial": "NB-NEW",
+                "module_type": {"manufacturer": {"name": "im-mfr"}, "model": "im-linecard"},
+            },
+        }}}
+        r = self.client.post(self.diff_url, data=entity, format="json", **self.auth)
+        self.assertEqual(r.status_code, 400, r.content)
+        self.assertIn("module_bay", str(r.json().get("errors")))
+        self.assertEqual(Module.objects.count(), 0)
+
     def test_reingest_of_an_already_installed_module_is_a_noop(self):
         """
         Rows already correct in the DB must survive a second pass.

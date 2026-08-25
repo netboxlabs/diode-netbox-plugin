@@ -1998,6 +1998,41 @@ def _referenced_node(owner_type: str, field: str, value, by_uuid, by_pk):
     return None
 
 
+def _child_parent_identity(child, parent_fk, by_uuid):
+    """
+    What the child's forward FK will point at once this change set is applied.
+
+    The payload's value when it asserts one. Otherwise the row's CURRENT value:
+    nothing in the change set touches that FK, so what it already holds is what
+    the deferred write has to agree with -- and where it does not, nothing will
+    ever make it agree. Measured: a bay nesting an EXISTING module by asset_tag
+    with no module_bay submitted planned an update on every ingest while the
+    module stayed in its old bay, apply reporting success each time.
+
+    An earlier revision skipped that case on the grounds that a payload
+    asserting no parent has nothing to disagree WITH. True, and beside the
+    point: the question is not whether the payload contradicts itself, it is
+    whether anything will carry out the write it asks for.
+
+    None for a child this change set CREATES that asserts no parent, because
+    there is nothing to read yet -- and that shape needs no verdict here, being
+    refused upstream by the non-nullable forward FK ("Field module_bay is
+    required", measured).
+    """
+    if parent_fk in child:
+        return _referenced_identity(child[parent_fk], by_uuid), "submitted"
+    pk = child.get('id')
+    if pk is None:
+        return None, None
+    try:
+        model_class = get_object_type_model(child['_object_type'])
+        current = model_class.objects.filter(pk=pk).values_list(
+            f"{parent_fk}_id", flat=True).first()
+    except Exception:
+        return None, None
+    return (("pk", current) if current is not None else None), "current"
+
+
 def _describe_identity(identity, by_uuid) -> str:
     """An identity in terms a producer can act on."""
     if identity is None:
@@ -2032,9 +2067,20 @@ def _check_reverse_side_resolves_to_its_parent(entities: list[dict]) -> None:
 
     The child is found whether its reference survived as a reference or was
     replaced by a primary key, which resolution does for an object that already
-    exists. What is genuinely not checked is a reference to a row this payload
-    does not DESCRIBE: with no submitted parent_fk there is nothing to
-    disagree with. See _referenced_node.
+    exists (see _referenced_node), and its parent is read from the payload or,
+    when the payload is silent, from the row as it stands (see
+    _child_parent_identity).
+
+    Two shapes reach no verdict here, and both are refused upstream rather than
+    left to converge -- measured, because three successive revisions of this
+    docstring asserted a scope that turned out to be wrong:
+
+    - A child this change set creates that names no parent: the forward FK is
+      non-nullable, so validation answers 400 "Field module_bay is required".
+    - A reference given as a bare primary key with no node describing it: the
+      transform path answers 500 on any bare-int reference, which is a
+      pre-existing defect of every reference field (present on the merge base,
+      reported separately) and not a convergence gap here.
     """
     by_uuid = {e['_uuid']: e for e in entities}
     by_pk = {(e.get('_object_type'), e['id']): e
@@ -2045,16 +2091,18 @@ def _check_reverse_side_resolves_to_its_parent(entities: list[dict]) -> None:
                 continue
             child = _referenced_node(
                 owner_type, field, entity[field], by_uuid, by_pk)
-            if child is None or parent_fk not in child:
+            if child is None:
                 continue
             mine = _resolved_identity(entity)
-            theirs = _referenced_identity(child[parent_fk], by_uuid)
+            theirs, source = _child_parent_identity(child, parent_fk, by_uuid)
             if theirs is None or mine == theirs:
                 continue
+            says = (f"has {parent_fk} pointing at" if source == "submitted"
+                    else "is currently in, and this payload does not move it from,")
             message = (
                 f"{owner_type}.{field} would write to "
                 f"{_describe_identity(mine, by_uuid)}, but the "
-                f"{child.get('_object_type')} it names has {parent_fk} pointing at "
+                f"{child.get('_object_type')} it names {says} "
                 f"{_describe_identity(theirs, by_uuid)}. Only that "
                 f"{parent_fk} installs it, so this payload would install it "
                 f"there and leave the other empty while reporting success. "
