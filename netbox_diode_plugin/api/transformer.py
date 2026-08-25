@@ -457,7 +457,9 @@ def references_conflict(object_type: str, a, b) -> bool:
     name on the other -- share no criterion and are UNKNOWN here, whatever the
     database would say. Where that residue makes a wrong write reachable, the
     caller hydrates the addressed side first (_hydrate_addressed_sides) rather
-    than this relation guessing. See docs/payload-identity.md.
+    than this relation guessing, and
+    _check_reverse_side_resolves_to_its_parent refuses after resolution what no
+    payload comparison could settle.
     """
     return _compare_references(object_type, a, b) == _DIFFERENT
 
