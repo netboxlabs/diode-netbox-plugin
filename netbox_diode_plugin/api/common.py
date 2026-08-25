@@ -39,6 +39,23 @@ NON_FIELD_ERRORS = "__all__"
 MATCH_ONLY_TYPES = frozenset({"users.user"})
 
 
+# Private node key carrying the member Devices that referenced a nested
+# dcim.virtualchassis node, as a list of pks (or, for devices this batch is
+# still creating, UnresolvedReferences that never resolve to one).
+#
+# It lives on the node rather than in the matcher because the rule it serves --
+# "prefer the chassis this device already belongs to" -- cannot be decided from
+# the VirtualChassis payload alone: that payload does not know the device. The
+# device DOES know it at the point its own payload nests the reference, so the
+# transformer pushes it down there (transformer._NESTED_CONTEXT) and
+# matcher.VirtualChassisNameMatcher.resolve reads it back.
+#
+# The key is defined here so neither layer owns the other's constant, exactly
+# as MATCH_ONLY_TYPES above. It is stripped before any change is emitted; see
+# transformer.transform_proto_json.
+VC_MEMBER_HINT = "_diode_vc_member_devices"
+
+
 @lru_cache(maxsize=256)
 def _get_custom_fields_for_model(model) -> tuple:
     """Cached wrapper for CustomField.objects.get_for_model()."""
@@ -268,6 +285,9 @@ class ChangeSetResult:
     id: str | None = field(default_factory=lambda: str(uuid.uuid4()))
     change_set: ChangeSet | None = field(default=None)
     errors: dict | None = field(default=None)
+    # Things that happened which the caller would not infer from a 200. Absent
+    # from the response unless there is one, so a clean apply is unchanged.
+    warnings: list | None = field(default=None)
 
     def to_dict(self) -> dict:
         """Convert the result to a dictionary."""
@@ -275,6 +295,9 @@ class ChangeSetResult:
             "id": self.id,
             "errors": self.errors,
         }
+
+        if self.warnings:
+            result["warnings"] = self.warnings
 
         if self.change_set:
             result["change_set"] = self.change_set.to_dict()

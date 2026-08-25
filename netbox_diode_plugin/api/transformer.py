@@ -20,6 +20,7 @@ from rest_framework import serializers
 from .common import (
     MATCH_ONLY_TYPES,
     NON_FIELD_ERRORS,
+    VC_MEMBER_HINT,
     AutoSlug,
     ChangeSetException,
     UnresolvedReference,
@@ -34,7 +35,14 @@ from .field_policy import (
     referenced_uuids,
     release_rejected_edges,
 )
-from .matcher import find_existing_object, fingerprints
+from .matcher import (
+    asserted_vc_identity,
+    find_existing_object,
+    fingerprints,
+    get_model_matchers,
+    partition_vc_identities,
+    vc_unique_master_fingerprint,
+)
 from .plugin_utils import (
     CUSTOM_FIELD_OBJECT_REFERENCE_TYPE,
     apply_format_transformations,
@@ -77,8 +85,59 @@ def _cable_terminable_types() -> frozenset:
         for ct in ContentType.objects.filter(CABLE_TERMINATION_MODELS)
     )
 
+# Private context keys that DO land on the child node. The general rule below
+# is that an underscore-prefixed context key contributes only ordering (its
+# reference is added to the child's _refs, which is what _topo_sort reads) and
+# is not copied as data. This set is the exception: a key here is copied too,
+# because a matcher has to read it back.
+#
+# Only common.VC_MEMBER_HINT qualifies today, and both halves matter for it:
+# the ordering half is what makes the value USEFUL (see the dcim.device entry
+# in _NESTED_CONTEXT), and the data half is what makes it READABLE
+# (matcher.VirtualChassisNameMatcher.resolve). Anything added here must be
+# stripped again before changes are emitted -- see transform_proto_json.
+_PRIVATE_CONTEXT_KEYS_KEPT = frozenset({VC_MEMBER_HINT})
+
 # these are implied values pushed down to referenced objects.
 _NESTED_CONTEXT = {
+    "dcim.device": {
+        # device.virtual_chassis -> the chassis node learns which member named
+        # it. Two effects, and the entry is here for both:
+        #
+        #   DATA: matcher.VirtualChassisNameMatcher.resolve prefers, among
+        #   several same-named chassis, the one this device ALREADY belongs to.
+        #   That rule cannot live in the matcher on its own -- the matcher sees
+        #   the VirtualChassis payload, which does not know the device. Here it
+        #   does: this is the exact point where a device's payload nests the
+        #   reference.
+        #
+        #   ORDERING: an UnresolvedReference in a context value adds the PARENT
+        #   to the child's _refs, so _topo_sort emits the chassis node AFTER the
+        #   member device. Without that the chassis node is resolved first and
+        #   the hint is still an unresolved uuid, so an EXISTING device's pk --
+        #   the only thing that can carry existing membership -- would never be
+        #   known in time and the rule would silently never fire.
+        #
+        # The ordering has a visible cost, stated because it is a plan-shape
+        # change and not an implementation detail: _handle_post_creates can no
+        # longer merge the deferred device update back into the device's own
+        # change for this shape (the chassis it references now sorts after the
+        # device), so a member re-ingest plans device + chassis + deferred
+        # update where it used to plan one device change carrying the chassis
+        # inline. Both converge, and the deferred step is where position and
+        # priority have to be asserted anyway (_POST_CREATE_COMPANIONS), but the
+        # changeset is longer.
+        #
+        # A list, not a scalar: several members of one chassis in one batch
+        # fingerprint-dedupe into a single chassis node, and _merge_nodes unions
+        # this key so every member's evidence survives the merge. Dropping to
+        # the first one would make the rule "prefer the chassis the FIRST-named
+        # member belongs to", which is an arbitrary choice of exactly the kind
+        # this whole path exists to remove.
+        "virtual_chassis": lambda object_type, uuid: {
+            VC_MEMBER_HINT: [UnresolvedReference(object_type=object_type, uuid=uuid)],
+        },
+    },
     "dcim.interface": {
         # interface.primary_mac_address -> mac_address.assigned_object = interface
         "primary_mac_address": lambda object_type, uuid: {
@@ -111,6 +170,512 @@ _NESTED_CONTEXT = {
     },
 }
 
+# A reverse-side nested reference, and the forward FK the nested object must
+# use to name its parent back. Declaring the pair circular buys a plannable
+# ORDER, not a write -- the forward FK is what persists the relation -- so the
+# two sides naming different parents is a payload that cannot be carried out.
+_REVERSE_SIDE_PARENT_FK = {
+    ("dcim.modulebay", "installed_module"): "module_bay",
+}
+
+
+def _asserted(payload, field):
+    """
+    Read a field from a payload that may not be snake_cased yet.
+
+    _ensure_snake_case is shallow: it rewrites the keys of the object being
+    transformed, and every nested object is normalized later by its own
+    recursion. So when the check below runs, a camelCase producer's nested
+    payload still carries camelCase keys, and reading only the snake spelling
+    would silently see nothing and wave the payload through.
+    """
+    if not isinstance(payload, dict):
+        return None
+    if field in payload:
+        value = payload[field]
+    else:
+        value = next(
+            (v for k, v in payload.items() if _camel_to_snake_case(k) == field),
+            None,
+        )
+    return value if value not in (None, "") else None
+
+
+def _addressed_row(metadata):
+    """
+    The row a payload's metadata explicitly addresses, or None.
+
+    Read exactly the way the node builder reads it -- plain keys, int coercion,
+    an unusable value ignored -- so a comparison against it models what the
+    pipeline will actually do with the payload rather than what it might have
+    meant. (The node builder is equally blind to a camelCase `sourceMatch`;
+    matching that blindness here is deliberate, because a guard that refused on
+    an id the pipeline then ignored would be refusing a payload that resolves
+    perfectly well by its other selectors.)
+    """
+    if not isinstance(metadata, dict):
+        return None
+    source_match = metadata.get("source_match")
+    if not isinstance(source_match, dict):
+        return None
+    try:
+        return int(source_match["netbox_id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _addressed_row_of(payload):
+    """The row a payload addresses, for a payload whose metadata is still inline."""
+    if not isinstance(payload, dict):
+        return None
+    return _addressed_row(payload.get("metadata"))
+
+
+# Three-valued, because "cannot tell" is a distinct answer from "the same" and
+# from "different" -- and collapsing it into either is what produced this
+# branch's identity bugs in both directions. Read as UNKNOWN it invented
+# refusals; read as SAME it accepted contradictions.
+_SAME, _DIFFERENT, _UNKNOWN = "same", "different", "unknown"
+
+# References are compared by recursing into the referenced type's own identity
+# (a bay's device, that device's site). The depth bound is a backstop against a
+# reference cycle in the payload, not a semantic choice; exceeding it is
+# UNKNOWN, which refuses nothing.
+_MAX_REFERENCE_DEPTH = 3
+
+
+def _as_reference_payload(ref):
+    """
+    A reference in payload form, whatever shape the producer used.
+
+    A bare string is the object's name -- that is how a diode payload names a
+    reference without describing it. A bare int is NOT read as a primary key:
+    that would be a guess about the producer's intent, and guessing here is
+    what an identity comparison must not do.
+    """
+    if isinstance(ref, dict):
+        return ref
+    if isinstance(ref, str) and ref:
+        return {"name": ref}
+    return None
+
+
+def _matcher_field_sets(object_type: str):
+    """
+    The identity criteria for a type, as (fields, case-insensitive, exact-row).
+
+    Read off the matchers rather than restated here, because every restatement
+    of this in the branch's history has been incomplete: bay name without the
+    device, the device without its site, the device without its asset_tag, the
+    row without its primary key. get_model_matchers already knows all of them,
+    including which fields Lower() makes case-insensitive.
+
+    The six hand-written matcher classes (CustomFieldMatcher,
+    VirtualChassisNameMatcher, AutoSlugMatcher and friends) declare no field
+    set, so they are skipped: they answer "does this payload match THIS row",
+    which is a different question from "can these two payloads be one object".
+    A skipped matcher only ever costs evidence, never invents it.
+
+    ``exact_row`` marks a matcher whose equality proves sameness. A CONDITIONAL
+    matcher does not: dcim_device_unique_name_site only applies where tenant IS
+    NULL, and a payload silent about tenant has not said that, so reading its
+    equality as one row would be the guess this whole relation exists to avoid.
+
+    CustomFieldMatcher is the one hand-written class that IS extracted, because
+    it is built only from CustomField(unique=True) -- a genuine unique
+    criterion, and for a producer keying devices by an external id it may be
+    the ONLY selector a reference carries. It declares no field tuple, so it is
+    returned as a ``custom_field`` name instead.
+
+    The others stay skipped, and not merely for want of a field list.
+    GlobalIPNetworkIPMatcher and VRFIPNetworkIPMatcher compare addresses, where
+    two spellings of one address (``::1`` and ``0:0:0:0:0:0:0:1``) are equal
+    values and unequal strings, so a textual verdict would be wrong in the
+    refusing direction. CableTerminationSetMatcher compares a SET of
+    terminations. VirtualChassisNameMatcher matches a name that carries no
+    uniqueness at all -- deriving identity from it is precisely what the VC
+    partition exists to avoid. AutoSlugMatcher costs nothing: the plain
+    unique_slug criterion already covers that field.
+    """
+    try:
+        model_class = get_object_type_model(object_type)
+    except Exception:
+        return []
+    criteria = []
+    for matcher in get_model_matchers(model_class):
+        custom_field = getattr(matcher, "custom_field", None)
+        if custom_field is not None:
+            criteria.append(((), frozenset(), True, custom_field))
+            continue
+        get_refs = getattr(matcher, "_get_refs", None)
+        if get_refs is None:
+            continue
+        refs = get_refs()
+        if not refs:
+            continue
+        insensitive = getattr(matcher, "_get_insensitive_refs", lambda: frozenset())()
+        criteria.append(
+            (tuple(sorted(refs)), frozenset(insensitive),
+             getattr(matcher, "condition", None) is None, None))
+    return criteria
+
+
+# The custom field value types _prepare_custom_fields passes through as plain
+# scalars. date/datetime are excluded on purpose: transform reformats them, so
+# two spellings of one instant are unequal strings here and a verdict would be
+# wrong in the refusing direction. json/object/multiple_* are not scalars.
+_COMPARABLE_CUSTOM_FIELD_TYPES = frozenset({
+    "text", "long_text", "url", "selection", "boolean", "integer", "decimal",
+})
+
+
+def _custom_field_value(payload, field: str):
+    """
+    A custom field's comparable value, in either payload form.
+
+    Diode sends a custom field as a single-key ``{type: value}`` envelope and
+    _prepare_custom_fields unwraps it later; this runs BEFORE that, so both
+    forms are accepted. It deliberately does not call
+    _pop_custom_field_type_and_value, which pops the envelope and would consume
+    the payload before it is transformed.
+
+    The field NAME is read with a plain lookup, not the camelCase-tolerant one:
+    custom field names are user-defined, so folding ``myField`` to ``my_field``
+    could match the wrong field.
+    """
+    fields = _asserted(payload, "custom_fields")
+    if not isinstance(fields, dict):
+        return None
+    value = fields.get(field)
+    if isinstance(value, dict) and len(value) == 1:
+        value_type, inner = next(iter(value.items()))
+        if value_type not in _COMPARABLE_CUSTOM_FIELD_TYPES:
+            return None
+        value = inner
+    if value is None or value == "":
+        return None
+    return value if isinstance(value, str | int | float | bool) else None
+
+
+def _compare_custom_field(a, b, field: str) -> str:
+    """
+    One unique custom field of two payloads.
+
+    Compared only when both sides carry the same primitive kind. A raw ``"5"``
+    against a raw ``5`` is one value that transform would coerce alike, so
+    calling those different would refuse a payload that ingests perfectly well.
+    """
+    x, y = _custom_field_value(a, field), _custom_field_value(b, field)
+    if x is None or y is None or type(x) is not type(y):
+        return _UNKNOWN
+    return _SAME if x == y else _DIFFERENT
+
+
+def _compare_field(object_type: str, field: str, a, b, insensitive: bool, depth: int) -> str:
+    """One field of two payloads: the same value, a different one, or unknown."""
+    if a is None or b is None:
+        return _UNKNOWN
+    ref_info = get_json_ref_info(object_type, field)
+    if ref_info is not None:
+        if ref_info.is_generic or ref_info.is_generic_object:
+            # the target type lives in a sibling field; not resolvable here
+            return _UNKNOWN
+        return _compare_references(ref_info.object_type, a, b, depth + 1)
+    if isinstance(a, dict | list | tuple) or isinstance(b, dict | list | tuple):
+        return _UNKNOWN
+    if insensitive and isinstance(a, str) and isinstance(b, str):
+        return _SAME if a.lower() == b.lower() else _DIFFERENT
+    return _SAME if a == b else _DIFFERENT
+
+
+def _compare_references(object_type: str, a, b, depth: int = 0) -> str:
+    """
+    Can these two payloads denote the same object of this type?
+
+    Two asymmetric rules, and the asymmetry is the whole design:
+
+    - DIFFERENCE needs only ONE identity field asserted on both sides with
+      different values. That follows from a field being single-valued, not from
+      uniqueness: a row has one name, so two payloads disagreeing about the
+      name are two rows even where the name alone identifies nothing.
+    - SAMENESS needs a whole unconditional matcher asserted and equal. That is
+      where uniqueness is doing the work -- a unique constraint satisfied
+      identically on both sides can only be one row.
+
+    Sameness OUTRANKS difference, because it is the stronger statement: two
+    references carrying one asset_tag are one device even if they spell its
+    name differently, and that disagreement is then a field conflict on that
+    row for _merge_nodes to report, not evidence of a second row.
+
+    Anything else is UNKNOWN, which refuses nothing. A field only one side
+    asserts cannot contradict, so an under-specified reference stays compatible
+    with a fuller one -- that is what keeps the natural nested shape ingestable.
+    """
+    if depth > _MAX_REFERENCE_DEPTH:
+        return _UNKNOWN
+    a, b = _as_reference_payload(a), _as_reference_payload(b)
+    if a is None or b is None:
+        return _UNKNOWN
+
+    # An explicit primary key is the one identity statement in this pipeline
+    # that needs no interpretation, so it decides before any selector.
+    a_row, b_row = _addressed_row_of(a), _addressed_row_of(b)
+    if a_row is not None and b_row is not None:
+        return _SAME if a_row == b_row else _DIFFERENT
+
+    same = different = False
+    for fields, insensitive, exact_row, custom_field in _matcher_field_sets(object_type):
+        if custom_field is not None:
+            verdicts = [_compare_custom_field(a, b, custom_field)]
+        else:
+            verdicts = [
+                _compare_field(object_type, field, _asserted(a, field), _asserted(b, field),
+                               field in insensitive, depth)
+                for field in fields
+            ]
+        if _DIFFERENT in verdicts:
+            different = True
+        elif exact_row and all(v == _SAME for v in verdicts):
+            same = True
+    if same:
+        return _SAME
+    return _DIFFERENT if different else _UNKNOWN
+
+
+def references_conflict(object_type: str, a, b) -> bool:
+    """
+    True when two payloads CANNOT denote the same object of this type.
+
+    The single payload-level identity comparison. It replaced three
+    hand-written ones -- bay, device and scope -- which between them accreted
+    five separate findings, each the same shape: a selector the comparison did
+    not know about. Deriving the criteria from the matchers is what stops the
+    sixth, because adding a type or a constraint is then data, not code.
+
+    Payload-level is the operative limit, and it is a real one: two references
+    naming an object through DISJOINT selectors -- an asset_tag on one side, a
+    name on the other -- share no criterion and are UNKNOWN here, whatever the
+    database would say. Where that residue makes a wrong write reachable, the
+    caller hydrates the addressed side first (_hydrate_addressed_sides) rather
+    than this relation guessing, and
+    _check_reverse_side_resolves_to_its_parent refuses after resolution what no
+    payload comparison could settle.
+    """
+    return _compare_references(object_type, a, b) == _DIFFERENT
+
+
+def _describe_row(object_type: str, row, depth: int = 0) -> dict | None:
+    """
+    A database row as the payload that would name it, using the type's own criteria.
+
+    Derived from the same criteria as the comparison, so a hydrated side is
+    described in exactly the terms the comparison reads. An earlier revision
+    hand-wrote this for ModuleBay -- name, device, and the device's site, tenant
+    and asset_tag -- which is the restating this refactor removed everywhere
+    else, and it would have needed editing for the next type or constraint.
+
+    Decimal and other non-primitive column values are skipped rather than
+    coerced: a skipped field costs evidence, a coerced one can invent a
+    difference.
+    """
+    if row is None or depth > _MAX_REFERENCE_DEPTH:
+        return None
+    described = {}
+    for fields, _insensitive, _exact_row, custom_field in _matcher_field_sets(object_type):
+        if custom_field is not None:
+            value = (getattr(row, "custom_field_data", None) or {}).get(custom_field)
+            if isinstance(value, str | int | float | bool) and value != "":
+                described.setdefault("custom_fields", {})[custom_field] = value
+            continue
+        for field in fields:
+            if field in described:
+                continue
+            value = _described_field(object_type, field, getattr(row, field, None), depth)
+            if value is not None:
+                described[field] = value
+    return described or None
+
+
+def _described_field(object_type: str, field: str, value, depth: int):
+    """One column of a row in payload form, or None if it cannot be expressed."""
+    if value is None:
+        return None
+    ref_info = get_json_ref_info(object_type, field)
+    if ref_info is None:
+        return value if isinstance(value, str | int | float | bool) else None
+    if ref_info.is_generic or ref_info.is_generic_object:
+        return None
+    return _describe_row(ref_info.object_type, value, depth + 1)
+
+
+def _hydrate_addressed_sides(object_type: str, a, b):
+    """
+    Replace an explicitly addressed side with what that row actually is.
+
+    Called only when the payload comparison came back inconclusive, which is
+    the only situation a lookup can improve -- and that condition is why this
+    is no longer gated on a side merely CARRYING a name. It was: an addressed
+    bay that named itself but omitted its device was treated as comparable,
+    although ModuleBay's criterion is (name, device), so a same-named bay on
+    another device compared as compatible and the contradiction was accepted.
+    Asking whether the comparison actually reached a verdict cannot go stale
+    against the criteria the way that hand-written gate did.
+
+    Kept out of references_conflict so that relation stays a pure function of
+    two payloads -- it is table-tested that way -- and so the hydrated payload
+    is available to the error message, which would otherwise report a row by id
+    while this code knows its name.
+
+    A missing row is left alone rather than refused: _resolve_by_netbox_id
+    already fails for an id that resolves to nothing, with a message about the
+    id rather than about names.
+    """
+    try:
+        model_class = get_object_type_model(object_type)
+    except Exception:
+        return a, b
+    hydrated = []
+    for side in (a, b):
+        row_id = _addressed_row_of(side)
+        if row_id is None:
+            hydrated.append(side)
+            continue
+        described = _describe_row(object_type, model_class.objects.filter(pk=row_id).first())
+        if described is None:
+            hydrated.append(side)
+            continue
+        # the id is carried so the message can still name the row the producer
+        # addressed, alongside what that row turns out to be
+        hydrated.append({**described,
+                         "metadata": {"source_match": {"netbox_id": row_id}}})
+    return hydrated[0], hydrated[1]
+
+
+def _describe_payload(object_type: str, payload, depth: int = 0) -> str:
+    """
+    A payload rendered by the identity it asserts, for an error message.
+
+    Derived from the same criteria as the comparison, because a message that
+    cannot tell the two sides apart is unactionable -- and that kept happening.
+    Hand-written, this printed the bay name, then the device name, then the
+    device's site, then its asset_tag, each added after a payload turned up that
+    the previous version described identically on both sides ("module_bay is
+    'case-bay', not 'case-bay'"). A unique custom field would have been the
+    next. Reading the criteria means whatever the comparison used to decide is
+    what the message shows.
+    """
+    parts, seen = [], set()
+    for fields, _insensitive, _exact_row, custom_field in _matcher_field_sets(object_type):
+        if custom_field is not None:
+            value = _custom_field_value(payload, custom_field)
+            if value is not None and custom_field not in seen:
+                seen.add(custom_field)
+                parts.append(f"{custom_field}={value!r}")
+            continue
+        for field in fields:
+            if field in seen:
+                continue
+            value = _asserted(payload, field)
+            if value is None:
+                continue
+            seen.add(field)
+            rendered = _describe_payload_field(object_type, field, value, depth)
+            if rendered is not None:
+                parts.append(rendered)
+    row = _addressed_row_of(payload)
+    if row is not None:
+        parts.append(f"id {row}")
+    return ", ".join(parts) if parts else "an object the payload does not identify"
+
+
+def _describe_payload_field(object_type: str, field: str, value, depth: int) -> str | None:
+    """One asserted field of a payload, rendered; references recurse."""
+    ref_info = get_json_ref_info(object_type, field)
+    if ref_info is None:
+        return f"{field}={value!r}" if isinstance(value, str | int | float | bool) else None
+    if ref_info.is_generic or ref_info.is_generic_object or depth >= _MAX_REFERENCE_DEPTH:
+        return None
+    inner = _describe_payload(
+        ref_info.object_type, _as_reference_payload(value) or {}, depth + 1)
+    return f"{field}=({inner})"
+
+
+def _check_reverse_side_names_its_parent(proto_json: dict, object_type: str,
+                                         metadata=None) -> None:
+    """
+    Refuse a reverse-side payload whose nested object names a DIFFERENT parent.
+
+    dcim.modulebay.installed_module is the reverse of Module.module_bay, and
+    deferring it buys a plannable order rather than a write: the module's own
+    module_bay FK is what installs it, and the deferred reverse update only
+    touches the related object in memory. So when bay A carries a module whose
+    module_bay names bay B, nothing installs the module into A -- and nothing
+    said so.
+
+    Measured before this check, bay A carrying a module naming bay B: the plan
+    created both bays and the module, applied 200 with errors null, and left the
+    module in B with A empty. Every later ingest of the identical payload
+    re-planned the same reverse-side update and applied it to no effect -- a
+    success that never converges, which is the failure this branch exists to
+    remove.
+
+    Refused rather than resolved in the outer bay's favour. Making the outer bay
+    authoritative would silently overwrite what the producer said about the
+    module, and the two statements are equally explicit -- there is nothing in
+    the payload that makes one of them the mistake.
+
+    Only when the two sides CONFLICT, in the compatibility sense used above: a
+    nested reference that identifies its bay less fully than the outer one is
+    left alone rather than guessed at.
+
+    This check is allowed to be approximate, and that is a deliberate division
+    of labour rather than a gap. It exists for its MESSAGE: it refuses in the
+    producer's own vocabulary, naming the selectors the payload actually used,
+    before any lookup. Coverage is _check_reverse_side_resolves_to_its_parent's
+    job -- it runs after resolution, where every way of expressing identity has
+    collapsed to a primary key or a node this change set creates, so a payload
+    this check cannot compare is still refused, just less specifically.
+    """
+    parent_fk = None
+    for (owner_type, field), fk in _REVERSE_SIDE_PARENT_FK.items():
+        if owner_type == object_type and field in proto_json:
+            parent_fk, reverse_field = fk, field
+            break
+    if parent_fk is None:
+        return
+    nested = proto_json.get(reverse_field)
+    if not isinstance(nested, dict):
+        return
+    named_parent = _asserted(nested, parent_fk)
+    # The caller has already popped metadata off proto_json (it would not
+    # survive _ensure_snake_case), so put it back on a copy: without it this
+    # side cannot say which row it addresses, and two PK-addressed bays
+    # compared as anonymous payloads look compatible.
+    mine = proto_json if metadata is None else {**proto_json, "metadata": metadata}
+    verdict = _compare_references(object_type, mine, named_parent)
+    if verdict == _UNKNOWN:
+        # the payloads did not settle it, so ask the rows -- but only now, and
+        # only for a side that says which row it is
+        mine, named_parent = _hydrate_addressed_sides(object_type, mine, named_parent)
+        verdict = _compare_references(object_type, mine, named_parent)
+    if verdict != _DIFFERENT:
+        return
+    ref_info = get_json_ref_info(object_type, reverse_field)
+    nested_type = ref_info.object_type if ref_info else "nested object"
+    proto_json = mine
+    raise serializers.ValidationError({
+        NON_FIELD_ERRORS: [
+            f"{object_type}.{reverse_field} names a {nested_type} whose "
+            f"{parent_fk} is [{_describe_payload(object_type, named_parent)}], not "
+            f"[{_describe_payload(object_type, proto_json)}]. Only the nested object's own "
+            f"{parent_fk} installs it, so this payload would install it "
+            f"there and leave [{_describe_payload(object_type, proto_json)}] empty while "
+            f"reporting success. Send it under the bay its {parent_fk} "
+            f"names, or correct that {parent_fk}."
+        ]
+    })
+
+
 def _no_context(object_type, uuid):
     return None
 
@@ -120,15 +685,148 @@ def _nested_context(object_type, uuid, field_name):
 _IS_CIRCULAR_REFERENCE = {
     "dcim.interface": frozenset(["primary_mac_address"]),
     "virtualization.vminterface": frozenset(["primary_mac_address"]),
-    "dcim.device": frozenset(["primary_ip4", "primary_ip6", "oob_ip"]),
+    "dcim.device": frozenset(["primary_ip4", "primary_ip6", "oob_ip", "virtual_chassis"]),
     "dcim.virtualdevicecontext": frozenset(["primary_ip4", "primary_ip6"]),
     "virtualization.virtualmachine": frozenset(["primary_ip4", "primary_ip6"]),
     "circuits.provider": frozenset(["accounts"]),
-    "dcim.modulebay": frozenset(["module"]), # this isn't  allowed to be circular, but gives a better error
+    # dcim.modulebay carries both sides of the module/bay relation, and they are
+    # here for opposite reasons:
+    #   installed_module is the reverse of Module.module_bay. A bay that nests the
+    #     module occupying it is named back by that module (Module.module_bay is a
+    #     required OneToOneField), and the two bay nodes fingerprint-dedupe into
+    #     one, so the cycle only appears at the SECOND _topo_sort -- which is why
+    #     re-ingesting rows the database already agrees with failed as well.
+    #     Deferring the reverse write orders it bay -> module -> bay update. Note
+    #     what that buys: a plannable order, not a write. The module's own
+    #     module_bay FK is what installs it; the deferred update re-asserts the
+    #     same relation through Django's reverse-one-to-one accessor, which only
+    #     mutates the related object in memory (and NetBox's serializer pops
+    #     reverse relations before full_clean), so it persists nothing.
+    #   module is the forward parent FK, and per NetBox's ModuleBay.clean() a bay
+    #     may not be a sub-bay of the module installed in it. It is declared only
+    #     so that payload reaches that model error instead of the opaque
+    #     plan-time cycle error -- it is a better-error path, not a working shape.
+    "dcim.modulebay": frozenset(["module", "installed_module"]),
 }
 
 def _is_circular_reference(object_type, field_name):
     return field_name in _IS_CIRCULAR_REFERENCE.get(object_type, frozenset())
+
+# Scalar fields that MOVE to the deferred step when their companion ref is
+# deferred: they only mean anything alongside that ref, so they have to be
+# asserted in the same write as it.
+#
+# NetBox's assign_virtualchassis_master signal forces an inline master's
+# vc_position to 1 when a VirtualChassis is created, so the deferred device
+# update must re-assert the submitted position/priority after that create.
+# Do NOT "fix" this back into a copy that also leaves the scalars on the main
+# node -- that is where they do damage:
+#   - on a device CREATE they are pointless there. The VC row is created after
+#     the device, and the signal overwrites whatever position the device was
+#     created with; only the deferred update can make the submitted position
+#     stick.
+#   - on a device UPDATE they are a bug. The main update runs BEFORE the
+#     chassis change, so a device moving from chassis A to chassis B into a
+#     position that is free in B but taken in A momentarily claims
+#     (A, new_position) and NetBox's (virtual_chassis, vc_position) uniqueness
+#     constraint rejects an otherwise legal move.
+# When _handle_post_creates merges the deferred step back into the main node
+# (it does whenever nothing that step references is ordered later) chassis and
+# position land in one write again, which is equally correct.
+_POST_CREATE_COMPANIONS = {
+    ("dcim.device", "virtual_chassis"): ("vc_position", "vc_priority"),
+}
+
+
+# The mirror of _POST_CREATE_COMPANIONS, for the shape where the PARENT nests
+# the device instead of the device nesting the parent: keyed by (parent type,
+# field nesting the device) -> (nested type, the ref that must be deferred).
+_NESTED_DEFERRED_COMPANIONS = {
+    ("dcim.virtualchassis", "master"): ("dcim.device", "virtual_chassis"),
+}
+
+
+def _defer_nested_companions(parent_type, field_name, parent_uuid, nested):
+    """
+    Give a nested device the deferred step its position needs, if it has one.
+
+    A device that nests ``virtual_chassis`` itself gets its position moved onto
+    a post-create step (_POST_CREATE_COMPANIONS), because the position only
+    means anything once the chassis exists. A device nested the OTHER way --
+    as a chassis payload's ``master`` -- had no such step, so its position
+    stayed on the device's own change, which is ordered BEFORE the chassis.
+
+    Measured: chassis {name, master: {..., vc_position: 5}}, with no
+    ``virtual_chassis`` nested back into the master. Both a new and an existing
+    device applied 200 and ended at vc_position 1 -- NetBox's signal sets the
+    master's position when the chassis attaches, overwriting the submitted 5.
+    Silently, since nothing errored.
+
+    Only fires when a companion scalar is actually present. The real orb-agent
+    master stub carries none, and adding an unconditional deferred step would
+    change the plan for every producer sending that shape to no purpose.
+
+    The reference must go on the post-create node rather than the device's own:
+    the chassis already references the device, so asserting the reverse on the
+    main node is the cycle _IS_CIRCULAR_REFERENCE exists to break.
+
+    An existing post-create step is extended, not taken as proof the job is
+    done -- see the comment on the lookup below.
+    """
+    companion = _NESTED_DEFERRED_COMPANIONS.get((parent_type, field_name))
+    if companion is None or not nested:
+        return
+    nested_type, ref_field = companion
+    device = nested[0]
+    if device.get('_object_type') != nested_type:
+        return
+    scalars = _POST_CREATE_COMPANIONS.get((nested_type, ref_field), ())
+    if not any(scalar in device for scalar in scalars):
+        return
+    # EXTEND an existing post-create step rather than treating one as proof this
+    # relationship was already deferred. A device has a post-create node for any
+    # of _IS_CIRCULAR_REFERENCE["dcim.device"] -- primary_ip4, primary_ip6,
+    # oob_ip, virtual_chassis -- so "some node exists" says nothing about which
+    # field is on it. Measured with a master carrying vc_position AND oob_ip and
+    # no virtual_chassis nested back: the oob_ip step existed,
+    # _move_deferred_companions left the position alone because that step has no
+    # virtual_chassis, and this helper then bailed on seeing the step at all --
+    # so the position stayed on the device's own change and the signal
+    # overwrote it, exactly the loss this function was added to stop.
+    post_create = next(
+        (n for n in nested
+         if n.get('_is_post_create') and n.get('_instance') == device['_uuid']),
+        None,
+    )
+    if post_create is None:
+        post_create = {
+            "_uuid": str(uuid4()),
+            "_object_type": nested_type,
+            "_refs": {device['_uuid']},
+            "_instance": device['_uuid'],
+            "_is_post_create": True,
+        }
+        nested.append(post_create)
+    elif ref_field in post_create:
+        # This exact relationship is already deferred -- the device nested the
+        # chassis back into itself, and _move_deferred_companions has run.
+        return
+    post_create[ref_field] = UnresolvedReference(
+        object_type=parent_type, uuid=parent_uuid)
+    post_create['_refs'].add(parent_uuid)
+    for scalar in scalars:
+        if scalar in device:
+            post_create[scalar] = device.pop(scalar)
+
+
+def _move_deferred_companions(object_type, node, post_create):
+    """Move companion scalars off the main node onto its deferred post-create node."""
+    for (companion_type, ref_field), scalar_fields in _POST_CREATE_COMPANIONS.items():
+        if companion_type != object_type or ref_field not in post_create:
+            continue
+        for scalar_field in scalar_fields:
+            if scalar_field in node:
+                post_create[scalar_field] = node.pop(scalar_field)
 
 @profiled("transform")
 def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]: # noqa: C901
@@ -164,11 +862,18 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
     defaulted = _set_defaults(resolved, supported_models)
 
     # handle post-create steps
-    output = _handle_post_creates(defaulted)
+    output = _handle_post_creates(_consolidate_post_creates(defaulted))
 
     _check_unresolved_refs(output)
+    _check_reverse_side_resolves_to_its_parent(output)
     for entity in output:
         entity.pop('_refs', None)
+        # Matching is done; the hint must not reach a change. differ pops the
+        # private keys it knows by name, so anything left here is emitted as
+        # change data -- where cleanup_unresolved_references would stringify an
+        # unresolved device ref into it and report the hint as a new_ref.
+        for private_key in _PRIVATE_CONTEXT_KEYS_KEPT:
+            entity.pop(private_key, None)
 
     return output
 
@@ -188,14 +893,23 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
     proto_json = _ensure_snake_case(proto_json, object_type)
     apply_format_transformations(proto_json, object_type)
     apply_entity_migrations(proto_json, object_type)
+    _check_reverse_side_names_its_parent(proto_json, object_type, metadata)
 
     # context pushed down from parent nodes
     if context is not None:
         for k, v in context.items():
-            if not k.startswith("_"):
+            if k in _PRIVATE_CONTEXT_KEYS_KEPT:
+                # Deep-copied, unlike the ordinary context values below: one
+                # nested_context dict is reused for every item of a list-valued
+                # reference, and _merge_nodes MUTATES this key (it unions the
+                # lists), so siblings sharing one list object would accumulate
+                # each other's members.
+                node[k] = copy.deepcopy(v)
+            elif not k.startswith("_"):
                 node[k] = v
-            if isinstance(v, UnresolvedReference):
-                node['_refs'].add(v.uuid)
+            for ref in (v if isinstance(v, list | tuple) else [v]):
+                if isinstance(ref, UnresolvedReference):
+                    node['_refs'].add(ref.uuid)
 
     nodes = [node]
     post_create = None
@@ -270,6 +984,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
                         "_is_post_create": True,
                     }
                 post_create[field_name] = None
+                post_create['_refs'].add(node['_uuid'])
             else:
                 node[field_name] = None
             continue
@@ -333,6 +1048,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
                     refs.append(ref_uuid)
         else:
             nested = _transform_proto_json_1(value, ref_info.object_type, supported_models, nested_context)
+            _defer_nested_companions(object_type, ref_info.field_name, uuid, nested)
             nodes += nested
             ref_uuid = nested[0]['_uuid']
             ref_value = UnresolvedReference(
@@ -359,6 +1075,7 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
         node['_refs'].update(refs)
 
     if post_create:
+        _move_deferred_companions(object_type, node, post_create)
         nodes.append(post_create)
 
     return nodes
@@ -594,6 +1311,155 @@ def _generate_slug(object_type, data):
         return slugify(str(source_value))
     return None
 
+def _canonical_uuids(entities: list[dict]) -> dict[str, str]:
+    """
+    Replay the dedupe's IDENTITY decisions only, merging nothing. uuid -> survivor uuid.
+
+    _vc_identity_partition has to compare two chassis nodes' master references,
+    and a reference is only comparable once it is CANONICAL: one device
+    mentioned twice in a graph is two nodes with two uuids until dedupe merges
+    them, so the real orb-agent shape -- the top-level chassis and every member
+    reference carrying the SAME master stub -- would otherwise read as several
+    different masters and split a chassis that must stay one. The main loop
+    canonicalises as it goes (``_update_unresolved_refs`` before ``fingerprints``),
+    which is exactly why the partition cannot be computed from the raw list.
+
+    It replays four of the loop's five identity steps: it rewrites refs,
+    computes the same fingerprints from the same incoming node, takes the first
+    fingerprint that has been seen, and registers every fingerprint onto the
+    survivor. The loop never recomputes a survivor's fingerprints after merging
+    (it keys off the INCOMING node's), so not merging payloads here costs no
+    accuracy. Post-create nodes are skipped because they neither merge nor
+    register.
+
+    The fifth step it does NOT replay is the identity-partition qualifier the
+    loop puts on a split chassis node's name fingerprint, and it cannot: the
+    partition is what this function is being called to help compute. That costs
+    nothing, because the qualifier is only ever applied to dcim.virtualchassis
+    nodes while the map returned here is consulted only for the DEVICE uuids a
+    master reference points at. Two chassis nodes this replay merges and the
+    real loop keeps apart therefore change no answer any caller reads -- but
+    a future caller that wants a chassis uuid out of this map does not inherit
+    that guarantee, so read it as being about device references.
+
+    It runs on deepcopies: ``_update_dict_refs`` rewrites reference objects in
+    place, and the shared UnresolvedReference instances belong to the caller.
+    """
+    by_fp = {}
+    canonical = {}
+    for entity in copy.deepcopy(entities):
+        if entity.get('_is_post_create'):
+            continue
+        _update_unresolved_refs(entity, canonical)
+        fps = fingerprints(entity, entity['_object_type'])
+        uuid = entity['_uuid']
+        primary = next((by_fp[fp] for fp in fps if fp in by_fp), uuid)
+        if primary != uuid:
+            canonical[uuid] = primary
+        for fp in fps:
+            by_fp[fp] = primary
+    return canonical
+
+
+def _canonical_vc_identity(entity: dict, canonical: dict[str, str]) -> dict:
+    """The identity a VC node asserts, with its master reference canonicalised."""
+    identity = asserted_vc_identity(entity)
+    master = identity.get("master")
+    if isinstance(master, UnresolvedReference):
+        identity["master"] = UnresolvedReference(
+            master.object_type, canonical.get(master.uuid, master.uuid)
+        )
+    return identity
+
+
+def _vc_identity_partition(entities: list[dict]) -> dict[str, int]:
+    """
+    Which same-named dcim.virtualchassis nodes are DIFFERENT chassis. uuid -> group.
+
+    VirtualChassisNameMatcher.fingerprint is keyed on the name alone, and
+    deliberately: within one graph a member's name-only chassis node and the
+    master-bearing one have to merge into a single create, and gating that
+    fingerprint on master leaves two nodes and the split chassis of issue #183.
+    The cost of the name-only key, unmeasured until now, is that two same-named
+    nodes asserting DIFFERENT identity also merge -- and then _merge_nodes
+    rejects the whole entity, so a payload with two same-named stacks in one
+    graph (VirtualChassis.master is unique, so different masters prove they are
+    two) could never be ingested at all, on any retry.
+
+    So the name bucket keeps its name key and is partitioned INSIDE, by
+    matcher.partition_vc_identities. This returns a group index only for buckets
+    that actually split; everything else, which is every payload without a
+    duplicated chassis name, is untouched and pays for one dict pass.
+    """
+    buckets: dict[str, list[dict]] = {}
+    for entity in entities:
+        if entity.get('_object_type') != 'dcim.virtualchassis':
+            continue
+        if entity.get('_is_post_create'):
+            continue
+        name = entity.get('name')
+        if isinstance(name, str) and name:
+            buckets.setdefault(name, []).append(entity)
+    split_buckets = {name: nodes for name, nodes in buckets.items() if len(nodes) > 1}
+    canonical = _canonical_uuids(entities)
+
+    partition = {}
+    for nodes in split_buckets.values():
+        identities = [_canonical_vc_identity(node, canonical) for node in nodes]
+        groups = partition_vc_identities(identities)
+        if len(set(groups)) < 2:
+            continue
+        for node, group in zip(nodes, groups, strict=True):
+            partition[node['_uuid']] = group
+
+    return partition, _contested_master_nodes(buckets, canonical)
+
+
+def _contested_master_nodes(buckets: dict, canonical: dict) -> set:
+    """
+    Nodes whose unique_master key must be qualified: two ids claim one master.
+
+    unique_master is a DB unique constraint, so two nodes naming one master are
+    one row and must meet -- that is why the key is normally left bare. The one
+    exception is two nodes ADDRESSING DIFFERENT rows while naming that master:
+    merging those drops one addressed row silently, because _merge_nodes ignores
+    private fields.
+
+    The exception has to be decided over the master, ACROSS names, not per node.
+    An earlier revision withheld the exemption from any node carrying a
+    _netbox_id, which is too broad: an addressed node and an UNADDRESSED one
+    naming the same master under a different name then never met either, though
+    the unaddressed one contradicts nothing -- both later resolved to that same
+    row and the differ emitted two updates, the later name silently winning.
+    Measured: three nodes, one addressing row 41 with master M, one splitting
+    its name bucket, one naming M under another name -- three survivors where
+    the first and third should have been one.
+
+    So: a master claimed by more than one distinct id is CONTESTED, and only
+    the nodes naming a contested master get their key qualified (by their own
+    id, so equal ids still meet and different ones stay apart). A node with no
+    id naming a contested master is qualified too, with None -- it is
+    compatible with both claims and must not silently join either.
+    """
+    ids_by_master: dict[str, set] = {}
+    nodes_by_master: dict[str, list] = {}
+    for nodes in buckets.values():
+        for node in nodes:
+            master = node.get('master')
+            if not isinstance(master, UnresolvedReference):
+                continue
+            key = canonical.get(master.uuid, master.uuid)
+            nodes_by_master.setdefault(key, []).append(node['_uuid'])
+            netbox_id = node.get('_netbox_id')
+            if netbox_id is not None:
+                ids_by_master.setdefault(key, set()).add(netbox_id)
+    contested = set()
+    for key, ids in ids_by_master.items():
+        if len(ids) > 1:
+            contested.update(nodes_by_master.get(key, ()))
+    return contested
+
+
 @profiled("fingerprint_dedupe")
 def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa: C901
     """
@@ -609,14 +1475,48 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
     deduplicated = []
     new_refs = {} # uuid -> uuid
     refs_released = False
+    partition, contested_masters = _vc_identity_partition(entities)
 
     for entity in entities:
         if entity.get('_is_post_create'):
-            fp = entity['_uuid']
+            # Post-create nodes are never dedupe candidates and must not
+            # register fingerprints: reusing the previous entity's fps here
+            # (or leaving fps unbound on the first entity) corrupts by_fp.
+            fps = []
             existing_uuid = None
         else:
             _update_unresolved_refs(entity, new_refs)
             fps = fingerprints(entity, entity['_object_type'])
+            group = partition.get(entity['_uuid'])
+            master_fp = vc_unique_master_fingerprint(entity)
+            if group is not None or entity['_uuid'] in contested_masters:
+                # Two independent qualifiers, because the two keys answer to
+                # different things.
+                #
+                # unique_master is a DB unique constraint: two nodes naming one
+                # master ARE one row, whatever their names or name-buckets say,
+                # so this key stays BARE and lets them meet. It is qualified
+                # only where two distinct addressed row ids claim that same
+                # master (_contested_master_nodes), which is the one case where
+                # meeting would silently drop an addressed row -- and then by
+                # the node's own id, so equal ids still meet.
+                #
+                # Every other key -- the name key and the whole-payload key --
+                # is qualified by the name-bucket group, which is what keeps two
+                # same-named nodes with incompatible identity apart. The
+                # whole-payload key needs it too: it ignores private fields, so
+                # two nodes differing only in _netbox_id hash identically.
+                contested = entity['_uuid'] in contested_masters
+                qualified = []
+                for fp in fps:
+                    if master_fp is not None and fp == master_fp:
+                        qualified.append(
+                            (fp, entity.get('_netbox_id')) if contested else fp)
+                    elif group is not None:
+                        qualified.append((fp, group))
+                    else:
+                        qualified.append(fp)
+                fps = qualified
             for fp in fps:
                 existing_uuid = by_fp.get(fp)
                 if existing_uuid is not None:
@@ -652,6 +1552,25 @@ def _fingerprint_dedupe(entities: list[dict]) -> tuple[list[dict], bool]: # noqa
 
     return [by_uuid[u] for u in deduplicated], refs_released
 
+def _union_private_context(merged: dict, a: dict, b: dict) -> None:
+    """
+    Union the kept private context keys instead of preferring a's.
+
+    Private keys are otherwise "prefer a's value", which for the member-device
+    hint would discard every member but the first. The rule it feeds -- prefer
+    the chassis a referencing member already belongs to -- is only as good as the
+    evidence it can see, and each merged node brought its own.
+    """
+    for key in _PRIVATE_CONTEXT_KEYS_KEPT:
+        if key not in a and key not in b:
+            continue
+        union = list(a.get(key) or [])
+        for item in (b.get(key) or []):
+            if item not in union:
+                union.append(item)
+        merged[key] = union
+
+
 def _merge_nodes(a: dict, b: dict) -> dict:
     """
     Merges two nodes.
@@ -664,6 +1583,8 @@ def _merge_nodes(a: dict, b: dict) -> dict:
     merged['_refs'] = a['_refs'] | b['_refs']
     _union_warnings(merged, a, b)
 
+    _union_private_context(merged, a, b)
+    _carry_addressed_row(merged, a, b)
     deferred = dict(a.get('_deferred_conflicts') or {})
     rejected = []
     for k, v in b.items():
@@ -687,6 +1608,45 @@ def _merge_nodes(a: dict, b: dict) -> dict:
     if deferred:
         merged['_deferred_conflicts'] = deferred
     return merged
+
+
+def _carry_addressed_row(merged: dict, a: dict, b: dict) -> None:
+    """
+    Keep an explicit ``_netbox_id`` through a merge, whichever node carried it.
+
+    Underscore keys are otherwise "prefer a's value", which for an addressed row
+    means arrival order decides. Measured: a silent node and a node addressing
+    row 12, same name, merged into one -- silent first gave a survivor with no
+    id at all, so the row the producer explicitly named was dropped and the node
+    fell back to matching by name; addressed first kept it. Same inputs, two
+    answers, which is exactly the order dependence the identity partition exists
+    to remove.
+
+    Taking whichever side has one is then unambiguous rather than a tie-break,
+    because two nodes carrying DIFFERENT ids are refused here instead of merged.
+    An earlier revision asserted they could not reach this point at all --
+    vc_identities_conflict separates them, and _fingerprint_dedupe qualifies
+    them apart -- but both of those are dcim.virtualchassis machinery: the
+    conflict relation is only consulted for that type, and the id only
+    qualifies a fingerprint for a CONTESTED master. Measured on
+    dcim.modulebay: two bays addressing rows 1547 and 1548, each with no other
+    field to fingerprint, merged into one node whose surviving id was decided
+    by arrival order, and the plan then updated 1548 while the payload's outer
+    bay 1547 got no change at all. A success, converged, on the wrong row.
+
+    Two different primary keys are two different rows -- that is the one
+    identity statement in this pipeline that needs no interpretation -- so
+    merging them cannot be right for any type, and refusing costs nothing that
+    was working.
+    """
+    a_id, b_id = a.get('_netbox_id'), b.get('_netbox_id')
+    if a_id is not None and b_id is not None and a_id != b_id:
+        raise serializers.ValidationError(
+            _conflict_error(a, 'metadata.source_match.netbox_id', a_id, b_id))
+    for node in (a, b):
+        if node.get('_netbox_id') is not None:
+            merged['_netbox_id'] = node['_netbox_id']
+            return
 
 
 def _union_warnings(merged: dict, a: dict, b: dict) -> None:
@@ -894,6 +1854,68 @@ def cleanup_unresolved_references(data: dict) -> list[str]:
                 unresolved.add(f"{k}.{uu}")
     return sorted(unresolved)
 
+def _consolidate_post_creates(entities: list[dict]) -> list[dict]:
+    """
+    One deferred step per object, so a duplicated node cannot flip its own field.
+
+    Post-create nodes are deliberately never dedupe candidates -- they register
+    no fingerprints. But their ``_instance`` IS canonicalised through the dedupe
+    (_update_unresolved_refs), so two duplicate payload nodes that merged into
+    one object leave TWO deferred steps pointing at it, and both are emitted.
+
+    That is invisible rather than merely redundant when the steps disagree,
+    because moving the companion scalars onto them (_move_deferred_companions,
+    _defer_nested_companions) takes the disagreement off the main nodes before
+    those are merged -- which is where _merge_nodes would have reported it.
+
+    Measured, one graph naming the same master twice with vc_position 5 and 7:
+    two deferred updates planned, apply 200 with no conflict, and the stored
+    position ALTERNATED 5, 7, 5 over three identical ingests. A successful
+    apply that never converges is the failure this branch exists to remove.
+
+    Merging here restores the report: steps that agree collapse into one update
+    (also removing a duplicate write that was pointless even when it was
+    harmless), and steps that disagree raise the same conflict the main nodes
+    would have raised, through the same _merge_nodes path.
+    """
+    merged_by_instance: dict[str, dict] = {}
+    last_index: dict[str, int] = {}
+    for index, entity in enumerate(entities):
+        if not entity.get('_is_post_create'):
+            continue
+        instance = entity.get('_instance')
+        prior = merged_by_instance.get(instance)
+        if prior is None:
+            merged_by_instance[instance] = entity
+        else:
+            merged = _merge_nodes(prior, entity)
+            # The first step's uuid survives, so the choice is deterministic.
+            # Nothing references a post-create node, so either would do.
+            merged['_uuid'] = prior['_uuid']
+            merged_by_instance[instance] = merged
+        last_index[instance] = index
+
+    # Emit the merged step where the LAST of its contributors sat, never where
+    # the first did. Merging unions the refs, so a step placed at the earlier
+    # position can end up referencing a node that comes after it -- and
+    # _check_unresolved_refs rejects the whole payload as circular. Measured:
+    # a chassis-dependent step at index 2 and an IP-dependent step at index 4
+    # with the IP at index 3 merged to index 2, referencing index 3.
+    #
+    # The last position is always sound: each step was individually ordered
+    # after its own dependencies, so the union is ordered after the later of
+    # the two indices.
+    out: list[dict] = []
+    for index, entity in enumerate(entities):
+        if not entity.get('_is_post_create'):
+            out.append(entity)
+            continue
+        instance = entity.get('_instance')
+        if last_index[instance] == index:
+            out.append(merged_by_instance[instance])
+    return out
+
+
 def _handle_post_creates(entities: list[dict]) -> list[str]:
     """Merges any unnecessary post-create steps for existing objects."""
     by_uuid = {e['_uuid']: (i, e) for i, e in enumerate(entities)}
@@ -932,6 +1954,169 @@ def _handle_post_creates(entities: list[dict]) -> list[str]:
             out.append(entity)
 
     return out
+
+def _resolved_identity(node) -> tuple | None:
+    """A node's identity as the change set will use it: an existing row, or a new one."""
+    if node is None:
+        return None
+    if node.get('id') is not None:
+        return ("pk", node['id'])
+    return ("new", node['_uuid'])
+
+
+def _referenced_identity(value, by_uuid) -> tuple | None:
+    """The identity a resolved reference points at, or None if it says nothing."""
+    if isinstance(value, UnresolvedReference):
+        return _resolved_identity(by_uuid.get(value.uuid))
+    if isinstance(value, int) and not isinstance(value, bool):
+        return ("pk", value)
+    return None
+
+
+def _referenced_node(owner_type: str, field: str, value, by_uuid, by_pk):
+    """
+    The node a resolved reference points at, whether it is still a ref or a pk.
+
+    _resolve_existing_references replaces a reference to an ALREADY-EXISTING
+    object with its primary key, which drops the pointer to the node that
+    described it. The node is still in the graph, so it is found by
+    (object_type, pk) instead. Following only the reference form meant a payload
+    describing an existing child skipped the check entirely -- measured: a bay
+    nesting an existing module installed in a same-named bay on another device
+    applied 200 with errors null and re-planned the ineffective update forever.
+
+    A pk that matches no node is a reference to a row this payload does not
+    describe. That asserts nothing about which parent the row is in, because
+    there is no submitted parent_fk to disagree with, so there is nothing here
+    to refuse.
+    """
+    if isinstance(value, UnresolvedReference):
+        return by_uuid.get(value.uuid)
+    if isinstance(value, int) and not isinstance(value, bool):
+        ref_info = get_json_ref_info(owner_type, field)
+        if ref_info is None or ref_info.is_generic or ref_info.is_generic_object:
+            return None
+        return by_pk.get((ref_info.object_type, value))
+    return None
+
+
+def _child_parent_identity(child, parent_fk, by_uuid):
+    """
+    What the child's forward FK will point at once this change set is applied.
+
+    The payload's value when it asserts one. Otherwise the row's CURRENT value:
+    nothing in the change set touches that FK, so what it already holds is what
+    the deferred write has to agree with -- and where it does not, nothing will
+    ever make it agree. Measured: a bay nesting an EXISTING module by asset_tag
+    with no module_bay submitted planned an update on every ingest while the
+    module stayed in its old bay, apply reporting success each time.
+
+    An earlier revision skipped that case on the grounds that a payload
+    asserting no parent has nothing to disagree WITH. True, and beside the
+    point: the question is not whether the payload contradicts itself, it is
+    whether anything will carry out the write it asks for.
+
+    None for a child this change set CREATES that asserts no parent, because
+    there is nothing to read yet -- and that shape needs no verdict here, being
+    refused upstream by the non-nullable forward FK ("Field module_bay is
+    required", measured).
+    """
+    if parent_fk in child:
+        return _referenced_identity(child[parent_fk], by_uuid), "submitted"
+    pk = child.get('id')
+    if pk is None:
+        return None, None
+    try:
+        model_class = get_object_type_model(child['_object_type'])
+        current = model_class.objects.filter(pk=pk).values_list(
+            f"{parent_fk}_id", flat=True).first()
+    except Exception:
+        return None, None
+    return (("pk", current) if current is not None else None), "current"
+
+
+def _describe_identity(identity, by_uuid) -> str:
+    """An identity in terms a producer can act on."""
+    if identity is None:
+        return "nothing"
+    kind, value = identity
+    if kind == "pk":
+        return f"the existing row with id {value}"
+    node = by_uuid.get(value)
+    name = (node or {}).get('name')
+    return f"a new object this payload creates{f' named {name!r}' if name else ''}"
+
+
+def _check_reverse_side_resolves_to_its_parent(entities: list[dict]) -> None:
+    """
+    Refuse a reverse-side write whose object resolves into a DIFFERENT parent.
+
+    The authoritative form of _check_reverse_side_names_its_parent, and the
+    reason that one is allowed to be approximate. This runs after
+    _resolve_existing_references, so both sides are a primary key or a node
+    this change set creates -- no selector, no spelling, no criterion to be
+    incomplete about. Every way the payload could have expressed identity has
+    already collapsed to the same two kinds of answer.
+
+    The earlier check exists for its message, not its coverage: it refuses in
+    the producer's own vocabulary, before any lookup. What it cannot see -- two
+    references identifying their devices through DISJOINT selectors, an
+    asset_tag on one side and a (name, site) on the other -- reaches here.
+    Measured before this pass: the outer bay resolved to one device's bay and
+    the nested module_bay to another's, apply answered 200 with errors null,
+    the module landed in the nested bay, and the deferred reverse update
+    re-planned against the empty outer bay on every ingest.
+
+    The child is found whether its reference survived as a reference or was
+    replaced by a primary key, which resolution does for an object that already
+    exists (see _referenced_node), and its parent is read from the payload or,
+    when the payload is silent, from the row as it stands (see
+    _child_parent_identity).
+
+    Two shapes reach no verdict here, and both are refused upstream rather than
+    left to converge -- measured, because three successive revisions of this
+    docstring asserted a scope that turned out to be wrong:
+
+    - A child this change set creates that names no parent: the forward FK is
+      non-nullable, so validation answers 400 "Field module_bay is required".
+    - A reference given as a bare primary key with no node describing it: the
+      transform path answers 500 on any bare-int reference, which is a
+      pre-existing defect of every reference field (present on the merge base,
+      reported separately) and not a convergence gap here.
+    """
+    by_uuid = {e['_uuid']: e for e in entities}
+    by_pk = {(e.get('_object_type'), e['id']): e
+             for e in entities if e.get('id') is not None}
+    for entity in entities:
+        for (owner_type, field), parent_fk in _REVERSE_SIDE_PARENT_FK.items():
+            if entity.get('_object_type') != owner_type or field not in entity:
+                continue
+            child = _referenced_node(
+                owner_type, field, entity[field], by_uuid, by_pk)
+            if child is None:
+                continue
+            mine = _resolved_identity(entity)
+            theirs, source = _child_parent_identity(child, parent_fk, by_uuid)
+            if theirs is None or mine == theirs:
+                continue
+            says = (f"has {parent_fk} pointing at" if source == "submitted"
+                    else "is currently in, and this payload does not move it from,")
+            message = (
+                f"{owner_type}.{field} would write to "
+                f"{_describe_identity(mine, by_uuid)}, but the "
+                f"{child.get('_object_type')} it names {says} "
+                f"{_describe_identity(theirs, by_uuid)}. Only that "
+                f"{parent_fk} installs it, so this payload would install it "
+                f"there and leave the other empty while reporting success. "
+                f"Send it under the object its {parent_fk} names, or correct "
+                f"that {parent_fk}."
+            )
+            # the message goes in the errors body too: that is what a producer
+            # reads back, and "resolves to a different parent" alone is not
+            # something it could act on
+            raise ChangeSetException(
+                message, errors={owner_type: {field: [message]}})
+
 
 def _check_unresolved_refs(entities: list[dict]) -> list[str]:
     seen = set()
