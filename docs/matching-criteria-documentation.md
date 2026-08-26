@@ -84,12 +84,23 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
 | unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
-## dcim.cabletermination
+## core.managedfile
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_cabletermination_unique_termination | 1 | builtin | termination_type, termination_id | N/A | Matches on unique constraint fields: termination_type, termination_id | All versions |
-| dcim_cabletermination_unique_connector | 2 | builtin | cable, cable_end, connector | N/A | Matches on unique constraint fields: cable, cable_end, connector | All versions |
+| core_managedfile_unique_root_path | 1 | builtin | file_root, file_path | N/A | Matches on unique constraint fields: file_root, file_path | All versions |
+
+## dcim.cable
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| logical_cable_termination_set | 1 | logical |  | N/A | Custom matcher | All versions |
+
+## dcim.cablebundle
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
 
 ## dcim.consoleport
 
@@ -265,6 +276,14 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | dcim_rack_unique_location_name | 2 | builtin | location, name | N/A | Matches on unique constraint fields: location, name | All versions |
 | dcim_rack_unique_location_facility_id | 3 | builtin | location, facility_id | N/A | Matches on unique constraint fields: location, facility_id | All versions |
 
+## dcim.rackgroup
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+
 ## dcim.rackrole
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
@@ -320,7 +339,8 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_master | 1 | builtin | master | N/A | Matches on unique field(s): master | All versions |
+| logical_vc_name_no_master | 1 | logical |  | N/A | Custom matcher | All versions |
+| unique_master | 2 | builtin | master | N/A | Matches on unique field(s): master | All versions |
 
 ## dcim.virtualdevicecontext
 
@@ -546,6 +566,12 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
 
+## users.user
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| unique_username | 1 | builtin | username | N/A | Matches on unique field(s): username | All versions |
+
 ## virtualization.cluster
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
@@ -588,6 +614,14 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | virtualization_virtualmachine_unique_name_cluster | 5 | builtin |  | tenant is NULL | Custom matcher | All versions |
 | virtualization_virtualmachine_unique_name_device_tenant | 6 | builtin |  | cluster is NULL AND device is NOT NULL | Custom matcher | All versions |
 | virtualization_virtualmachine_unique_name_device | 7 | builtin |  | cluster is NULL AND device is NOT NULL AND tenant is NULL | Custom matcher | All versions |
+
+## virtualization.virtualmachinetype
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| unique_slug | 1 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
+| virtualization_virtualmachinetype_unique_name | 2 | builtin |  | N/A | Custom matcher | All versions |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
 ## virtualization.vminterface
 

@@ -24,9 +24,36 @@ from extras.models import CustomField
 from netaddr.eui import EUI
 from rest_framework import status
 
+from .supported_models import extract_supported_models
+
 logger = logging.getLogger("netbox.diode_data")
 
 NON_FIELD_ERRORS = "__all__"
+
+# Types resolved against existing rows only; never created (or updated) via
+# ingest. A reference to one that has no match becomes a per-entity deviation,
+# not a CREATE. (users.user is exposed only as a match-only reference target;
+# auto-minting Django auth users from ingest data is a privilege/security risk.)
+# Shared contract between the transformer (plan path) and applier (direct-apply
+# path); lives here so neither layer owns the other's constant.
+MATCH_ONLY_TYPES = frozenset({"users.user"})
+
+
+# Private node key carrying the member Devices that referenced a nested
+# dcim.virtualchassis node, as a list of pks (or, for devices this batch is
+# still creating, UnresolvedReferences that never resolve to one).
+#
+# It lives on the node rather than in the matcher because the rule it serves --
+# "prefer the chassis this device already belongs to" -- cannot be decided from
+# the VirtualChassis payload alone: that payload does not know the device. The
+# device DOES know it at the point its own payload nests the reference, so the
+# transformer pushes it down there (transformer._NESTED_CONTEXT) and
+# matcher.VirtualChassisNameMatcher.resolve reads it back.
+#
+# The key is defined here so neither layer owns the other's constant, exactly
+# as MATCH_ONLY_TYPES above. It is stripped before any change is emitted; see
+# transformer.transform_proto_json.
+VC_MEMBER_HINT = "_diode_vc_member_devices"
 
 
 @lru_cache(maxsize=256)
@@ -167,6 +194,15 @@ class ChangeSet:
             if change.before:
                 change_data.update(change.before)
 
+            # Serializer-aliased wire names (e.g. a field exposed with
+            # source=<model attr>) are not settable model attributes; rename
+            # them to the backing model field before instantiating.
+            supported = extract_supported_models().get(change.object_type, {})
+            for wire_name, info in supported.get("fields", {}).items():
+                source = info.get("source", wire_name)
+                if source != wire_name and wire_name in change_data:
+                    change_data[source] = change_data.pop(wire_name)
+
             excluded_relation_fields, rel_errors = self._validate_relations(change_data, model)
             if rel_errors:
                 errors[change.object_type] = rel_errors
@@ -180,6 +216,10 @@ class ChangeSet:
                 instance.clean_fields(exclude=excluded_relation_fields)
             except ValidationError as e:
                 errors[change.object_type].update(_error_dict(e))
+            except (TypeError, AttributeError) as e:
+                # a key with no settable model attribute reached the
+                # constructor — report it instead of crashing the plan path
+                errors[change.object_type].update({NON_FIELD_ERRORS: [str(e)]})
 
         return errors or None
 
@@ -245,6 +285,9 @@ class ChangeSetResult:
     id: str | None = field(default_factory=lambda: str(uuid.uuid4()))
     change_set: ChangeSet | None = field(default=None)
     errors: dict | None = field(default=None)
+    # Things that happened which the caller would not infer from a 200. Absent
+    # from the response unless there is one, so a clean apply is unchanged.
+    warnings: list | None = field(default=None)
 
     def to_dict(self) -> dict:
         """Convert the result to a dictionary."""
@@ -252,6 +295,9 @@ class ChangeSetResult:
             "id": self.id,
             "errors": self.errors,
         }
+
+        if self.warnings:
+            result["warnings"] = self.warnings
 
         if self.change_set:
             result["change_set"] = self.change_set.to_dict()
@@ -309,6 +355,36 @@ def error_from_validation_error(e, object_name):
             }
     return ChangeSetException("validation error", errors=errors)
 
+def _numeric_range_to_inclusive_pair(data):
+    """
+    Convert a NumericRange to an inclusive ``[lower, upper]`` pair.
+
+    The bounds must be honoured rather than assumed. A range read back from
+    Postgres is canonicalized to half-open ``[lower, upper)``, but a range
+    constructed in Python keeps whatever bounds it was given, and NetBox's own
+    model defaults use inclusive ones -- ``ipam.models.vlans.default_vid_ranges``
+    returns ``NumericRange(1, 4094, bounds="[]")``. Treating that as half-open
+    silently drops the top of the range, so a VLAN group created through Diode
+    ended up permitting only 1-4093 and rejected VID 4094 for the lifetime of
+    the group.
+
+    Mirrors the same normalization in NetBox's ``VLANGroup.clean()``.
+
+    Only discrete integer bounds can be shifted by one. ``NumericRange`` is an
+    alias of psycopg's generic ``Range``, so date, datetime and decimal ranges
+    match this branch too; those have no meaningful integer step, so their
+    bounds are passed through untouched rather than raising on ``date - 1``.
+    ``vid_ranges`` is currently NetBox's only range field, so nothing else
+    reaches this. A date or datetime range field would need real date
+    arithmetic here, and its exclusive bounds would be reported one step wide.
+    """
+    lower, upper = data.lower, data.upper
+    if isinstance(lower, int) and not data.lower_inc:
+        lower += 1
+    if isinstance(upper, int) and not data.upper_inc:
+        upper -= 1
+    return [lower, upper]
+
 def harmonize_formats(data):
     """Puts all data in a format that can be serialized and compared."""
     match data:
@@ -325,7 +401,7 @@ def harmonize_formats(data):
         case datetime.date():
             return data.strftime("%Y-%m-%d")
         case NumericRange():
-            return [data.lower, data.upper-1]
+            return _numeric_range_to_inclusive_pair(data)
         case netaddr.IPNetwork() | EUI() | ZoneInfo():
             return str(data)
         case _:

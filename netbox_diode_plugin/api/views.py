@@ -551,7 +551,10 @@ class BulkPlanApplyView(views.APIView):
     Response shape::
 
         {"results": [{"id": ..., "change_set": {...} | null,
-                      "errors": {"plan": {...} | null, "apply": {...} | null} | null}, ...]}
+                      "errors": {"plan": {...} | null, "apply": {...} | null} | null,
+                      "warnings": [{...}] (only when the apply had something to
+                      report, e.g. a create bound to an existing row without
+                      applying its payload)}, ...]}
 
     HTTP 200 if every entity succeeded both phases, 207 multi-status if any
     entity hit a plan or apply error, 400 if the request envelope is invalid.
@@ -673,7 +676,13 @@ class BulkPlanApplyView(views.APIView):
         if apply_result.errors:
             return {"change_set": change_set_dict, "errors": {"apply": apply_result.errors}}
 
-        return {"change_set": change_set_dict, "errors": None}
+        result = {"change_set": change_set_dict, "errors": None}
+        if apply_result.warnings:
+            # This door has to carry them too: a bind that discarded a payload
+            # is exactly as invisible behind a 200 here as it is on
+            # /apply-change-set/, and this is the door a batching producer uses.
+            result["warnings"] = apply_result.warnings
+        return result
 
     @staticmethod
     def _run_plan(entity_data, object_type, entry_id, branch_schema_id):

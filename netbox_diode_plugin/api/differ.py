@@ -24,6 +24,7 @@ from .common import (
     harmonize_formats,
     sort_ints_first,
 )
+from .field_policy import normalize_changeset
 from .matcher import _get_active_branch_schema
 from .plugin_utils import get_primary_value, legal_fields
 from .profile import profiled
@@ -31,6 +32,7 @@ from .supported_models import extract_supported_models
 from .transformer import _get_custom_fields_for_model, cleanup_unresolved_references, set_custom_field_defaults, transform_proto_json
 
 logger = logging.getLogger(__name__)
+
 
 _prechange_cache = contextvars.ContextVar("diode_prechange_cache", default=None)
 
@@ -83,10 +85,12 @@ def prechange_data_from_instance(instance) -> dict: # noqa: C901
         if field_name not in diode_fields and field_name != "id":
             continue
 
-        if not hasattr(instance, field_name):
+        # aliased wire fields read through their backing model attribute
+        source = field_info.get("source", field_name)
+        if not hasattr(instance, source):
             continue
 
-        value = getattr(instance, field_name)
+        value = getattr(instance, source)
         if hasattr(value, "all"):  # Handle many-to-many and many-to-one relationships
             # For any relationship that has an 'all' method, get all related objects' primary keys
             prechange_data[field_name] = (
@@ -266,6 +270,8 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
                 # respsect paritial update serialization.
                 entity = _partially_merge(prechange_data, entity, instance)
                 _align_cable_ends(prechange_data, entity)
+                _apply_merge_semantics(object_type, prechange_data, entity)
+                normalize_changeset(object_type, prechange_data, entity)
             changed_data = shallow_compare_dict(
                 prechange_data, entity,
             )
@@ -336,6 +342,32 @@ def _canonicalize_termination_order(entity: dict) -> None:
         terms = entity.get(term_field)
         if isinstance(terms, list) and terms:
             entity[term_field] = _sorted_termination_refs(terms)
+
+
+# Wire fields whose NetBox serializer merges a non-empty update payload into
+# the stored value instead of replacing it (AttributesField). The planned
+# postchange must predict that merge, or a payload omitting stored keys keeps
+# re-diffing as the same UPDATE forever.
+_MERGE_SEMANTICS_FIELDS = {
+    "dcim.moduletype": ("attributes",),
+}
+
+
+def _apply_merge_semantics(object_type: str, prechange_data: dict, entity: dict) -> None:
+    """
+    Pre-merge stored values into submitted ones for merge-semantics fields.
+
+    Mirrors AttributesField.to_internal_value: a non-empty dict submitted on
+    an update is merged over the stored dict; an empty payload is left alone
+    because the serializer applies it as a replacement (clear).
+    """
+    for field_name in _MERGE_SEMANTICS_FIELDS.get(object_type, ()):
+        submitted = entity.get(field_name)
+        if not submitted or not isinstance(submitted, dict):
+            continue
+        stored = prechange_data.get(field_name)
+        if isinstance(stored, dict) and stored:
+            entity[field_name] = {**stored, **submitted}
 
 
 def _align_cable_ends(prechange_data: dict, entity: dict) -> None:

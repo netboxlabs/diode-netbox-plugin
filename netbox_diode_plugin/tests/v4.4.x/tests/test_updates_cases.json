@@ -2175,7 +2175,10 @@
         "lookup": {"name": "WirelessGigabitEthernet1/0/1"},
         "create_expect": {
             "name": "WirelessGigabitEthernet1/0/1",
-            "label": "Core Link 1"
+            "label": "Core Link 1",
+            "mode": "access",
+            "untagged_vlan.vid": 900,
+            "tagged_vlans.all": []
         },
         "create": {
             "interface": {
@@ -2305,6 +2308,10 @@
                         "status": "active",
                         "description": "Primary VDC"
                     }
+                ],
+                "tagged_vlans": [
+                    {"vid": 101, "name": "Voice VLAN", "status": "active"},
+                    {"vid": 102, "name": "Data VLAN", "status": "active"}
                 ]
             }    
         },
@@ -2436,11 +2443,18 @@
                         "status": "active",
                         "description": "Primary VDC"
                     }
+                ],
+                "tagged_vlans": [
+                    {"vid": 101, "name": "Voice VLAN", "status": "active"},
+                    {"vid": 102, "name": "Data VLAN", "status": "active"}
                 ]
             }    
         },
         "update_expect": {
-            "tags.all.__by_name": ["Tag 1", "Tag 2", "Tag 3"]
+            "tags.all.__by_name": ["Tag 1", "Tag 2", "Tag 3"],
+            "mode": "access",
+            "untagged_vlan.vid": 900,
+            "tagged_vlans.all": []
         }
     },
     {
@@ -6126,6 +6140,127 @@
         },
         "update_expect": {
             "description": "Point-to-point wireless backhaul link Updated"
+        }
+    },
+    {
+        "name": "obs3607_iface_tagged_to_access",
+        "object_type": "dcim.interface",
+        "lookup": {"name": "obs3607-eth-access"},
+        "create_expect": {
+            "mode": "tagged",
+            "untagged_vlan.vid": 100,
+            "tagged_vlans.all.__by_vid": [101, 102]
+        },
+        "create": {
+            "interface": {
+                "name": "obs3607-eth-access",
+                "type": "1000base-t",
+                "device": {
+                    "name": "obs3607-dev-1",
+                    "role": {"name": "obs3607-role"},
+                    "device_type": {"manufacturer": {"name": "obs3607-mfr"}, "model": "obs3607-model"},
+                    "site": {"name": "obs3607-site"}
+                },
+                "mode": "tagged",
+                "untagged_vlan": {"vid": 100, "name": "obs3607-v100"},
+                "tagged_vlans": [{"vid": 101, "name": "obs3607-v101"}, {"vid": 102, "name": "obs3607-v102"}]
+            }
+        },
+        "update": {
+            "interface": {
+                "name": "obs3607-eth-access",
+                "type": "1000base-t",
+                "device": {
+                    "name": "obs3607-dev-1",
+                    "role": {"name": "obs3607-role"},
+                    "device_type": {"manufacturer": {"name": "obs3607-mfr"}, "model": "obs3607-model"},
+                    "site": {"name": "obs3607-site"}
+                },
+                "mode": "access"
+            }
+        },
+        "update_expect": {
+            "mode": "access",
+            "untagged_vlan.vid": 100,
+            "tagged_vlans.all.__by_vid": []
+        }
+    },
+    {
+        "name": "obs3607_iface_tagged_to_taggedall",
+        "object_type": "dcim.interface",
+        "lookup": {"name": "obs3607-eth-taggedall"},
+        "create_expect": {"mode": "tagged", "tagged_vlans.all.__by_vid": [201]},
+        "create": {
+            "interface": {
+                "name": "obs3607-eth-taggedall",
+                "type": "1000base-t",
+                "device": {
+                    "name": "obs3607-dev-1",
+                    "role": {"name": "obs3607-role"},
+                    "device_type": {"manufacturer": {"name": "obs3607-mfr"}, "model": "obs3607-model"},
+                    "site": {"name": "obs3607-site"}
+                },
+                "mode": "tagged",
+                "untagged_vlan": {"vid": 200, "name": "obs3607-v200"},
+                "tagged_vlans": [{"vid": 201, "name": "obs3607-v201"}]
+            }
+        },
+        "update": {
+            "interface": {
+                "name": "obs3607-eth-taggedall",
+                "type": "1000base-t",
+                "device": {
+                    "name": "obs3607-dev-1",
+                    "role": {"name": "obs3607-role"},
+                    "device_type": {"manufacturer": {"name": "obs3607-mfr"}, "model": "obs3607-model"},
+                    "site": {"name": "obs3607-site"}
+                },
+                "mode": "tagged-all"
+            }
+        },
+        "update_expect": {
+            "mode": "tagged-all",
+            "untagged_vlan.vid": 200,
+            "tagged_vlans.all.__by_vid": []
+        }
+    },
+    {
+        "name": "obs3607_iface_tagged_to_routed",
+        "object_type": "dcim.interface",
+        "lookup": {"name": "obs3607-eth-routed"},
+        "create_expect": {"mode": "tagged", "untagged_vlan.vid": 300, "tagged_vlans.all.__by_vid": [301]},
+        "create": {
+            "interface": {
+                "name": "obs3607-eth-routed",
+                "type": "1000base-t",
+                "device": {
+                    "name": "obs3607-dev-1",
+                    "role": {"name": "obs3607-role"},
+                    "device_type": {"manufacturer": {"name": "obs3607-mfr"}, "model": "obs3607-model"},
+                    "site": {"name": "obs3607-site"}
+                },
+                "mode": "tagged",
+                "untagged_vlan": {"vid": 300, "name": "obs3607-v300"},
+                "tagged_vlans": [{"vid": 301, "name": "obs3607-v301"}]
+            }
+        },
+        "update": {
+            "interface": {
+                "name": "obs3607-eth-routed",
+                "type": "1000base-t",
+                "device": {
+                    "name": "obs3607-dev-1",
+                    "role": {"name": "obs3607-role"},
+                    "device_type": {"manufacturer": {"name": "obs3607-mfr"}, "model": "obs3607-model"},
+                    "site": {"name": "obs3607-site"}
+                },
+                "mode": ""
+            }
+        },
+        "update_expect": {
+            "mode": "",
+            "untagged_vlan": null,
+            "tagged_vlans.all.__by_vid": []
         }
     }
 ]

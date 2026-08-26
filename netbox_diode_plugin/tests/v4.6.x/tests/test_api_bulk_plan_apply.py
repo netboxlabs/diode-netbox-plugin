@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 from uuid import uuid4
 
-from dcim.models import MACAddress, Site
+from dcim.models import Device, MACAddress, Site, VirtualChassis
 from rest_framework import status
 from utilities.testing import APITestCase
 
@@ -476,6 +476,187 @@ class BulkPlanApplyTestCase(APITestCase):
             f"expected exactly one MAC row after dedup, got {macs.count()}: "
             f"{list(macs.values('pk', 'mac_address', 'assigned_object_id'))}",
         )
+
+    def test_concurrent_plans_dedupe_virtualchassis_via_pre_save_match(self):
+        """
+        Two members planned before either apply must land in ONE chassis.
+
+        This is the only thing routing dcim.virtualchassis through the
+        find-first CREATE path buys, and it had no test. Two reconciler workers
+        each plan a member device carrying virtual_chassis: {"name": X} at a
+        moment when no chassis named X exists. Neither planner can match
+        anything -- there is no row yet, so VirtualChassisNameMatcher correctly
+        returns None -- so BOTH plans contain a masterless
+        create dcim.virtualchassis. Two sequential /bulk-plan/ calls model this
+        exactly: each request has its own request-scoped obj cache, so plan B
+        cannot see plan A's pending CREATE.
+
+        Nothing else catches the duplicate. VirtualChassis.name carries no
+        unique constraint, so apply B's INSERT succeeds and
+        _create_or_find_instance's IntegrityError fallback never runs; the
+        adoption pass declines a masterless payload outright
+        (_try_adopt_masterless_virtualchassis returns None when master is
+        None). The result would be a SPLIT CHASSIS: two rows of the same name,
+        one member each, one of them orphaned from the master the next ingest
+        binds.
+
+        Scope, precisely: this covers concurrent PLAN with sequential APPLY.
+        Two applies genuinely interleaved inside find_existing_object still
+        insert two rows -- pre-save matching is a lookup, not a lock.
+        """
+        suffix = uuid4().hex[:8]
+        vc_name = f"stack-{suffix}"
+        common = {
+            "site": {"name": f"site-{suffix}"},
+            "role": {"name": f"role-{suffix}"},
+            "device_type": {
+                "manufacturer": {"name": f"mfr-{suffix}"},
+                "model": f"dt-{suffix}",
+            },
+        }
+
+        def member_entity(device_name, position):
+            return {
+                "entities": [{
+                    "id": f"{device_name}",
+                    "object_type": "dcim.device",
+                    "entity": {"device": {
+                        "name": device_name,
+                        "vc_position": position,
+                        "virtual_chassis": {"name": vc_name},
+                        **common,
+                    }},
+                }]
+            }
+
+        plan_url = "/netbox/api/plugins/diode/bulk-plan/"
+        apply_url = "/netbox/api/plugins/diode/bulk-apply/"
+
+        change_sets = []
+        for device_name, position in ((f"sw1-{suffix}", 1), (f"sw2-{suffix}", 2)):
+            r = self.client.post(
+                plan_url,
+                data=member_entity(device_name, position),
+                format="json",
+                **self.authorization_header,
+            )
+            self.assertEqual(r.status_code, status.HTTP_200_OK, r.json())
+            result = r.json()["results"][0]
+            self.assertIsNone(result.get("errors"), result)
+            cs = result.get("change_set")
+            self.assertIsNotNone(cs, result)
+            vc_creates = [
+                c for c in cs["changes"]
+                if c["object_type"] == "dcim.virtualchassis" and c["change_type"] == "create"
+            ]
+            self.assertEqual(len(vc_creates), 1, cs)
+            self.assertIsNone(vc_creates[0]["data"].get("master"), vc_creates[0])
+            change_sets.append(cs)
+
+        # Both plans exist before either is applied -- that is the race.
+        for cs in change_sets:
+            r = self.client.post(
+                apply_url,
+                data={"change_sets": [cs]},
+                format="json",
+                **self.authorization_header,
+            )
+            self.assertEqual(r.status_code, status.HTTP_200_OK, r.json())
+
+        vcs = VirtualChassis.objects.filter(name=vc_name)
+        self.assertEqual(
+            vcs.count(), 1,
+            f"expected one chassis after dedup, got {list(vcs.values('pk', 'name'))}",
+        )
+        vc = vcs.first()
+        members = Device.objects.filter(virtual_chassis=vc).order_by("vc_position")
+        self.assertEqual(
+            [d.name for d in members], [f"sw1-{suffix}", f"sw2-{suffix}"],
+        )
+        self.assertEqual(vc.member_count, 2)
+
+    def test_a_stale_bulk_plan_does_not_write_the_chassis_it_matches(self):
+        """
+        The bulk endpoints reach the same applier, and the same stale plan.
+
+        /bulk-plan-apply/ cannot produce this shape by itself -- it plans and
+        applies in one call, so a chassis that exists is matched at PLAN time
+        and the plan is an UPDATE naming it by id. The stale plan needs the
+        pair: /bulk-plan/ while the chassis is absent, then /bulk-apply/ after
+        it has appeared, which is how a reconciler batches work and is exactly
+        the window the pre-save match exists to survive.
+
+        Asserted: the converged row is bound (one row, member joined, no
+        orphan) and none of its own fields are written by the plan.
+        """
+        suffix = uuid4().hex[:8]
+        vc_name = f"stack-{suffix}"
+        common = {
+            "site": {"name": f"site-{suffix}"},
+            "role": {"name": f"role-{suffix}"},
+            "device_type": {
+                "manufacturer": {"name": f"mfr-{suffix}"},
+                "model": f"dt-{suffix}",
+            },
+        }
+        plan = self.client.post(
+            "/netbox/api/plugins/diode/bulk-plan/",
+            data={"entities": [{
+                "id": f"sw1-{suffix}",
+                "object_type": "dcim.device",
+                "entity": {"device": {
+                    "name": f"sw1-{suffix}",
+                    "vc_position": 4,
+                    "virtual_chassis": {
+                        # No domain: the point of this test is the bind-only
+                        # contract on a row this payload cannot tell apart from
+                        # its own. Asserting a domain the row does not carry
+                        # identifies a DIFFERENT chassis and correctly gets its
+                        # own row, which would not exercise the bind at all.
+                        "name": vc_name,
+                        "description": "FROM-A",
+                    },
+                    **common,
+                }},
+            }]},
+            format="json",
+            **self.authorization_header,
+        )
+        self.assertEqual(plan.status_code, status.HTTP_200_OK, plan.json())
+        result = plan.json()["results"][0]
+        self.assertIsNone(result.get("errors"), result)
+        change_set = result["change_set"]
+        vc_creates = [c for c in change_set["changes"]
+                      if c["object_type"] == "dcim.virtualchassis"
+                      and c["change_type"] == "create"]
+        self.assertEqual(len(vc_creates), 1, change_set)
+
+        # ...and only now does a chassis of that name appear.
+        vc = VirtualChassis.objects.create(
+            name=vc_name, description="OWNED-BY-B", domain="dom-b"
+        )
+        before = (vc.name, vc.description, vc.domain, vc.master_id, vc.last_updated)
+
+        applied = self.client.post(
+            "/netbox/api/plugins/diode/bulk-apply/",
+            data={"change_sets": [change_set]},
+            format="json",
+            **self.authorization_header,
+        )
+        self.assertEqual(applied.status_code, status.HTTP_200_OK, applied.json())
+
+        rows = VirtualChassis.objects.filter(name=vc_name)
+        self.assertEqual(rows.count(), 1, list(rows.values("pk", "description", "master_id")))
+        fresh = rows.first()
+        self.assertEqual(
+            (fresh.name, fresh.description, fresh.domain, fresh.master_id, fresh.last_updated),
+            before,
+            "a stale bulk plan wrote the chassis it merely matched",
+        )
+        self.assertEqual(
+            Device.objects.get(name=f"sw1-{suffix}").virtual_chassis_id, fresh.pk
+        )
+        self.assertEqual(fresh.member_count, fresh.members.count())
 
     def test_insufficient_scope_returns_403(self):
         """Token with only read scope cannot call bulk-plan-apply (requires write)."""
