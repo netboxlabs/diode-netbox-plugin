@@ -92,11 +92,19 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # commit, so the audit log stays immediately consistent.
         # Mutually exclusive in intent with `apply_bypass_change_logging`
         # - if both are enabled, bypass wins (no rows produced at all).
+        #
+        # apply_buffer_counter_updates: keep counters exact but stop
+        # holding the parent row lock for the whole apply. Deltas
+        # accumulate in memory and flush as one CASE UPDATE per counter
+        # just before COMMIT, inside the same transaction, so unlike the
+        # bypass this cannot drift. If both counter flags are enabled,
+        # bypass wins (no counter update at all).
         "apply_bypass_counter_updates": False,
         "apply_bypass_change_logging": False,
         "apply_bypass_search_indexing": False,
         "apply_bypass_customfield_query_cache": False,
         "apply_buffer_change_logging": False,
+        "apply_buffer_counter_updates": False,
 
         # Per-entity retry on Postgres deadlock (SQLSTATE 40P01) during
         # the apply phase of /bulk-plan-apply. Cross-batch concurrent
