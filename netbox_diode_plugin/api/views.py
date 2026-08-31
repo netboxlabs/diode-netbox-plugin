@@ -25,6 +25,7 @@ from .common import (
     ChangeSetException,
     ChangeSetResult,
 )
+from .counter_buffer import buffered_counter_updates
 from .counter_bypass import bypass_counter_updates
 from .differ import enter_prechange_cache, exit_prechange_cache, generate_changeset
 from .matcher import enter_request_obj_cache, exit_request_obj_cache
@@ -138,11 +139,19 @@ def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     ``apply_buffer_change_logging`` (default off). Has no effect when
     ``apply_bypass_change_logging`` is also on - the bypass returns
     early and the buffer never receives any events.
+
+    ``buffered_counter_updates`` is the same trade for the counters:
+    deltas accumulate and flush as one statement per counter on the way
+    out of this context manager. It must stay nested inside
+    ``transaction.atomic()`` so that flush runs pre-commit. Gated by
+    ``apply_buffer_counter_updates`` (default off), no-op when
+    ``apply_bypass_counter_updates`` is also on.
     """
     try:
         with (
             transaction.atomic(),
             bypass_counter_updates(),
+            buffered_counter_updates(),
             bypass_change_logging(),
             buffered_change_logging(),
             bypass_search_indexing(),
