@@ -10492,5 +10492,64 @@
                 "tcp/853"
             ]
         }
+    },
+    {
+        "name": "dcim_interface_flat_mac_1",
+        "object_type": "dcim.interface",
+        "lookup": {
+            "name": "FlatMac1/0/1"
+        },
+        "create_expect": {
+            "name": "FlatMac1/0/1",
+            "primary_mac_address.mac_address": "00:0F:1A:2B:3C:4D"
+        },
+        "create": {
+            "interface": {
+                "name": "FlatMac1/0/1",
+                "device": {
+                    "name": "Device 1",
+                    "role": {
+                        "name": "Device Role 1"
+                    },
+                    "device_type": {
+                        "manufacturer": {
+                            "name": "Cisco"
+                        },
+                        "model": "C2960S"
+                    },
+                    "site": {
+                        "name": "Site 1"
+                    }
+                },
+                "type": "1000base-t",
+                "mac_address": "00:0F:1A:2B:3C:4D"
+            }
+        },
+        "update": {
+            "interface": {
+                "name": "FlatMac1/0/1",
+                "device": {
+                    "name": "Device 1",
+                    "role": {
+                        "name": "Device Role 1"
+                    },
+                    "device_type": {
+                        "manufacturer": {
+                            "name": "Cisco"
+                        },
+                        "model": "C2960S"
+                    },
+                    "site": {
+                        "name": "Site 1"
+                    }
+                },
+                "type": "1000base-t",
+                "mac_address": "00:0F:1A:2B:3C:4D",
+                "description": "flat mac shortcut Updated"
+            }
+        },
+        "update_expect": {
+            "description": "flat mac shortcut Updated"
+        }
     }
 ]

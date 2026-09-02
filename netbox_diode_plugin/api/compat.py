@@ -118,3 +118,27 @@ def _migrate_service_port_mappings(data: dict):
         return  # producer already speaks port_mappings
     if protocol and ports:
         data["port_mappings"] = [f"{protocol}/{port}" for port in ports]
+
+def _flat_mac_to_primary_mac_address(data: dict):
+    """
+    Rewrites the flat mac_address value into the modeled primary MAC form.
+
+    NetBox 4.7 added mac_address as a writable serializer shortcut with no
+    backing model column, so it cannot pass the plugin's diffable-field
+    gate. The plugin has always modeled this as a nested MACAddress via
+    primary_mac_address, which diffs and applies cleanly on every
+    supported NetBox version - so translate rather than reject.
+    """
+    mac = data.pop("mac_address", None)
+    if mac and data.get("primary_mac_address") is None:
+        data["primary_mac_address"] = {"mac_address": mac}
+
+@diode_migration(min_version="4.2.0", max_version=None, object_type="dcim.interface")
+def _migrate_interface_mac_address(data: dict):
+    """Translates dcim.interface's flat mac_address shortcut."""
+    _flat_mac_to_primary_mac_address(data)
+
+@diode_migration(min_version="4.2.0", max_version=None, object_type="virtualization.vminterface")
+def _migrate_vminterface_mac_address(data: dict):
+    """Translates virtualization.vminterface's flat mac_address shortcut."""
+    _flat_mac_to_primary_mac_address(data)

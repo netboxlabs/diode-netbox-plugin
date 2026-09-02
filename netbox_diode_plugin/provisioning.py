@@ -40,6 +40,28 @@ VIEW_PERMISSION_NAME = "Diode ingestion: view for reference resolution"
 MACADDRESS_PERMISSION_NAME = "Diode ingestion: MAC address create"
 
 
+def extend_view_permission_for_new_type(sender, instance, created, **kwargs):  # noqa: ARG001
+    """
+    Add a lazily-created content type to the view grant (post_save receiver).
+
+    ObjectType rows are created on first reference, not only during
+    migrate, so a post_migrate-only sync leaves late-born types outside
+    the grant and their name-based references failing as 'related object
+    not found'. Observed live: 5 of 170 types missing within hours of
+    provisioning.
+    """
+    if not created:
+        return
+    from users.models import ObjectPermission
+
+    try:
+        view_permission = ObjectPermission.objects.get(name=VIEW_PERMISSION_NAME)
+    except ObjectPermission.DoesNotExist:
+        return  # not provisioned yet; post_migrate will pick everything up
+    if view_permission.enabled:
+        view_permission.object_types.add(instance)
+
+
 def provision_diode_permissions(sender=None, **kwargs):  # noqa: ARG001
     """Create/refresh the service user's ObjectPermissions (post_migrate receiver)."""
     # Deferred imports: models are not loadable at module import time.
