@@ -16,7 +16,7 @@ class NetBoxDiodePluginConfig(PluginConfig):
     version = version_semver()
     base_url = "diode"
     min_version = "4.4.10"
-    max_version = "4.6.99"
+    max_version = "4.7.99"
     middleware = [
         "netbox_diode_plugin.api.profile.DiodeProfileMiddleware",
     ]
