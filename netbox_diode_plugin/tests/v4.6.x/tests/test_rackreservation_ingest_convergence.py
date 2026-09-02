@@ -81,9 +81,17 @@ class RackReservationConvergenceTestCase(TestCase):
     def test_shrink_units_updates_in_place(self):
         """[1, 2, 3] -> [1, 2] shrinks the stored set (last writer wins)."""
         self._ingest(self._entity([1, 2, 3]))
-        self._ingest(self._entity([1, 2]))
         rr = RackReservation.objects.get()
+        cs = self._plan(self._entity([1, 2]))
+        updates = [c for c in cs.changes
+                   if c.object_type == "dcim.rackreservation"]
+        self.assertEqual(len(updates), 1, [c.to_dict() for c in cs.changes])
+        self.assertEqual(updates[0].change_type.value, "update")
+        self.assertEqual(updates[0].object_id, rr.pk)
+        self._apply(cs)
+        rr.refresh_from_db()
         self.assertEqual(sorted(rr.units), [1, 2])
+        self.assertEqual(RackReservation.objects.count(), 1)
 
     def test_disjoint_units_create_second_reservation(self):
         """No shared unit means a different reservation, any user."""
