@@ -72,6 +72,19 @@ def provision_diode_permissions(sender=None, **kwargs):  # noqa: ARG001
 
     diode_user = get_diode_user()
 
+    # The service user is resolved purely by the configured diode_username
+    # (long-standing design). If that name collides with a human or
+    # SSO-managed account, the grants below would attach to it - warn
+    # loudly so the collision is visible; refusing it outright is a
+    # behavioral redesign tracked separately.
+    if diode_user.has_usable_password() or diode_user.is_superuser:
+        logger.warning(
+            "The configured diode_username resolves to an account with a "
+            "usable password and/or superuser status; if this is not the "
+            "plugin-managed service account, choose a dedicated username "
+            "before the ingestion permissions below attach to it."
+        )
+
     view_permission, created = ObjectPermission.objects.get_or_create(
         name=VIEW_PERMISSION_NAME,
         defaults={"actions": ["view"], "constraints": None},
