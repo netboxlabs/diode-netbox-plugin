@@ -1,4 +1,4 @@
-ARG NETBOX_VERSION=v4.7.0-beta2
+ARG NETBOX_VERSION=v4.7.0-5.1.0
 FROM netboxcommunity/netbox:${NETBOX_VERSION}
 
 COPY common/netbox/configuration/ /etc/netbox/config/
