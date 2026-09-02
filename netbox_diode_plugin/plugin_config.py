@@ -86,7 +86,8 @@ def _read_secret(secret_file: str, default: str | None = None) -> str | None:
             return f.readline().strip()
 
 def get_diode_user():
-    """Returns the Diode user.
+    """
+    Returns the Diode user.
 
     The service user is a superuser: Diode's apply path is authorized by
     the plugin's own token-scope layer, and its writes already operate

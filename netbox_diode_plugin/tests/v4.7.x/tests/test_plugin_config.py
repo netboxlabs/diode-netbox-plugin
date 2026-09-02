@@ -71,7 +71,8 @@ class PluginConfigTestCase(TestCase):
 
 
 class PluginCompatibilityTestCase(TestCase):
-    """Guards for the plugin's own compatibility declarations.
+    """
+    Guards for the plugin's own compatibility declarations.
 
     A stale max_version does not break this test suite (it runs with the
     plugin already loaded) - it breaks NetBox upgrades in the field, which
@@ -101,7 +102,8 @@ class PluginCompatibilityTestCase(TestCase):
         )
 
     def test_diode_user_is_active_superuser(self):
-        """NetBox 4.7 permission-scopes attribute-based related-object resolution.
+        """
+        NetBox 4.7 permission-scopes attribute-based related-object resolution.
 
         The service user must be an active superuser or every name-based
         reference in an applied change set fails as 'related object not

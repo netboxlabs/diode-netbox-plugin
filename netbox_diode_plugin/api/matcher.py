@@ -1377,31 +1377,35 @@ class ObjectMatchCriteria:
             if hasattr(expr, "get_expression_for_validation"):
                 expr = expr.get_expression_for_validation()
 
-            expr_refs = _get_refs(expr)
-            if self.nulls_not_distinct and any(data.get(r) is None for r in expr_refs):
-                # NULL participates in uniqueness: match via IS NULL. Only
-                # expressible for a plain single-field reference; a composite
-                # expression over a NULL value cannot be matched.
-                if len(expr_refs) == 1:
-                    filters.append(Q(**{f"{next(iter(expr_refs))}__isnull": True}))
-                    continue
-                return None
-
-            refs = [F(ref) for ref in expr_refs]
-            for ref in refs:
-                if ref not in replacements:
-                    return None  # cannot match, missing field data
-                if isinstance(replacements[ref], UnresolvedReference):
-                    return None  # cannot match, missing field data
-
-            rhs = expr.replace_expressions(replacements)
-            condition = Exact(expr, rhs)
-            filters.append(condition)
+            expr_filter = self._build_expression_filter(expr, data, replacements)
+            if expr_filter is None:
+                return None  # cannot match
+            filters.append(expr_filter)
 
         qs = self.model_class.objects.filter(*filters)
         if self.condition:
             qs = qs.filter(self.condition)
         return qs
+
+    def _build_expression_filter(self, expr, data, replacements):
+        """Builds the filter for one constraint expression, or None if unmatchable."""
+        expr_refs = _get_refs(expr)
+        if self.nulls_not_distinct and any(data.get(r) is None for r in expr_refs):
+            # NULL participates in uniqueness: match via IS NULL. Only
+            # expressible for a plain single-field reference; a composite
+            # expression over a NULL value cannot be matched.
+            if len(expr_refs) == 1:
+                return Q(**{f"{next(iter(expr_refs))}__isnull": True})
+            return None
+
+        for ref in (F(r) for r in expr_refs):
+            if ref not in replacements:
+                return None  # cannot match, missing field data
+            if isinstance(replacements[ref], UnresolvedReference):
+                return None  # cannot match, missing field data
+
+        rhs = expr.replace_expressions(replacements)
+        return Exact(expr, rhs)
 
     def _prepare_data(self, data: dict) -> dict:
         prepared = {}

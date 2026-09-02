@@ -64,7 +64,8 @@ _previous_update_counter = counters.update_counter
 
 @wraps(_previous_update_counter)
 def _buffered_update_counter(model, pk, counter_name, value, using=None, **kwargs):
-    """Record the delta while a buffer is active; otherwise delegate upstream.
+    """
+    Record the delta while a buffer is active; otherwise delegate upstream.
 
     NetBox 4.7 passes ``using`` through the counter signal handlers; older
     versions do not accept it, so it is forwarded only when set. A delta

@@ -104,7 +104,8 @@ def _migrate_contact_group_down(data: dict):
 
 @diode_migration(min_version="4.7.0-beta1", max_version=None, object_type="ipam.service")
 def _migrate_service_port_mappings(data: dict):
-    """Synthesizes port_mappings from legacy protocol/ports.
+    """
+    Synthesizes port_mappings from legacy protocol/ports.
 
     NetBox 4.7 replaced Service.protocol/ports with the unified
     port_mappings field ("tcp/80"-style strings); the legacy fields are
