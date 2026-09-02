@@ -86,13 +86,29 @@ def _read_secret(secret_file: str, default: str | None = None) -> str | None:
             return f.readline().strip()
 
 def get_diode_user():
-    """Returns the Diode user."""
+    """Returns the Diode user.
+
+    The service user is a superuser: Diode's apply path is authorized by
+    the plugin's own token-scope layer, and its writes already operate
+    outside NetBox's object-permission model. NetBox 4.7 additionally
+    scopes attribute-based related-object resolution in serializers to the
+    requesting user's view permissions (utilities.api
+    get_related_object_by_attrs), which restrict() bypasses for active
+    superusers - without this, every name-based reference in an applied
+    change set would fail as "related object not found". Existing rows
+    from older plugin versions are upgraded lazily.
+    """
     diode_username = get_plugin_config("netbox_diode_plugin", "diode_username")
 
     try:
         diode_user = User.objects.get(username=diode_username)
     except User.DoesNotExist:
-        diode_user = User.objects.create(username=diode_username, is_active=True)
+        diode_user = User.objects.create(username=diode_username, is_active=True, is_superuser=True)
+
+    if not diode_user.is_superuser or not diode_user.is_active:
+        diode_user.is_superuser = True
+        diode_user.is_active = True
+        diode_user.save(update_fields=["is_superuser", "is_active"])
 
     return diode_user
 

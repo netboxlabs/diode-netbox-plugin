@@ -101,3 +101,19 @@ def _migrate_contact_group_down(data: dict):
     groups = data.pop("groups", None)
     if groups and len(groups) == 1:
         data["group"] = groups[0]
+
+@diode_migration(min_version="4.7.0-beta1", max_version=None, object_type="ipam.service")
+def _migrate_service_port_mappings(data: dict):
+    """Synthesizes port_mappings from legacy protocol/ports.
+
+    NetBox 4.7 replaced Service.protocol/ports with the unified
+    port_mappings field ("tcp/80"-style strings); the legacy fields are
+    no longer model-backed, so a payload carrying only them would fail
+    with "At least one port mapping is required".
+    """
+    protocol = data.pop("protocol", None)
+    ports = data.pop("ports", None)
+    if data.get("port_mappings"):
+        return  # producer already speaks port_mappings
+    if protocol and ports:
+        data["port_mappings"] = [f"{protocol}/{port}" for port in ports]
