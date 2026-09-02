@@ -284,6 +284,12 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
 | unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
+## dcim.rackreservation
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| logical_rackreservation_unit_overlap | 1 | logical |  | N/A | Custom matcher | All versions |
+
 ## dcim.rackrole
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
