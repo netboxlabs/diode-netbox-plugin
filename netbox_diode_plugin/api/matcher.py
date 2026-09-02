@@ -1935,7 +1935,7 @@ class RackReservationUnitOverlapMatcher:
         listing = "; ".join(
             f"pk={r.pk} units={sorted(r.units)} user_id={r.user_id}" for r in rows
         )
-        units = sorted({u for u in data.get("units", []) if isinstance(u, int)})
+        units = sorted({u for u in data.get("units", []) if self._real_int(u)})
         raise AmbiguousObjectMatch(
             f"dcim.rackreservation payload units {units} overlap "
             f"{len(rows)} existing reservations on rack {data.get('rack')}: "

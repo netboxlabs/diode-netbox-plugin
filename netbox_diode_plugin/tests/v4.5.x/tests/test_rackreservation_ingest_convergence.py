@@ -9,6 +9,7 @@ a separate, known matching gap and is deliberately not used.
 
 from dcim.models import Location, Rack, RackReservation, Site
 from django.test import TestCase
+from tenancy.models import Tenant
 from users.models import User
 
 from netbox_diode_plugin.api.applier import apply_changeset
@@ -31,9 +32,10 @@ class RackReservationConvergenceTestCase(TestCase):
         )
         cls.user = User.objects.create(username="rrc-owner")
         cls.user2 = User.objects.create(username="rrc-owner2")
+        cls.tenant = Tenant.objects.create(name="rrc-tenant", slug="rrc-tenant")
 
-    def _entity(self, units, description="reserved", username="rrc-owner"):
-        return {
+    def _entity(self, units, description="reserved", username="rrc-owner", tenant=None, status=None):
+        entity = {
             "rack": {
                 "name": "rrc-rack",
                 "site": {"name": "rrc-site"},
@@ -43,6 +45,11 @@ class RackReservationConvergenceTestCase(TestCase):
             "description": description,
             "user": {"username": username},
         }
+        if tenant is not None:
+            entity["tenant"] = {"name": tenant}
+        if status is not None:
+            entity["status"] = status
+        return entity
 
     def _plan(self, entity):
         return generate_changeset(entity, "dcim.rackreservation").change_set
@@ -103,12 +110,20 @@ class RackReservationConvergenceTestCase(TestCase):
         self.assertEqual(by_units[(5, 6)].user_id, self.user2.pk)
 
     def test_field_changes_flow_through_on_match(self):
-        """description/user updates ride the overlap match."""
+        """description/user/tenant/status updates ride the overlap match."""
         self._ingest(self._entity([1, 2], description="old"))
-        self._ingest(self._entity([1, 2], description="new", username="rrc-owner2"))
+        self._ingest(self._entity(
+            [1, 2],
+            description="new",
+            username="rrc-owner2",
+            tenant="rrc-tenant",
+            status="pending"
+        ))
         rr = RackReservation.objects.get()
         self.assertEqual(rr.description, "new")
         self.assertEqual(rr.user_id, self.user2.pk)
+        self.assertEqual(rr.tenant_id, self.tenant.pk)
+        self.assertEqual(rr.status, "pending")
 
     def test_multi_overlap_fails_at_plan_time(self):
         """A payload spanning two reservations is refused loudly at plan."""
