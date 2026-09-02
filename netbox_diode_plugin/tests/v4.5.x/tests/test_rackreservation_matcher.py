@@ -102,7 +102,8 @@ class RackReservationMatcherFingerprintTestCase(TestCase):
 
 
 class RackReservationCacheKeyTestCase(TestCase):
-    """The scalar-only find-object cache must be disabled for this type.
+    """
+    The scalar-only find-object cache must be disabled for this type.
 
     Identity lives in the units ArrayField, which the scalar-only cache key
     skips: without the carve-out, two different reservations on one rack

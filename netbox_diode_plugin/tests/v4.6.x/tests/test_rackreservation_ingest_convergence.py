@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # Copyright 2026 NetBox Labs, Inc.
-"""RackReservation ingest convergence: overlap identity end-to-end.
+"""
+RackReservation ingest convergence: overlap identity end-to-end.
 
 All rack payloads here carry a location and the rack is pre-seeded with it,
 so the rack ref re-matches on every cycle; the location-less rack shape has

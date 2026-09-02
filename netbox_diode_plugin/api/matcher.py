@@ -1861,7 +1861,7 @@ class RackReservationUnitOverlapMatcher:
 
     @staticmethod
     def _real_int(value) -> bool:
-        """int excluding bool: True would otherwise mean pk/unit 1."""
+        """Accept only real ints: bool would otherwise mean pk/unit 1."""
         return isinstance(value, int) and not isinstance(value, bool)
 
     def _clean_units(self, data: dict) -> list | None:
