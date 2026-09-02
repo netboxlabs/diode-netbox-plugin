@@ -936,6 +936,12 @@ _LOGICAL_MATCHERS = {
             condition=Q(assigned_object_id__isnull=True),
         ),
     ],
+    "dcim.rackreservation": lambda: [
+        RackReservationUnitOverlapMatcher(
+            model_class=get_object_type_model("dcim.rackreservation"),
+            name="logical_rackreservation_unit_overlap",
+        )
+    ],
     "ipam.aggregate": lambda: [
         ObjectMatchCriteria(
             fields=("prefix",),
@@ -1821,6 +1827,125 @@ class CableTerminationSetMatcher:
 
 
 @dataclass
+class RackReservationUnitOverlapMatcher:
+    """
+    Match a RackReservation by unit overlap within its rack.
+
+    RackReservation has no unique constraint; identity is chosen as "same
+    rack, sharing at least one unit". Exact-set equality would never
+    converge a payload whose unit set grew or shrank between cycles;
+    overlap does, with the submitted units replacing the stored set.
+    ObjectMatchCriteria is scalar-field-only and cannot express an
+    ArrayField overlap.
+
+    A payload overlapping SEVERAL reservations has no single-row answer
+    (binding any one still conflicts with the others at validation), so
+    resolve() refuses to choose rather than guessing -- see resolve().
+    """
+
+    model_class: type[models.Model]
+    name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
+
+    def has_required_fields(self, data: dict) -> bool:
+        """A rack ref and a non-empty units list are present."""
+        units = data.get("units")
+        return (
+            data.get("rack") is not None
+            and isinstance(units, list)
+            and len(units) > 0
+        )
+
+    @staticmethod
+    def _real_int(value) -> bool:
+        """int excluding bool: True would otherwise mean pk/unit 1."""
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    def _clean_units(self, data: dict) -> list | None:
+        """The units list when every element is a real int, else None."""
+        units = data.get("units")
+        if not isinstance(units, list) or not units:
+            return None
+        if not all(self._real_int(u) for u in units):
+            return None
+        return units
+
+    def fingerprint(self, data: dict) -> int | None:
+        """
+        In-batch dedupe key: rack ref + exact unit set, order-insensitive.
+
+        Overlap is not hashable, so only IDENTICAL unit sets merge here.
+        Overlapping-but-different in-batch payloads plan separately and
+        converge onto one row at apply through the pre-save re-match (last
+        writer wins) -- the same end state they reach when sent in separate
+        batches. Authoritative matching is build_queryset.
+        """
+        rack = data.get("rack")
+        units = self._clean_units(data)
+        if rack is None or units is None:
+            return None
+        if isinstance(rack, UnresolvedReference):
+            rack_key = ("__uuid__", rack.uuid)
+        elif self._real_int(rack):
+            rack_key = rack
+        else:
+            rack_key = ("__str__", str(rack))
+        return hash((
+            self.model_class.__name__,
+            self.name,
+            rack_key,
+            tuple(sorted(set(units))),
+        ))
+
+    def build_queryset(self, data: dict) -> models.QuerySet | None:
+        """
+        Overlap query, only when the rack is a resolved int pk.
+
+        Resolved references arrive as plain ints; an UnresolvedReference
+        means the rack is either being created in this batch or exists but
+        failed to match -- either way there is no pk to query, so abstain
+        and let the CREATE stand. bool is rejected explicitly: on the
+        direct apply path rack=true would otherwise coerce to rack_id=1
+        and hand the payload to rack 1's overlapping reservation.
+        """
+        rack = data.get("rack")
+        units = self._clean_units(data)
+        if units is None or not self._real_int(rack):
+            return None
+        return self.model_class.objects.filter(rack_id=rack, units__overlap=units)
+
+    def resolve(self, queryset: models.QuerySet, data: dict):
+        """
+        Bind a single overlapping reservation, or refuse to choose.
+
+        Zero rows: create. One row: that reservation, whatever its user --
+        every submitted field, user included, is last-writer-wins on a
+        match. Two or more rows: raise rather than guess; the message
+        names the rows and the remedies, and the same refusal covers rows
+        left behind by the residual concurrent-apply race.
+        """
+        rows = list(queryset.order_by("pk"))
+        if not rows:
+            return None
+        if len(rows) == 1:
+            return rows[0]
+        listing = "; ".join(
+            f"pk={r.pk} units={sorted(r.units)} user_id={r.user_id}" for r in rows
+        )
+        units = sorted({u for u in data.get("units", []) if isinstance(u, int)})
+        raise AmbiguousObjectMatch(
+            f"dcim.rackreservation payload units {units} overlap "
+            f"{len(rows)} existing reservations on rack {data.get('rack')}: "
+            f"{listing}. Split the payload to align with the existing "
+            "reservations, or merge/delete the overlapping reservations in "
+            "NetBox.",
+            "dcim.rackreservation",
+        )
+
+
+@dataclass
 class VRFIPNetworkIPMatcher:
     """Matches ip in a vrf, ignores mask."""
 
@@ -2143,6 +2268,13 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     if object_type == "dcim.cable":
         # Cable identity lives entirely in list fields skipped by the scalar-only
         # cache key; always run the authoritative build_queryset matcher loop.
+        return None
+
+    if object_type == "dcim.rackreservation":
+        # Reservation identity lives in the units ArrayField, which the
+        # scalar-only key below skips -- two different reservations on one
+        # rack could share a key and serve each other's cached answer.
+        # Returning None disables both the django and request-scoped caches.
         return None
 
     if object_type == "dcim.virtualchassis":
