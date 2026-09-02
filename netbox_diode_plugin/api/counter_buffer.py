@@ -63,11 +63,20 @@ _previous_update_counter = counters.update_counter
 
 
 @wraps(_previous_update_counter)
-def _buffered_update_counter(model, pk, counter_name, value):
-    """Record the delta while a buffer is active; otherwise delegate upstream."""
+def _buffered_update_counter(model, pk, counter_name, value, using=None, **kwargs):
+    """Record the delta while a buffer is active; otherwise delegate upstream.
+
+    NetBox 4.7 passes ``using`` through the counter signal handlers; older
+    versions do not accept it, so it is forwarded only when set. A delta
+    bound for a non-default database is never buffered - the flush writes
+    via the default alias, so buffering it would apply the delta to the
+    wrong database.
+    """
+    if using is not None:
+        kwargs["using"] = using
     buffer = _apply_counter_buffer.get()
-    if buffer is None:
-        return _previous_update_counter(model, pk, counter_name, value)
+    if buffer is None or using not in (None, "default"):
+        return _previous_update_counter(model, pk, counter_name, value, **kwargs)
 
     # Bypass wins: no update, and nothing buffered to apply later either.
     if _bypass_active.get():
