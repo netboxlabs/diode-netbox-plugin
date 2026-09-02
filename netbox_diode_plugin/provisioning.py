@@ -55,13 +55,13 @@ def provision_diode_permissions(sender=None, **kwargs):  # noqa: ARG001
         defaults={"actions": ["view"], "constraints": None},
     )
     if created:
-        logger.info("Created ObjectPermission %r for the Diode service user", VIEW_PERMISSION_NAME)
+        logger.info("Created the Diode ingestion view ObjectPermission")
     if view_permission.enabled:
         view_permission.object_types.set(ObjectType.objects.all())
     else:
         logger.warning(
-            "ObjectPermission %r is disabled; attribute-based reference "
-            "resolution will fail until it is re-enabled", VIEW_PERMISSION_NAME
+            "The Diode ingestion view ObjectPermission is disabled; "
+            "attribute-based reference resolution will fail until it is re-enabled"
         )
     view_permission.users.add(diode_user)
 
@@ -70,7 +70,7 @@ def provision_diode_permissions(sender=None, **kwargs):  # noqa: ARG001
         defaults={"actions": ["add"], "constraints": None},
     )
     if created:
-        logger.info("Created ObjectPermission %r for the Diode service user", MACADDRESS_PERMISSION_NAME)
+        logger.info("Created the Diode ingestion MAC-address-create ObjectPermission")
     if mac_permission.enabled:
         mac_permission.object_types.set(
             ObjectType.objects.filter(app_label="dcim", model="macaddress")
