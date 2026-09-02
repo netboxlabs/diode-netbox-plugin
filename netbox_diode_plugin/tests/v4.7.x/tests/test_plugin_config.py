@@ -101,21 +101,66 @@ class PluginCompatibilityTestCase(TestCase):
             "supporting a new NetBox release",
         )
 
-    def test_diode_user_is_active_superuser(self):
+    def test_diode_user_is_not_superuser_and_cannot_log_in(self):
         """
-        NetBox 4.7 permission-scopes attribute-based related-object resolution.
+        The service user stays unprivileged at the account level.
 
-        The service user must be an active superuser or every name-based
-        reference in an applied change set fails as 'related object not
-        found'.
+        Superuser was revoked for cause (migration
+        0005_revoke_superuser_status); NetBox 4.7's permission needs are
+        met by explicit ObjectPermissions instead. The password must be
+        unusable so no login path can ever authenticate as this account.
         """
         diode_user = get_diode_user()
-        self.assertTrue(diode_user.is_active)
-        self.assertTrue(diode_user.is_superuser)
+        self.assertFalse(diode_user.is_superuser)
+        self.assertFalse(diode_user.has_usable_password())
 
-    def test_diode_user_upgraded_lazily(self):
-        """Rows created by older plugin versions are upgraded on access."""
-        User.objects.filter(username="diode").update(is_superuser=False, is_active=False)
+    def test_deactivated_diode_user_stays_deactivated(self):
+        """Deactivation is an operator kill switch and must be respected."""
+        get_diode_user()
+        User.objects.filter(username="diode").update(is_active=False)
         diode_user = get_diode_user()
-        self.assertTrue(diode_user.is_active)
-        self.assertTrue(diode_user.is_superuser)
+        self.assertFalse(diode_user.is_active)
+
+    def test_provisioned_view_permission_covers_all_object_types(self):
+        """
+        NetBox 4.7 scopes attribute-based reference resolution by view permission.
+
+        The provisioned grant must span every object type, or references
+        to a type NetBox adds later fail as 'related object not found' -
+        a data-shaped symptom pointing away from the real cause.
+        """
+        from core.models import ObjectType
+        from users.models import ObjectPermission
+
+        from netbox_diode_plugin.provisioning import (
+            VIEW_PERMISSION_NAME,
+            provision_diode_permissions,
+        )
+
+        provision_diode_permissions()
+        permission = ObjectPermission.objects.get(name=VIEW_PERMISSION_NAME)
+        self.assertTrue(permission.enabled)
+        self.assertEqual(permission.actions, ["view"])
+        self.assertIsNone(permission.constraints)
+        self.assertIn(get_diode_user(), permission.users.all())
+        self.assertEqual(
+            set(permission.object_types.values_list("pk", flat=True)),
+            set(ObjectType.objects.values_list("pk", flat=True)),
+        )
+
+    def test_diode_user_can_resolve_by_attributes_and_add_macaddress(self):
+        """The two NetBox 4.7 permission gates are open for the service user."""
+        from dcim.models import Site
+        from utilities.api import get_related_object_by_attrs
+
+        from netbox_diode_plugin.provisioning import provision_diode_permissions
+
+        provision_diode_permissions()
+        site = Site.objects.create(name="Perm Probe Site", slug="perm-probe-site")
+        diode_user = get_diode_user()
+
+        resolved = get_related_object_by_attrs(
+            Site.objects.all(), {"name": "Perm Probe Site"}, user=diode_user
+        )
+        self.assertEqual(resolved, site)
+        self.assertTrue(diode_user.has_perm("dcim.add_macaddress"))

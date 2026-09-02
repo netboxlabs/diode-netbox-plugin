@@ -116,5 +116,17 @@ class NetBoxDiodePluginConfig(PluginConfig):
         "apply_deadlock_max_retries": 2,
     }
 
+    def ready(self):
+        """Connect the service-user permission provisioning to post_migrate."""
+        super().ready()
+        from django.db.models.signals import post_migrate
+
+        from .provisioning import provision_diode_permissions
+        post_migrate.connect(
+            provision_diode_permissions,
+            sender=self,
+            dispatch_uid="netbox_diode_plugin.provision_diode_permissions",
+        )
+
 
 config = NetBoxDiodePluginConfig

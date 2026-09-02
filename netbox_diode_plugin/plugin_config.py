@@ -87,29 +87,30 @@ def _read_secret(secret_file: str, default: str | None = None) -> str | None:
 
 def get_diode_user():
     """
-    Returns the Diode user.
+    Returns the Diode service user.
 
-    The service user is a superuser: Diode's apply path is authorized by
-    the plugin's own token-scope layer, and its writes already operate
-    outside NetBox's object-permission model. NetBox 4.7 additionally
-    scopes attribute-based related-object resolution in serializers to the
-    requesting user's view permissions (utilities.api
-    get_related_object_by_attrs), which restrict() bypasses for active
-    superusers - without this, every name-based reference in an applied
-    change set would fail as "related object not found". Existing rows
-    from older plugin versions are upgraded lazily.
+    The user is deliberately NOT a superuser (revoked for cause in
+    migration 0005_revoke_superuser_status). The permissions NetBox 4.7
+    requires of it - view for attribute-based related-object resolution
+    and dcim.add_macaddress for interface MAC writes - are provisioned as
+    explicit ObjectPermissions on post_migrate (see provisioning.py).
+
+    The account is created with an unusable password (older plugin
+    versions left a raw empty string, which Django treats as usable;
+    that is corrected lazily). Deactivating the user or disabling its
+    ObjectPermissions in the NetBox UI is respected as an operator kill
+    switch and never undone here.
     """
     diode_username = get_plugin_config("netbox_diode_plugin", "diode_username")
 
     try:
         diode_user = User.objects.get(username=diode_username)
     except User.DoesNotExist:
-        diode_user = User.objects.create(username=diode_username, is_active=True, is_superuser=True)
+        diode_user = User.objects.create(username=diode_username, is_active=True)
 
-    if not diode_user.is_superuser or not diode_user.is_active:
-        diode_user.is_superuser = True
-        diode_user.is_active = True
-        diode_user.save(update_fields=["is_superuser", "is_active"])
+    if diode_user.password == "":
+        diode_user.set_unusable_password()
+        diode_user.save(update_fields=["password"])
 
     return diode_user
 
