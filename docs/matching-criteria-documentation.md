@@ -94,7 +94,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| logical_cable_termination_set | 1 | logical |  | N/A | Custom matcher | All versions |
+| logical_cable_termination_set | 1 | logical | a_terminations, b_terminations | N/A | Match a Cable by its canonical set of terminations. | All versions |
 
 ## dcim.cablebundle
 
@@ -284,6 +284,12 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
 | unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
+## dcim.rackreservation
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| logical_rackreservation_unit_overlap | 1 | logical | rack, units | N/A | Match a RackReservation by unit overlap within its rack. | All versions |
+
 ## dcim.rackrole
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
@@ -339,7 +345,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| logical_vc_name_no_master | 1 | logical |  | N/A | Custom matcher | All versions |
+| logical_vc_name_no_master | 1 | logical | name | N/A | Best-effort VirtualChassis matcher: by name, only when the payload has no master. | All versions |
 | unique_master | 2 | builtin | master | N/A | Matches on unique field(s): master | All versions |
 
 ## dcim.virtualdevicecontext
@@ -420,15 +426,15 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| logical_ip_address_global_no_vrf | 1 | logical |  | N/A | Matches IP address address in global namespace (no VRF) | All versions |
-| logical_ip_address_within_vrf | 2 | logical |  | N/A | Matches IP address address within VRF | All versions |
+| logical_ip_address_global_no_vrf | 1 | logical | address | N/A | Matches IP address address in global namespace (no VRF) | All versions |
+| logical_ip_address_within_vrf | 2 | logical | address | N/A | Matches IP address address within VRF | All versions |
 
 ## ipam.iprange
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| logical_ip_range_start_end_global_no_vrf | 1 | logical |  | N/A | Matches IP range start_address, end_address within VRF context | All versions |
-| logical_ip_range_start_end_within_vrf | 2 | logical |  | N/A | Matches IP range start_address, end_address within VRF context | All versions |
+| logical_ip_range_start_end_global_no_vrf | 1 | logical | start_address, end_address | N/A | Matches IP range start_address, end_address in global namespace (no VRF) | All versions |
+| logical_ip_range_start_end_within_vrf | 2 | logical | start_address, end_address | N/A | Matches IP range start_address, end_address within VRF context | All versions |
 
 ## ipam.prefix
 
