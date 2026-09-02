@@ -12,6 +12,7 @@ from netbox_diode_plugin.api.matcher import (
     RackReservationUnitOverlapMatcher,
     _find_obj_cache_key,
     find_existing_object,
+    requires_pre_save_match,
 )
 from netbox_diode_plugin.api.plugin_utils import get_object_type_model
 
@@ -175,3 +176,11 @@ class RackReservationMatcherLookupTestCase(TestCase):
         msg = str(cm.exception)
         self.assertIn(str(self.existing.pk), msg)
         self.assertIn(str(other.pk), msg)
+
+
+class RackReservationRoutingTestCase(TestCase):
+    """Pre-save routing for dcim.rackreservation."""
+
+    def test_requires_pre_save_match(self):
+        """No DB constraint means no IntegrityError backstop: pre-save match."""
+        self.assertTrue(requires_pre_save_match("dcim.rackreservation"))

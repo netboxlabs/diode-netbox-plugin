@@ -156,6 +156,7 @@ _REQUIRES_PRE_SAVE_MATCH = frozenset({
     "dcim.macaddress",
     "dcim.module",
     "dcim.modulebay",
+    "dcim.rackreservation",
     "dcim.virtualchassis",
     "ipam.prefix",
     "ipam.vlan",
