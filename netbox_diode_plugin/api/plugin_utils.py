@@ -1,8 +1,8 @@
 """Diode plugin helpers."""
 
 # Generated code. DO NOT EDIT.
-# Source: NetBox v4.6.0
-# Timestamp: 2026-07-08 14:57:56Z
+# Source: NetBox v4.7.0
+# Timestamp: 2026-09-02 20:52:39Z
 
 from dataclasses import dataclass
 import datetime
@@ -365,6 +365,21 @@ _JSON_REF_INFO = {
             is_generic=True,
         ),
         "user": RefInfo(object_type="users.user", field_name="object", is_generic=True),
+        "cooling_feed": RefInfo(
+            object_type="dcim.coolingfeed", field_name="object", is_generic=True
+        ),
+        "cooling_intake": RefInfo(
+            object_type="dcim.coolingintake", field_name="object", is_generic=True
+        ),
+        "cooling_outflow": RefInfo(
+            object_type="dcim.coolingoutflow", field_name="object", is_generic=True
+        ),
+        "cooling_source": RefInfo(
+            object_type="dcim.coolingsource", field_name="object", is_generic=True
+        ),
+        "module_bay_type": RefInfo(
+            object_type="dcim.modulebaytype", field_name="object", is_generic=True
+        ),
     },
     "circuits.circuit": {
         "assignments": RefInfo(
@@ -496,6 +511,39 @@ _JSON_REF_INFO = {
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
+    "dcim.coolingfeed": {
+        "cooling_source": RefInfo(
+            object_type="dcim.coolingsource", field_name="cooling_source"
+        ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+        "rack": RefInfo(object_type="dcim.rack", field_name="rack"),
+        "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
+        "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
+    },
+    "dcim.coolingintake": {
+        "cooling_outflow": RefInfo(
+            object_type="dcim.coolingoutflow", field_name="cooling_outflow"
+        ),
+        "device": RefInfo(object_type="dcim.device", field_name="device"),
+        "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+        "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
+    },
+    "dcim.coolingoutflow": {
+        "cooling_intake": RefInfo(
+            object_type="dcim.coolingintake", field_name="cooling_intake"
+        ),
+        "device": RefInfo(object_type="dcim.device", field_name="device"),
+        "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+        "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
+    },
+    "dcim.coolingsource": {
+        "location": RefInfo(object_type="dcim.location", field_name="location"),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+        "site": RefInfo(object_type="dcim.site", field_name="site"),
+        "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
+    },
     "dcim.device": {
         "cluster": RefInfo(object_type="virtualization.cluster", field_name="cluster"),
         "device_type": RefInfo(object_type="dcim.devicetype", field_name="device_type"),
@@ -596,6 +644,12 @@ _JSON_REF_INFO = {
         "component_rear_port": RefInfo(
             object_type="dcim.rearport", field_name="component", is_generic=True
         ),
+        "component_cooling_intake": RefInfo(
+            object_type="dcim.coolingintake", field_name="component", is_generic=True
+        ),
+        "component_cooling_outflow": RefInfo(
+            object_type="dcim.coolingoutflow", field_name="component", is_generic=True
+        ),
         "device": RefInfo(object_type="dcim.device", field_name="device"),
         "manufacturer": RefInfo(
             object_type="dcim.manufacturer", field_name="manufacturer"
@@ -645,12 +699,29 @@ _JSON_REF_INFO = {
             object_type="dcim.module", field_name="installed_module"
         ),
         "module": RefInfo(object_type="dcim.module", field_name="module"),
+        "module_bay_types": RefInfo(
+            object_type="dcim.modulebaytype",
+            field_name="module_bay_types",
+            is_many=True,
+        ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+        "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
+    },
+    "dcim.modulebaytype": {
+        "manufacturer": RefInfo(
+            object_type="dcim.manufacturer", field_name="manufacturer"
+        ),
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
     "dcim.moduletype": {
         "manufacturer": RefInfo(
             object_type="dcim.manufacturer", field_name="manufacturer"
+        ),
+        "module_bay_types": RefInfo(
+            object_type="dcim.modulebaytype",
+            field_name="module_bay_types",
+            is_many=True,
         ),
         "owner": RefInfo(object_type="users.owner", field_name="owner"),
         "profile": RefInfo(object_type="dcim.moduletypeprofile", field_name="profile"),
@@ -1173,6 +1244,31 @@ _JSON_REF_INFO = {
         "assigned_object_user": RefInfo(
             object_type="users.user", field_name="assigned_object", is_generic=True
         ),
+        "assigned_object_cooling_feed": RefInfo(
+            object_type="dcim.coolingfeed",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_cooling_intake": RefInfo(
+            object_type="dcim.coolingintake",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_cooling_outflow": RefInfo(
+            object_type="dcim.coolingoutflow",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_cooling_source": RefInfo(
+            object_type="dcim.coolingsource",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_module_bay_type": RefInfo(
+            object_type="dcim.modulebaytype",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
         "created_by": RefInfo(object_type="users.user", field_name="created_by"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -1546,6 +1642,21 @@ _JSON_REF_INFO = {
         ),
         "interface_user": RefInfo(
             object_type="users.user", field_name="interface", is_generic=True
+        ),
+        "interface_cooling_feed": RefInfo(
+            object_type="dcim.coolingfeed", field_name="interface", is_generic=True
+        ),
+        "interface_cooling_intake": RefInfo(
+            object_type="dcim.coolingintake", field_name="interface", is_generic=True
+        ),
+        "interface_cooling_outflow": RefInfo(
+            object_type="dcim.coolingoutflow", field_name="interface", is_generic=True
+        ),
+        "interface_cooling_source": RefInfo(
+            object_type="dcim.coolingsource", field_name="interface", is_generic=True
+        ),
+        "interface_module_bay_type": RefInfo(
+            object_type="dcim.modulebaytype", field_name="interface", is_generic=True
         ),
     },
     "ipam.ipaddress": {
@@ -2023,6 +2134,21 @@ _JSON_REF_INFO = {
         ),
         "object_user": RefInfo(
             object_type="users.user", field_name="object", is_generic=True
+        ),
+        "object_cooling_feed": RefInfo(
+            object_type="dcim.coolingfeed", field_name="object", is_generic=True
+        ),
+        "object_cooling_intake": RefInfo(
+            object_type="dcim.coolingintake", field_name="object", is_generic=True
+        ),
+        "object_cooling_outflow": RefInfo(
+            object_type="dcim.coolingoutflow", field_name="object", is_generic=True
+        ),
+        "object_cooling_source": RefInfo(
+            object_type="dcim.coolingsource", field_name="object", is_generic=True
+        ),
+        "object_module_bay_type": RefInfo(
+            object_type="dcim.modulebaytype", field_name="object", is_generic=True
         ),
         "role": RefInfo(object_type="tenancy.contactrole", field_name="role"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
@@ -2572,6 +2698,31 @@ _JSON_REF_INFO = {
         "assigned_object_user": RefInfo(
             object_type="users.user", field_name="assigned_object", is_generic=True
         ),
+        "assigned_object_cooling_feed": RefInfo(
+            object_type="dcim.coolingfeed",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_cooling_intake": RefInfo(
+            object_type="dcim.coolingintake",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_cooling_outflow": RefInfo(
+            object_type="dcim.coolingoutflow",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_cooling_source": RefInfo(
+            object_type="dcim.coolingsource",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
+        "assigned_object_module_bay_type": RefInfo(
+            object_type="dcim.modulebaytype",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
         "l2vpn": RefInfo(object_type="vpn.l2vpn", field_name="l2vpn"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -2952,6 +3103,21 @@ _JSON_REF_INFO = {
         "termination_user": RefInfo(
             object_type="users.user", field_name="termination", is_generic=True
         ),
+        "termination_cooling_feed": RefInfo(
+            object_type="dcim.coolingfeed", field_name="termination", is_generic=True
+        ),
+        "termination_cooling_intake": RefInfo(
+            object_type="dcim.coolingintake", field_name="termination", is_generic=True
+        ),
+        "termination_cooling_outflow": RefInfo(
+            object_type="dcim.coolingoutflow", field_name="termination", is_generic=True
+        ),
+        "termination_cooling_source": RefInfo(
+            object_type="dcim.coolingsource", field_name="termination", is_generic=True
+        ),
+        "termination_module_bay_type": RefInfo(
+            object_type="dcim.modulebaytype", field_name="termination", is_generic=True
+        ),
         "tunnel": RefInfo(object_type="vpn.tunnel", field_name="tunnel"),
     },
     "wireless.wirelesslan": {
@@ -3017,6 +3183,10 @@ _GENERIC_OBJECT_VARIANTS: dict[str, str] = {
     "object_contact_assignment": "tenancy.contactassignment",
     "object_contact_group": "tenancy.contactgroup",
     "object_contact_role": "tenancy.contactrole",
+    "object_cooling_feed": "dcim.coolingfeed",
+    "object_cooling_intake": "dcim.coolingintake",
+    "object_cooling_outflow": "dcim.coolingoutflow",
+    "object_cooling_source": "dcim.coolingsource",
     "object_custom_field": "extras.customfield",
     "object_custom_field_choice_set": "extras.customfieldchoiceset",
     "object_custom_link": "extras.customlink",
@@ -3045,6 +3215,7 @@ _GENERIC_OBJECT_VARIANTS: dict[str, str] = {
     "object_manufacturer": "dcim.manufacturer",
     "object_module": "dcim.module",
     "object_module_bay": "dcim.modulebay",
+    "object_module_bay_type": "dcim.modulebaytype",
     "object_module_type": "dcim.moduletype",
     "object_module_type_profile": "dcim.moduletypeprofile",
     "object_owner": "users.owner",
@@ -3290,12 +3461,80 @@ _LEGAL_FIELDS = {
             "type",
         ]
     ),
+    "dcim.coolingfeed": frozenset(
+        [
+            "comments",
+            "cooling_capacity",
+            "cooling_source",
+            "custom_fields",
+            "description",
+            "max_flow",
+            "max_flow_unit",
+            "name",
+            "owner",
+            "rack",
+            "status",
+            "tags",
+            "tenant",
+        ]
+    ),
+    "dcim.coolingintake": frozenset(
+        [
+            "cooling_outflow",
+            "custom_fields",
+            "description",
+            "device",
+            "diameter",
+            "diameter_unit",
+            "label",
+            "max_flow",
+            "max_flow_unit",
+            "module",
+            "name",
+            "owner",
+            "tags",
+            "type",
+        ]
+    ),
+    "dcim.coolingoutflow": frozenset(
+        [
+            "cooling_intake",
+            "custom_fields",
+            "description",
+            "device",
+            "diameter",
+            "diameter_unit",
+            "label",
+            "module",
+            "name",
+            "owner",
+            "tags",
+            "type",
+        ]
+    ),
+    "dcim.coolingsource": frozenset(
+        [
+            "comments",
+            "cooling_capacity",
+            "custom_fields",
+            "description",
+            "fluid_type",
+            "location",
+            "name",
+            "owner",
+            "site",
+            "status",
+            "tags",
+            "type",
+        ]
+    ),
     "dcim.device": frozenset(
         [
             "airflow",
             "asset_tag",
             "cluster",
             "comments",
+            "cooling_method",
             "custom_fields",
             "description",
             "device_type",
@@ -3353,9 +3592,11 @@ _LEGAL_FIELDS = {
         [
             "airflow",
             "comments",
+            "cooling_method",
             "custom_fields",
             "default_platform",
             "description",
+            "end_of_life",
             "exclude_from_utilization",
             "is_full_depth",
             "manufacturer",
@@ -3391,6 +3632,8 @@ _LEGAL_FIELDS = {
     "dcim.interface": frozenset(
         [
             "bridge",
+            "channel_id",
+            "channels",
             "custom_fields",
             "description",
             "device",
@@ -3398,6 +3641,7 @@ _LEGAL_FIELDS = {
             "enabled",
             "label",
             "lag",
+            "mac_address",
             "mark_connected",
             "mgmt_only",
             "mode",
@@ -3517,9 +3761,23 @@ _LEGAL_FIELDS = {
             "installed_module",
             "label",
             "module",
+            "module_bay_types",
             "name",
             "owner",
             "position",
+            "tags",
+        ]
+    ),
+    "dcim.modulebaytype": frozenset(
+        [
+            "color",
+            "comments",
+            "custom_fields",
+            "description",
+            "manufacturer",
+            "name",
+            "owner",
+            "slug",
             "tags",
         ]
     ),
@@ -3528,10 +3786,13 @@ _LEGAL_FIELDS = {
             "airflow",
             "attributes",
             "comments",
+            "cooling_method",
             "custom_fields",
             "description",
+            "end_of_life",
             "manufacturer",
             "model",
+            "module_bay_types",
             "owner",
             "part_number",
             "profile",
@@ -3628,6 +3889,8 @@ _LEGAL_FIELDS = {
             "airflow",
             "asset_tag",
             "comments",
+            "cooling_capability",
+            "cooling_capacity",
             "custom_fields",
             "desc_units",
             "description",
@@ -3689,6 +3952,8 @@ _LEGAL_FIELDS = {
     "dcim.racktype": frozenset(
         [
             "comments",
+            "cooling_capability",
+            "cooling_capacity",
             "custom_fields",
             "desc_units",
             "description",
@@ -3812,6 +4077,7 @@ _LEGAL_FIELDS = {
             "is_cloneable",
             "label",
             "name",
+            "nulls_first",
             "object_types",
             "owner",
             "related_object_filter",
@@ -4019,6 +4285,7 @@ _LEGAL_FIELDS = {
             "owner",
             "parent_object_id",
             "parent_object_type",
+            "port_mappings",
             "ports",
             "protocol",
             "tags",
@@ -4227,6 +4494,7 @@ _LEGAL_FIELDS = {
             "custom_fields",
             "description",
             "enabled",
+            "mac_address",
             "mode",
             "mtu",
             "name",
@@ -4533,6 +4801,20 @@ _FORMAT_TRANSFORMATIONS = {
     "dcim.consoleserverport": {
         "speed": int_from_int64string,
     },
+    "dcim.coolingfeed": {
+        "cooling_capacity": transform_float_to_decimal,
+        "max_flow": transform_float_to_decimal,
+    },
+    "dcim.coolingintake": {
+        "diameter": transform_float_to_decimal,
+        "max_flow": transform_float_to_decimal,
+    },
+    "dcim.coolingoutflow": {
+        "diameter": transform_float_to_decimal,
+    },
+    "dcim.coolingsource": {
+        "cooling_capacity": transform_float_to_decimal,
+    },
     "dcim.device": {
         "latitude": transform_float_to_decimal,
         "longitude": transform_float_to_decimal,
@@ -4541,6 +4823,7 @@ _FORMAT_TRANSFORMATIONS = {
         "vc_priority": int_from_int64string,
     },
     "dcim.devicetype": {
+        "end_of_life": transform_timestamp_to_date_only,
         "u_height": transform_float_to_decimal,
         "weight": transform_float_to_decimal,
     },
@@ -4549,6 +4832,8 @@ _FORMAT_TRANSFORMATIONS = {
         "rear_port_position": int_from_int64string,
     },
     "dcim.interface": {
+        "channel_id": int_from_int64string,
+        "channels": int_from_int64string,
         "mtu": int_from_int64string,
         "rf_channel_frequency": transform_float_to_decimal,
         "rf_channel_width": transform_float_to_decimal,
@@ -4557,6 +4842,7 @@ _FORMAT_TRANSFORMATIONS = {
     },
     "dcim.moduletype": {
         "attributes": parse_json,
+        "end_of_life": transform_timestamp_to_date_only,
         "weight": transform_float_to_decimal,
     },
     "dcim.moduletypeprofile": {
@@ -4572,6 +4858,7 @@ _FORMAT_TRANSFORMATIONS = {
         "maximum_draw": int_from_int64string,
     },
     "dcim.rack": {
+        "cooling_capacity": transform_float_to_decimal,
         "max_weight": int_from_int64string,
         "mounting_depth": int_from_int64string,
         "outer_depth": int_from_int64string,
@@ -4586,6 +4873,7 @@ _FORMAT_TRANSFORMATIONS = {
         "units": for_all(int_from_int64string, False, False),
     },
     "dcim.racktype": {
+        "cooling_capacity": transform_float_to_decimal,
         "max_weight": int_from_int64string,
         "mounting_depth": int_from_int64string,
         "outer_depth": int_from_int64string,

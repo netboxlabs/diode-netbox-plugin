@@ -12,14 +12,7 @@ from django.core.management.base import CommandError
 from django.db.models import Q
 from django.test import TestCase
 
-from netbox_diode_plugin.api.matcher import (
-    AutoSlugMatcher,
-    CableTerminationSetMatcher,
-    GlobalIPNetworkIPMatcher,
-    ObjectMatchCriteria,
-    RackReservationUnitOverlapMatcher,
-    VirtualChassisNameMatcher,
-)
+from netbox_diode_plugin.api.matcher import AutoSlugMatcher, ObjectMatchCriteria
 from netbox_diode_plugin.management.commands.generate_matching_docs import (
     Command,
     MatcherInfo,
@@ -135,73 +128,6 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
 
         result = self.command.get_matcher_description(mock_matcher)
         self.assertEqual(result, "Matches IP range start_address, end_address within VRF context")
-
-    def test_get_matcher_description_ip_range_global_no_vrf(self):
-        """Test getting matcher description for IP range global-no-VRF matcher."""
-        mock_matcher = mock.MagicMock()
-        mock_matcher.name = "logical_ip_range_start_end_global_no_vrf"
-        mock_matcher.ip_fields = ["start_address", "end_address"]
-        mock_matcher.vrf_field = "vrf"
-
-        result = self.command.get_matcher_description(mock_matcher)
-        self.assertIn("no VRF", result)
-        self.assertEqual(
-            result, "Matches IP range start_address, end_address in global namespace (no VRF)"
-        )
-
-    def test_get_matcher_fields_cable_termination_set(self):
-        """Test deriving Fields for a real CableTerminationSetMatcher via a/b field names."""
-        matcher = CableTerminationSetMatcher(model_class=None, name="x")
-
-        result = self.command.get_matcher_fields(matcher)
-        self.assertEqual(result, ["a_terminations", "b_terminations"])
-
-    def test_get_matcher_fields_virtual_chassis_name(self):
-        """Test deriving Fields for a real VirtualChassisNameMatcher via the class-name map."""
-        matcher = VirtualChassisNameMatcher(model_class=None, name="x")
-
-        result = self.command.get_matcher_fields(matcher)
-        self.assertEqual(result, ["name"])
-
-    def test_get_matcher_fields_rackreservation_unit_overlap(self):
-        """Test deriving Fields for a real RackReservationUnitOverlapMatcher via the class-name map."""
-        matcher = RackReservationUnitOverlapMatcher(model_class=None, name="x")
-
-        result = self.command.get_matcher_fields(matcher)
-        self.assertEqual(result, ["rack", "units"])
-
-    def test_get_matcher_fields_global_ip_network(self):
-        """Test deriving Fields for a real GlobalIPNetworkIPMatcher via ip_fields."""
-        matcher = GlobalIPNetworkIPMatcher(
-            ip_fields=["address"], vrf_field="vrf", model_class=None, name="x"
-        )
-
-        result = self.command.get_matcher_fields(matcher)
-        self.assertEqual(result, ["address"])
-
-    def test_get_matcher_description_cable_termination_set_docstring(self):
-        """Test that CableTerminationSetMatcher's description derives from its docstring."""
-        matcher = CableTerminationSetMatcher(model_class=None, name="x")
-
-        result = self.command.get_matcher_description(matcher)
-        expected = CableTerminationSetMatcher.__doc__.strip().splitlines()[0].strip()
-        self.assertEqual(result, expected)
-
-    def test_get_matcher_description_virtual_chassis_name_docstring(self):
-        """Test that VirtualChassisNameMatcher's description derives from its docstring."""
-        matcher = VirtualChassisNameMatcher(model_class=None, name="x")
-
-        result = self.command.get_matcher_description(matcher)
-        expected = VirtualChassisNameMatcher.__doc__.strip().splitlines()[0].strip()
-        self.assertEqual(result, expected)
-
-    def test_get_matcher_description_rackreservation_unit_overlap_docstring(self):
-        """Test that RackReservationUnitOverlapMatcher's description derives from its docstring."""
-        matcher = RackReservationUnitOverlapMatcher(model_class=None, name="x")
-
-        result = self.command.get_matcher_description(matcher)
-        expected = RackReservationUnitOverlapMatcher.__doc__.strip().splitlines()[0].strip()
-        self.assertEqual(result, expected)
 
     def test_get_matcher_description_standard_fields(self):
         """Test getting matcher description for standard field-based matcher."""

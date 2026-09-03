@@ -7,7 +7,11 @@ from typing import Optional
 from django.core.management.base import BaseCommand
 
 from netbox_diode_plugin.api.differ import extract_supported_models
-from netbox_diode_plugin.api.matcher import _LOGICAL_MATCHERS, get_model_matchers
+from netbox_diode_plugin.api.matcher import (
+    _LOGICAL_MATCHERS,
+    ObjectMatchCriteria,
+    get_model_matchers,
+)
 
 
 @dataclass
@@ -64,7 +68,9 @@ class Command(BaseCommand):
                 return f"Matches IP address {ip_fields_str} in global namespace (no VRF)"
             if matcher.name.startswith('logical_ip_address_within_vrf'):
                 return f"Matches IP address {ip_fields_str} within VRF"
-            if matcher.name.startswith('logical_ip_range'):
+            if 'global_no_vrf' in matcher.name:
+                return f"Matches IP range {ip_fields_str} in global namespace (no VRF)"
+            if 'within_vrf' in matcher.name:
                 return f"Matches IP range {ip_fields_str} within VRF context"
 
         # Handle CustomFieldMatcher
@@ -97,7 +103,41 @@ class Command(BaseCommand):
                 return f"Matches on fields: {fields_str} where {condition_desc}"
             return f"Matches on fields: {fields_str}"
 
+        # Fall back to the matcher class's own docstring for custom matcher
+        # classes that have nothing functional to describe them by.
+        if type(matcher) is not ObjectMatchCriteria:
+            doc = matcher.__class__.__doc__
+            if doc:
+                first_line = doc.strip().splitlines()[0].strip()
+                if first_line:
+                    return first_line
+
         return "Custom matcher"
+
+    def get_matcher_fields(self, matcher) -> list[str] | None:
+        """Derive the Fields column value for a matcher, in priority order."""
+        fields = getattr(matcher, "fields", None)
+        if fields:
+            return list(fields)
+
+        ip_fields = getattr(matcher, "ip_fields", None)
+        if ip_fields:
+            return list(ip_fields)
+
+        a_field = getattr(matcher, "a_field", None)
+        b_field = getattr(matcher, "b_field", None)
+        if a_field and b_field:
+            return [a_field, b_field]
+
+        class_field_map = {
+            "VirtualChassisNameMatcher": ["name"],
+            "RackReservationUnitOverlapMatcher": ["rack", "units"],
+        }
+        mapped_fields = class_field_map.get(matcher.__class__.__name__)
+        if mapped_fields:
+            return mapped_fields
+
+        return None
 
     def get_version_constraints(self, matcher) -> str | None:
         """Get version constraints as a string."""
@@ -120,7 +160,7 @@ class Command(BaseCommand):
             for matcher in matchers:
                 info = MatcherInfo(
                     name=matcher.name,
-                    fields=list(matcher.fields) if hasattr(matcher, 'fields') and matcher.fields else None,
+                    fields=self.get_matcher_fields(matcher),
                     condition=self.extract_condition_description(matcher.condition) if hasattr(matcher, 'condition') else None,
                     description=self.get_matcher_description(matcher),
                     matcher_type=matcher.__class__.__name__,

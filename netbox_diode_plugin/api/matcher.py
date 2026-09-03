@@ -156,6 +156,7 @@ _REQUIRES_PRE_SAVE_MATCH = frozenset({
     "dcim.macaddress",
     "dcim.module",
     "dcim.modulebay",
+    "dcim.rackreservation",
     "dcim.virtualchassis",
     "ipam.prefix",
     "ipam.vlan",
@@ -936,6 +937,12 @@ _LOGICAL_MATCHERS = {
             condition=Q(assigned_object_id__isnull=True),
         ),
     ],
+    "dcim.rackreservation": lambda: [
+        RackReservationUnitOverlapMatcher(
+            model_class=get_object_type_model("dcim.rackreservation"),
+            name="logical_rackreservation_unit_overlap",
+        )
+    ],
     "ipam.aggregate": lambda: [
         ObjectMatchCriteria(
             fields=("prefix",),
@@ -1186,15 +1193,28 @@ class ObjectMatchCriteria:
     model_class: type[models.Model] | None = None
     name: str | None = None
 
+    # True for constraints declared with nulls_distinct=False (NetBox 4.7
+    # collapses e.g. Device's tenant-null partial constraint into one such
+    # constraint): NULL participates in uniqueness, so an absent/None field
+    # matches via IS NULL instead of disqualifying the matcher.
+    nulls_not_distinct: bool = False
+
     min_version: str | None = None
     max_version: str | None = None
 
     def __hash__(self):
         """Hash the object match criteria."""
-        return hash((self.fields, self.expressions, self.condition, self.model_class.__name__, self.name))
+        return hash((
+            self.fields, self.expressions, self.condition,
+            self.model_class.__name__, self.name, self.nulls_not_distinct,
+        ))
 
     def has_required_fields(self, data) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
+        if self.nulls_not_distinct:
+            # absent fields are treated as NULL, which is a matchable value;
+            # the all-None guards below still refuse fully-null lookups.
+            return True
         return all(field in data for field in self._get_refs())
 
     @cache
@@ -1248,7 +1268,7 @@ class ObjectMatchCriteria:
         insensitive = self._get_insensitive_refs()
         values = []
         for field in sorted_fields:
-            value = data[field]
+            value = data.get(field) if self.nulls_not_distinct else data[field]
             if isinstance(value, dict):
                 logger.warning(f"unexpected value type for fingerprinting: {value}")
                 return None
@@ -1323,6 +1343,10 @@ class ObjectMatchCriteria:
         for field_name in self.fields:
             field = self.model_class._meta.get_field(field_name)
             if field_name not in data:
+                if self.nulls_not_distinct:
+                    # absent field participates as NULL (IS NULL lookup)
+                    lookup_kwargs[field.name] = None
+                    continue
                 return None  # cannot match, missing field data
             lookup_value = data.get(field_name)
             if isinstance(lookup_value, UnresolvedReference):
@@ -1344,6 +1368,10 @@ class ObjectMatchCriteria:
         if refs and all(data.get(r) is None for r in refs):
             return None
 
+        if self.nulls_not_distinct:
+            # absent fields participate as NULL under nulls_distinct=False
+            data = {**dict.fromkeys(refs), **data}
+
         data = self._prepare_data(data)
 
         replacements = {
@@ -1356,21 +1384,35 @@ class ObjectMatchCriteria:
             if hasattr(expr, "get_expression_for_validation"):
                 expr = expr.get_expression_for_validation()
 
-            refs = [F(ref) for ref in _get_refs(expr)]
-            for ref in refs:
-                if ref not in replacements:
-                    return None  # cannot match, missing field data
-                if isinstance(replacements[ref], UnresolvedReference):
-                    return None  # cannot match, missing field data
-
-            rhs = expr.replace_expressions(replacements)
-            condition = Exact(expr, rhs)
-            filters.append(condition)
+            expr_filter = self._build_expression_filter(expr, data, replacements)
+            if expr_filter is None:
+                return None  # cannot match
+            filters.append(expr_filter)
 
         qs = self.model_class.objects.filter(*filters)
         if self.condition:
             qs = qs.filter(self.condition)
         return qs
+
+    def _build_expression_filter(self, expr, data, replacements):
+        """Builds the filter for one constraint expression, or None if unmatchable."""
+        expr_refs = _get_refs(expr)
+        if self.nulls_not_distinct and any(data.get(r) is None for r in expr_refs):
+            # NULL participates in uniqueness: match via IS NULL. Only
+            # expressible for a plain single-field reference; a composite
+            # expression over a NULL value cannot be matched.
+            if len(expr_refs) == 1:
+                return Q(**{f"{next(iter(expr_refs))}__isnull": True})
+            return None
+
+        for ref in (F(r) for r in expr_refs):
+            if ref not in replacements:
+                return None  # cannot match, missing field data
+            if isinstance(replacements[ref], UnresolvedReference):
+                return None  # cannot match, missing field data
+
+        rhs = expr.replace_expressions(replacements)
+        return Exact(expr, rhs)
 
     def _prepare_data(self, data: dict) -> dict:
         prepared = {}
@@ -1821,6 +1863,125 @@ class CableTerminationSetMatcher:
 
 
 @dataclass
+class RackReservationUnitOverlapMatcher:
+    """
+    Match a RackReservation by unit overlap within its rack.
+
+    RackReservation has no unique constraint; identity is chosen as "same
+    rack, sharing at least one unit". Exact-set equality would never
+    converge a payload whose unit set grew or shrank between cycles;
+    overlap does, with the submitted units replacing the stored set.
+    ObjectMatchCriteria is scalar-field-only and cannot express an
+    ArrayField overlap.
+
+    A payload overlapping SEVERAL reservations has no single-row answer
+    (binding any one still conflicts with the others at validation), so
+    resolve() refuses to choose rather than guessing -- see resolve().
+    """
+
+    model_class: type[models.Model]
+    name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
+
+    def has_required_fields(self, data: dict) -> bool:
+        """A rack ref and a non-empty units list are present."""
+        units = data.get("units")
+        return (
+            data.get("rack") is not None
+            and isinstance(units, list)
+            and len(units) > 0
+        )
+
+    @staticmethod
+    def _real_int(value) -> bool:
+        """Accept only real ints: bool would otherwise mean pk/unit 1."""
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    def _clean_units(self, data: dict) -> list | None:
+        """The units list when every element is a real int, else None."""
+        units = data.get("units")
+        if not isinstance(units, list) or not units:
+            return None
+        if not all(self._real_int(u) for u in units):
+            return None
+        return units
+
+    def fingerprint(self, data: dict) -> int | None:
+        """
+        In-batch dedupe key: rack ref + exact unit set, order-insensitive.
+
+        Overlap is not hashable, so only IDENTICAL unit sets merge here.
+        Overlapping-but-different in-batch payloads plan separately and
+        converge onto one row at apply through the pre-save re-match (last
+        writer wins) -- the same end state they reach when sent in separate
+        batches. Authoritative matching is build_queryset.
+        """
+        rack = data.get("rack")
+        units = self._clean_units(data)
+        if rack is None or units is None:
+            return None
+        if isinstance(rack, UnresolvedReference):
+            rack_key = ("__uuid__", rack.uuid)
+        elif self._real_int(rack):
+            rack_key = rack
+        else:
+            rack_key = ("__str__", str(rack))
+        return hash((
+            self.model_class.__name__,
+            self.name,
+            rack_key,
+            tuple(sorted(set(units))),
+        ))
+
+    def build_queryset(self, data: dict) -> models.QuerySet | None:
+        """
+        Overlap query, only when the rack is a resolved int pk.
+
+        Resolved references arrive as plain ints; an UnresolvedReference
+        means the rack is either being created in this batch or exists but
+        failed to match -- either way there is no pk to query, so abstain
+        and let the CREATE stand. bool is rejected explicitly: on the
+        direct apply path rack=true would otherwise coerce to rack_id=1
+        and hand the payload to rack 1's overlapping reservation.
+        """
+        rack = data.get("rack")
+        units = self._clean_units(data)
+        if units is None or not self._real_int(rack):
+            return None
+        return self.model_class.objects.filter(rack_id=rack, units__overlap=units)
+
+    def resolve(self, queryset: models.QuerySet, data: dict):
+        """
+        Bind a single overlapping reservation, or refuse to choose.
+
+        Zero rows: create. One row: that reservation, whatever its user --
+        every submitted field, user included, is last-writer-wins on a
+        match. Two or more rows: raise rather than guess; the message
+        names the rows and the remedies, and the same refusal covers rows
+        left behind by the residual concurrent-apply race.
+        """
+        rows = list(queryset.order_by("pk"))
+        if not rows:
+            return None
+        if len(rows) == 1:
+            return rows[0]
+        listing = "; ".join(
+            f"pk={r.pk} units={sorted(r.units)} user_id={r.user_id}" for r in rows
+        )
+        units = sorted({u for u in data.get("units", []) if self._real_int(u)})
+        raise AmbiguousObjectMatch(
+            f"dcim.rackreservation payload units {units} overlap "
+            f"{len(rows)} existing reservations on rack {data.get('rack')}: "
+            f"{listing}. Split the payload to align with the existing "
+            "reservations, or merge/delete the overlapping reservations in "
+            "NetBox.",
+            "dcim.rackreservation",
+        )
+
+
+@dataclass
 class VRFIPNetworkIPMatcher:
     """Matches ip in a vrf, ignores mask."""
 
@@ -1941,7 +2102,12 @@ def _get_custom_field_matchers(model_class) -> tuple:
     """Get matchers for unique custom fields (cached)."""
     if not hasattr(model_class, "get_custom_fields"):
         return ()
-    unique_custom_fields = CustomField.objects.get_for_model(model_class).filter(unique=True)
+    # NetBox 4.7 changed CustomField.objects.get_for_model() to return a
+    # materialized list rather than a QuerySet, so filter by iteration
+    # (works on both).
+    unique_custom_fields = [
+        cf for cf in CustomField.objects.get_for_model(model_class) if cf.unique
+    ]
     if not unique_custom_fields:
         return ()
     return tuple(
@@ -2019,6 +2185,7 @@ def _get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
                     fields=tuple(constraint.fields),
                     condition=constraint.condition,
                     name=constraint.name,
+                    nulls_not_distinct=constraint.nulls_distinct is False,
                 )
             )
         elif len(constraint.expressions) > 0:
@@ -2028,6 +2195,7 @@ def _get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
                     expressions=tuple(constraint.expressions),
                     condition=constraint.condition,
                     name=constraint.name,
+                    nulls_not_distinct=constraint.nulls_distinct is False,
                 )
             )
         else:
@@ -2143,6 +2311,13 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     if object_type == "dcim.cable":
         # Cable identity lives entirely in list fields skipped by the scalar-only
         # cache key; always run the authoritative build_queryset matcher loop.
+        return None
+
+    if object_type == "dcim.rackreservation":
+        # Reservation identity lives in the units ArrayField, which the
+        # scalar-only key below skips -- two different reservations on one
+        # rack could share a key and serve each other's cached answer.
+        # Returning None disables both the django and request-scoped caches.
         return None
 
     if object_type == "dcim.virtualchassis":

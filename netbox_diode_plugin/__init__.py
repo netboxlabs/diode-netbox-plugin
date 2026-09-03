@@ -16,7 +16,7 @@ class NetBoxDiodePluginConfig(PluginConfig):
     version = version_semver()
     base_url = "diode"
     min_version = "4.4.10"
-    max_version = "4.6.99"
+    max_version = "4.7.99"
     middleware = [
         "netbox_diode_plugin.api.profile.DiodeProfileMiddleware",
     ]
@@ -115,6 +115,37 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # with small jittered backoff. Set to 0 to disable retries.
         "apply_deadlock_max_retries": 2,
     }
+
+    def ready(self):
+        """Connect the service-user permission provisioning signals."""
+        super().ready()
+        from django.contrib.contenttypes.models import ContentType
+        from django.db.models.signals import post_migrate, post_save
+
+        from .provisioning import (
+            extend_view_permission_for_new_type,
+            provision_diode_permissions,
+        )
+        post_migrate.connect(
+            provision_diode_permissions,
+            sender=self,
+            dispatch_uid="netbox_diode_plugin.provision_diode_permissions",
+        )
+        # ContentType rows (and thus ObjectTypes) are created lazily on
+        # first reference; keep the view grant complete as they appear.
+        # ObjectType is a proxy of ContentType and Django signals fire with
+        # the class the save went through, so connect both senders.
+        from core.models import ObjectType
+        post_save.connect(
+            extend_view_permission_for_new_type,
+            sender=ContentType,
+            dispatch_uid="netbox_diode_plugin.extend_view_permission_ct",
+        )
+        post_save.connect(
+            extend_view_permission_for_new_type,
+            sender=ObjectType,
+            dispatch_uid="netbox_diode_plugin.extend_view_permission_ot",
+        )
 
 
 config = NetBoxDiodePluginConfig
