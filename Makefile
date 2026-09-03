@@ -12,6 +12,11 @@ DOCKER_PATH := docker/$(NETBOX_MINOR_VERSION)
 DOCKER_COMMON_PATH := docker/common
 DOCKER_OVERRIDE := $(DOCKER_PATH)/docker-compose.override.yaml
 COMPOSE_FILES := -f $(DOCKER_COMMON_PATH)/docker-compose.yaml $(if $(wildcard $(DOCKER_OVERRIDE)),-f $(DOCKER_OVERRIDE))
+# CI-only overlay (GitHub sets CI=true): relaxes Postgres durability for the
+# throwaway test database. Never included for developer stacks.
+ifneq ($(CI),)
+  COMPOSE_FILES += -f $(DOCKER_COMMON_PATH)/docker-compose.ci.yaml
+endif
 TEST_SELECTOR := "/opt/netbox/netbox/netbox_diode_plugin/tests/$(NETBOX_MINOR_VERSION)/tests/"
 
 # Export variables so they're available to docker-compose
@@ -42,7 +47,7 @@ docker-compose-netbox-plugin-test-lint:
 
 .PHONY: docker-compose-netbox-plugin-test-cover
 docker-compose-netbox-plugin-test-cover:
-	@$(DOCKER_COMPOSE) $(COMPOSE_FILES) -f $(DOCKER_COMMON_PATH)/docker-compose.test.yaml run --rm -u root -e COVERAGE_FILE=/opt/netbox/netbox/coverage/.coverage netbox sh -c "coverage run --source=netbox_diode_plugin --omit=*/migrations/* ./manage.py test --keepdb $(TEST_SELECTOR) && coverage xml -o /opt/netbox/netbox/coverage/report.xml && coverage report -m | tee /opt/netbox/netbox/coverage/report.txt"; \
+	@$(DOCKER_COMPOSE) $(COMPOSE_FILES) -f $(DOCKER_COMMON_PATH)/docker-compose.test.yaml run --rm -u root -e COVERAGE_FILE=/opt/netbox/netbox/coverage/.coverage -e COVERAGE_CORE=sysmon netbox sh -c "echo \"[timing] test start \$$(date -u +%T)\" && coverage run --source=netbox_diode_plugin --omit=*/migrations/* ./manage.py test --keepdb $(TEST_SELECTOR); rc=\$$?; echo \"[timing] test end \$$(date -u +%T)\"; [ \$$rc -eq 0 ] && coverage xml -o /opt/netbox/netbox/coverage/report.xml && coverage report -m | tee /opt/netbox/netbox/coverage/report.txt; exit \$$rc"; \
 	EXIT_CODE=$$?; \
 	$(MAKE) docker-compose-netbox-plugin-down; \
 	exit $$EXIT_CODE
