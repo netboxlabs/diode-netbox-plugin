@@ -156,6 +156,18 @@ def _pk_or_content_type_ref(value):
     # For regular related fields, get the primary key
     return  value.pk if value is not None else None
 
+# CREATE data drops None values (the serializer supplies defaults), which
+# erases the distinction between "field not submitted" and "field
+# explicitly null". For the types below, apply-path semantics depend on
+# that distinction for the named keys -- the rack pre-save gate and the
+# located-rack adopter must be able to tell an asserted null location from
+# an absent one -- so an explicitly-submitted null survives into CREATE
+# change data.
+_CREATE_PRESERVED_NULL_KEYS = {
+    "dcim.rack": ("location",),
+}
+
+
 def clean_diff_data(data: dict, exclude_empty_values: bool = True) -> dict:
     """Clean diff data by removing null values."""
     result = {}
@@ -213,6 +225,11 @@ def diff_to_change(
 
     if change_type != ChangeType.NOOP:
         change.data = _tidy(postchange_data, exclude_empty_values=not preserve_empty)
+        if change_type == ChangeType.CREATE:
+            for key in _CREATE_PRESERVED_NULL_KEYS.get(object_type, ()):
+                if key in postchange_data and postchange_data[key] is None:
+                    change.data[key] = None
+            change.data = sort_dict_recursively(change.data)
 
     return change
 
