@@ -2114,19 +2114,26 @@ class RackSiteNameMatcher:
         Site-wide name query, only when site is a resolved int pk.
 
         Abstains when a rack already carries this payload's asset tag, so
-        unique_asset_tag keeps winning whenever it can; otherwise proceeds,
-        letting a payload that adds a tag to an existing tagless rack bind
-        it instead of duplicating the rack.
+        unique_asset_tag keeps winning whenever it can; otherwise proceeds
+        over TAGLESS candidates only, letting a payload that adds a tag to
+        an existing tagless rack bind it instead of duplicating the rack,
+        while never binding a same-named rack that carries a different tag.
         """
         if not self.has_required_fields(data):
             return None
         site = data.get("site")
         if not self._real_int(site):
             return None
+        qs = self.model_class.objects.filter(site_id=site, name=data["name"])
         tag = data.get("asset_tag")
-        if tag and self.model_class.objects.filter(asset_tag=tag).exists():
-            return None
-        return self.model_class.objects.filter(site_id=site, name=data["name"])
+        if tag:
+            if self.model_class.objects.filter(asset_tag=tag).exists():
+                return None
+            # A new tag may only be attached to a TAGLESS rack: a same-named
+            # rack carrying a different tag is a different physical rack, and
+            # binding it would rewrite its identity with this payload's tag.
+            qs = qs.filter(models.Q(asset_tag__isnull=True) | models.Q(asset_tag=""))
+        return qs
 
     def resolve(self, queryset: models.QuerySet, data: dict):
         """

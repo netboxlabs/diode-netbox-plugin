@@ -91,7 +91,7 @@ class RackSiteNameMatcherResolveTestCase(TestCase):
         return Rack.objects.create(name=name, site=site or self.site, location=location)
 
     def test_asset_tag_rule(self):
-        """A tag already on another rack wins; a new tag still binds by (site, name)."""
+        """A tag already on another rack wins; a new tag binds only a tagless (site, name) rack."""
         rack = self._rack()
         tagged = Rack.objects.create(name="other", site=self.site2, asset_tag="rsm-AT1")
         self.assertIsNone(
@@ -104,6 +104,12 @@ class RackSiteNameMatcherResolveTestCase(TestCase):
         self.assertEqual(
             find_existing_object({"name": "r1", "site": self.site.pk, "asset_tag": "rsm-NEW"}, "dcim.rack"),
             rack,
+        )
+        # a same-named rack carrying a DIFFERENT tag is another physical rack
+        rack.asset_tag = "rsm-AT-A"
+        rack.save()
+        self.assertIsNone(
+            find_existing_object({"name": "r1", "site": self.site.pk, "asset_tag": "rsm-AT-B"}, "dcim.rack")
         )
 
     def _populate_device(self, rack):
