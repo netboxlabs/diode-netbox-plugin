@@ -2126,8 +2126,8 @@ class RackSiteNameMatcher:
         an explicitly empty tag is an assertion of taglessness and is held
         to the same rule.
         A submitted facility_id narrows the same way: a candidate with that
-        facility id wins outright, and candidates with a different one are
-        excluded.
+        facility id wins outright, candidates with a different one are
+        excluded, and an explicitly empty value binds only racks without one.
         """
         if not self.has_required_fields(data):
             return None
@@ -2144,13 +2144,15 @@ class RackSiteNameMatcher:
             # tag is a different physical rack, and binding it would rewrite
             # (or clear) its identity with this payload's value.
             qs = qs.filter(models.Q(asset_tag__isnull=True) | models.Q(asset_tag=""))
-        facility_id = data.get("facility_id")
-        if facility_id:
+        if "facility_id" in data:
             # facility_id discriminates same-named racks the way an asset tag
             # does: a candidate carrying THIS facility id is the rack meant,
-            # and one carrying a different id is another physical rack.
-            exact = qs.filter(facility_id=facility_id)
-            if exact.exists():
+            # one carrying a different id is another physical rack, and an
+            # explicitly empty value asserts "no facility id" -- it may bind
+            # only a rack that has none.
+            facility_id = data["facility_id"]
+            exact = qs.filter(facility_id=facility_id) if facility_id else qs.none()
+            if facility_id and exact.exists():
                 qs = exact
             else:
                 qs = qs.filter(

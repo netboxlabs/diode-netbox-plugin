@@ -130,7 +130,7 @@ class RackSiteNameMatcherResolveTestCase(TestCase):
         self.assertEqual(find_existing_object({"name": "r1", "site": self.site.pk}, "dcim.rack"), rack)
 
     def test_facility_id_rule(self):
-        """A candidate carrying the submitted facility id wins; a different one is excluded."""
+        """A candidate carrying the submitted facility id wins; a different or asserted-empty one is excluded."""
         older_null = self._rack()
         located = self._rack(location=self.location)
         located.facility_id = "rsm-F1"
@@ -147,6 +147,15 @@ class RackSiteNameMatcherResolveTestCase(TestCase):
             _matcher().fingerprint({"name": "r1", "site": self.site.pk, "facility_id": "rsm-F1"}),
             _matcher().fingerprint({"name": "r1", "site": self.site.pk, "facility_id": "rsm-F2"}),
         )
+        # an explicitly empty facility id asserts "none": even a populated F1 rack must not be cleared
+        self._populate_device(located)
+        for empty in ("", None):
+            self.assertEqual(
+                find_existing_object({"name": "r1", "site": self.site.pk, "facility_id": empty}, "dcim.rack"),
+                older_null,
+            )
+        # ...while a bare {name, site} ref still prefers the populated F1 rack
+        self.assertEqual(self._find(), located)
 
     def test_power_feeds_count_as_populated(self):
         """A rack holding only power feeds is populated; it beats an empty null duplicate."""
