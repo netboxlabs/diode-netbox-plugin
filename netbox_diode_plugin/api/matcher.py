@@ -2094,7 +2094,7 @@ class RackSiteNameMatcher:
         Deliberately NOT an ungated name key: two genuinely different
         same-named racks in different locations of one site, sent in one
         batch, must not dedupe-merge. Mixed-shape convergence happens at
-        apply (pre-save bind, located-CREATE adoption), not here.
+        apply (the bind-only pre-save match), not here.
         """
         if not self.has_required_fields(data):
             return None

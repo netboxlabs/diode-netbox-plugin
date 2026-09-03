@@ -90,6 +90,22 @@ class RackSiteNameMatcherResolveTestCase(TestCase):
     def _rack(self, name="r1", location=None, site=None):
         return Rack.objects.create(name=name, site=site or self.site, location=location)
 
+    def test_asset_tag_rule(self):
+        """A tag already on another rack wins; a new tag still binds by (site, name)."""
+        rack = self._rack()
+        tagged = Rack.objects.create(name="other", site=self.site2, asset_tag="rsm-AT1")
+        self.assertIsNone(
+            _matcher().fingerprint({"name": "r1", "site": self.site.pk, "asset_tag": "rsm-NEW"})
+        )
+        self.assertEqual(
+            find_existing_object({"name": "r1", "site": self.site.pk, "asset_tag": "rsm-AT1"}, "dcim.rack"),
+            tagged,
+        )
+        self.assertEqual(
+            find_existing_object({"name": "r1", "site": self.site.pk, "asset_tag": "rsm-NEW"}, "dcim.rack"),
+            rack,
+        )
+
     def _populate_device(self, rack):
         return Device.objects.create(
             name=f"rsm-dev-{rack.pk}", site=rack.site, rack=rack,

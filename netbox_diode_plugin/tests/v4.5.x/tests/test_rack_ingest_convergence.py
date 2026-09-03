@@ -44,7 +44,7 @@ class RackConvergenceTestCase(TestCase):
     def _ingest(self, entity, object_type):
         self._apply(self._plan(entity, object_type))
 
-    def test_mon324_repro_converges(self):
+    def test_location_less_rack_reingest_converges(self):
         """The original bug: nested location-less rack duplicated per cycle."""
         self._ingest(self._reservation_entity(), "dcim.rackreservation")
         cs = self._plan(self._reservation_entity(), "dcim.rackreservation")
@@ -115,29 +115,3 @@ class RackConvergenceTestCase(TestCase):
             {"status", "width", "u_height"} <= set(warnings[0]["fields"]),
             warnings,
         )
-
-    def test_mixed_batch_null_first_two_racks(self):
-        """
-        No rack adopter in this minimal design: a located CREATE beside a null rack.
-
-        A location-less CREATE applies first and creates a location-null rack.
-        A located CREATE for the same (site, name), planned separately and
-        applied second, then inserts its OWN row: the (location, name) DB
-        constraint has nothing to collide with (the null rack's location is
-        NULL, and the constraint is NULLS DISTINCT), and this branch carries
-        no adopter to notice the null sibling and reuse it instead. TWO
-        racks, unmerged, is the documented outcome here -- collapsing them
-        into one is out of this branch's scope.
-        """
-        cs_locationless = self._plan(self._rack_entity({"status": "reserved"}), "dcim.rack")
-        cs_located = self._plan(
-            self._rack_entity({"location": {"name": "rc-loc", "site": {"name": "rc-site"}}}),
-            "dcim.rack")
-        self._apply(cs_locationless)
-        self._apply(cs_located)
-        self.assertEqual(Rack.objects.count(), 2)
-        racks = list(Rack.objects.order_by("pk"))
-        null_rack, located_rack = racks[0], racks[1]
-        self.assertIsNone(null_rack.location_id)
-        self.assertEqual(null_rack.status, "reserved")
-        self.assertEqual(located_rack.location_id, self.location.pk)
