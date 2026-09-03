@@ -2160,7 +2160,7 @@ class RackSiteNameMatcher:
         Choose among same-(site, name) candidates, bounded by populated-ness.
 
         One row binds outright. Among several, a SOLE populated row (it has
-        devices or reservations) wins -- empty duplicates starve rather
+        devices, reservations or power feeds) wins -- empty duplicates starve rather
         than absorb references. With no populated row the oldest
         location-null row wins (the shape this payload created before the
         fix existed). Several populated rows -- or none populated and none
@@ -2168,7 +2168,7 @@ class RackSiteNameMatcher:
         strength of a name.
 
         Populated-ness and location are read from ONE annotated, joined
-        query rather than a per-row devices.exists() / reservations.exists()
+        query rather than per-row devices/reservations/powerfeeds .exists()
         / .count() probe each -- a candidate list of N rows previously cost
         up to 3N extra queries just to decide whether to raise.
         """
@@ -2176,6 +2176,7 @@ class RackSiteNameMatcher:
             queryset.annotate(
                 n_dev=Count("devices", distinct=True),
                 n_res=Count("reservations", distinct=True),
+                n_pf=Count("powerfeeds", distinct=True),
             )
             .select_related("location")
             .order_by("pk")
@@ -2184,7 +2185,7 @@ class RackSiteNameMatcher:
             return None
         if len(rows) == 1:
             return rows[0]
-        populated = [r for r in rows if r.n_dev or r.n_res]
+        populated = [r for r in rows if r.n_dev or r.n_res or r.n_pf]
         if len(populated) == 1:
             return populated[0]
         if not populated:
@@ -2195,12 +2196,12 @@ class RackSiteNameMatcher:
 
     @staticmethod
     def _rack_listing_entry(r) -> str:
-        """One row's listing entry: pk, location label, devices/reservations."""
+        """One row's listing entry: pk, location label, devices/reservations/power feeds."""
         location = (
             "location=None" if r.location_id is None
             else f"location={r.location.name} ({r.location_id})"
         )
-        return f"pk={r.pk} {location} devices={r.n_dev} reservations={r.n_res}"
+        return f"pk={r.pk} {location} devices={r.n_dev} reservations={r.n_res} powerfeeds={r.n_pf}"
 
     @classmethod
     def _rack_listing(cls, rows: list, populated: list) -> str:

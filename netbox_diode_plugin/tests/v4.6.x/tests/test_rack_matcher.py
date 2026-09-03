@@ -2,7 +2,18 @@
 # Copyright 2026 NetBox Labs, Inc.
 """Unit tests for RackSiteNameMatcher, rack differ preserve, and rack routing."""
 
-from dcim.models import Device, DeviceRole, DeviceType, Location, Manufacturer, Rack, RackReservation, Site
+from dcim.models import (
+    Device,
+    DeviceRole,
+    DeviceType,
+    Location,
+    Manufacturer,
+    PowerFeed,
+    PowerPanel,
+    Rack,
+    RackReservation,
+    Site,
+)
 from django.test import TestCase
 from users.models import User
 
@@ -129,6 +140,14 @@ class RackSiteNameMatcherResolveTestCase(TestCase):
             _matcher().fingerprint({"name": "r1", "site": self.site.pk, "facility_id": "rsm-F1"}),
             _matcher().fingerprint({"name": "r1", "site": self.site.pk, "facility_id": "rsm-F2"}),
         )
+
+    def test_power_feeds_count_as_populated(self):
+        """A rack holding only power feeds is populated; it beats an empty null duplicate."""
+        self._rack()  # empty location-null duplicate
+        located = self._rack(location=self.location)
+        panel = PowerPanel.objects.create(site=self.site, name="rsm-panel")
+        PowerFeed.objects.create(power_panel=panel, rack=located, name="rsm-feed")
+        self.assertEqual(self._find(), located)
 
     def _populate_device(self, rack):
         return Device.objects.create(
