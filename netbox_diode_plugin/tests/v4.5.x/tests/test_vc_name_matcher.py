@@ -20,6 +20,7 @@ from netbox_diode_plugin.api.common import (
     UnresolvedReference,
 )
 from netbox_diode_plugin.api.matcher import (
+    _PRE_SAVE_MATCH_BIND_ONLY,
     _REQUIRES_PRE_SAVE_MATCH,
     AmbiguousObjectMatch,
     find_existing_object,
@@ -710,8 +711,31 @@ class PreSaveMatchBindOnlyTests(TestCase):
         "dcim.inventoryitem",
     )
 
+    #: Every _REQUIRES_PRE_SAVE_MATCH entry EXCEPT the two bind-only types
+    #: (dcim.virtualchassis, dcim.rack), hardcoded rather than derived from
+    #: _REQUIRES_PRE_SAVE_MATCH - _PRE_SAVE_MATCH_BIND_ONLY: a derived loop
+    #: would pass trivially however _PRE_SAVE_MATCH_BIND_ONLY grew, because
+    #: whatever got added to it would also be subtracted out of the set this
+    #: test iterates. Writing the members out means a third type added to
+    #: _PRE_SAVE_MATCH_BIND_ONLY without a matching change here fails this
+    #: test instead of silently narrowing what it covers.
+    NON_BIND_ONLY_PRE_SAVE_TYPES = (
+        "dcim.cable",
+        "dcim.macaddress",
+        "dcim.module",
+        "dcim.modulebay",
+        "dcim.rackreservation",
+        "ipam.prefix",
+        "ipam.vlan",
+        "ipam.vlangroup",
+        "ipam.vrf",
+        "virtualization.cluster",
+        "virtualization.virtualmachine",
+        "wireless.wirelesslan",
+    )
+
     def test_virtualchassis_binds_without_writing(self):
-        """The one bind-only type, and the reason the seam exists at all."""
+        """The original bind-only type, and the reason the seam exists at all."""
         self.assertTrue(pre_save_match_binds_only("dcim.virtualchassis"))
 
     def test_every_other_pre_save_matched_type_still_applies_its_payload(self):
@@ -719,11 +743,16 @@ class PreSaveMatchBindOnlyTests(TestCase):
         Naming them all: this is a behavioural change nobody else may inherit.
 
         dcim.module's find-first, for one, exists precisely to APPLY a payload
-        that the IntegrityError recovery it replaced used to discard.
+        that the IntegrityError recovery it replaced used to discard. The
+        bind-only membership itself is pinned separately, so growing it (as
+        dcim.rack did) does not silently widen what this test lets through.
         """
-        for object_type in sorted(_REQUIRES_PRE_SAVE_MATCH - {"dcim.virtualchassis"}):
+        for object_type in self.NON_BIND_ONLY_PRE_SAVE_TYPES:
             with self.subTest(object_type=object_type):
+                self.assertIn(object_type, _REQUIRES_PRE_SAVE_MATCH)
                 self.assertFalse(pre_save_match_binds_only(object_type))
+        self.assertEqual(
+            _PRE_SAVE_MATCH_BIND_ONLY, {"dcim.virtualchassis", "dcim.rack"})
 
     def test_no_auto_created_component_is_bind_only(self):
         """
@@ -744,7 +773,7 @@ class PreSaveMatchBindOnlyTests(TestCase):
 
     def test_a_type_with_no_pre_save_match_at_all_is_not_bind_only(self):
         """Bind-only narrows the find-first route; it is not a route of its own."""
-        for object_type in ("dcim.site", "dcim.device", "dcim.rack"):
+        for object_type in ("dcim.site", "dcim.device", "dcim.location"):
             with self.subTest(object_type=object_type):
                 self.assertFalse(pre_save_match_binds_only(object_type))
                 self.assertFalse(requires_pre_save_match(object_type, {}))
