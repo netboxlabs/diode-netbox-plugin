@@ -1193,15 +1193,28 @@ class ObjectMatchCriteria:
     model_class: type[models.Model] | None = None
     name: str | None = None
 
+    # True for constraints declared with nulls_distinct=False (NetBox 4.7
+    # collapses e.g. Device's tenant-null partial constraint into one such
+    # constraint): NULL participates in uniqueness, so an absent/None field
+    # matches via IS NULL instead of disqualifying the matcher.
+    nulls_not_distinct: bool = False
+
     min_version: str | None = None
     max_version: str | None = None
 
     def __hash__(self):
         """Hash the object match criteria."""
-        return hash((self.fields, self.expressions, self.condition, self.model_class.__name__, self.name))
+        return hash((
+            self.fields, self.expressions, self.condition,
+            self.model_class.__name__, self.name, self.nulls_not_distinct,
+        ))
 
     def has_required_fields(self, data) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
+        if self.nulls_not_distinct:
+            # absent fields are treated as NULL, which is a matchable value;
+            # the all-None guards below still refuse fully-null lookups.
+            return True
         return all(field in data for field in self._get_refs())
 
     @cache
@@ -1255,7 +1268,7 @@ class ObjectMatchCriteria:
         insensitive = self._get_insensitive_refs()
         values = []
         for field in sorted_fields:
-            value = data[field]
+            value = data.get(field) if self.nulls_not_distinct else data[field]
             if isinstance(value, dict):
                 logger.warning(f"unexpected value type for fingerprinting: {value}")
                 return None
@@ -1330,6 +1343,10 @@ class ObjectMatchCriteria:
         for field_name in self.fields:
             field = self.model_class._meta.get_field(field_name)
             if field_name not in data:
+                if self.nulls_not_distinct:
+                    # absent field participates as NULL (IS NULL lookup)
+                    lookup_kwargs[field.name] = None
+                    continue
                 return None  # cannot match, missing field data
             lookup_value = data.get(field_name)
             if isinstance(lookup_value, UnresolvedReference):
@@ -1351,6 +1368,10 @@ class ObjectMatchCriteria:
         if refs and all(data.get(r) is None for r in refs):
             return None
 
+        if self.nulls_not_distinct:
+            # absent fields participate as NULL under nulls_distinct=False
+            data = {**dict.fromkeys(refs), **data}
+
         data = self._prepare_data(data)
 
         replacements = {
@@ -1363,21 +1384,35 @@ class ObjectMatchCriteria:
             if hasattr(expr, "get_expression_for_validation"):
                 expr = expr.get_expression_for_validation()
 
-            refs = [F(ref) for ref in _get_refs(expr)]
-            for ref in refs:
-                if ref not in replacements:
-                    return None  # cannot match, missing field data
-                if isinstance(replacements[ref], UnresolvedReference):
-                    return None  # cannot match, missing field data
-
-            rhs = expr.replace_expressions(replacements)
-            condition = Exact(expr, rhs)
-            filters.append(condition)
+            expr_filter = self._build_expression_filter(expr, data, replacements)
+            if expr_filter is None:
+                return None  # cannot match
+            filters.append(expr_filter)
 
         qs = self.model_class.objects.filter(*filters)
         if self.condition:
             qs = qs.filter(self.condition)
         return qs
+
+    def _build_expression_filter(self, expr, data, replacements):
+        """Builds the filter for one constraint expression, or None if unmatchable."""
+        expr_refs = _get_refs(expr)
+        if self.nulls_not_distinct and any(data.get(r) is None for r in expr_refs):
+            # NULL participates in uniqueness: match via IS NULL. Only
+            # expressible for a plain single-field reference; a composite
+            # expression over a NULL value cannot be matched.
+            if len(expr_refs) == 1:
+                return Q(**{f"{next(iter(expr_refs))}__isnull": True})
+            return None
+
+        for ref in (F(r) for r in expr_refs):
+            if ref not in replacements:
+                return None  # cannot match, missing field data
+            if isinstance(replacements[ref], UnresolvedReference):
+                return None  # cannot match, missing field data
+
+        rhs = expr.replace_expressions(replacements)
+        return Exact(expr, rhs)
 
     def _prepare_data(self, data: dict) -> dict:
         prepared = {}
@@ -2067,7 +2102,12 @@ def _get_custom_field_matchers(model_class) -> tuple:
     """Get matchers for unique custom fields (cached)."""
     if not hasattr(model_class, "get_custom_fields"):
         return ()
-    unique_custom_fields = CustomField.objects.get_for_model(model_class).filter(unique=True)
+    # NetBox 4.7 changed CustomField.objects.get_for_model() to return a
+    # materialized list rather than a QuerySet, so filter by iteration
+    # (works on both).
+    unique_custom_fields = [
+        cf for cf in CustomField.objects.get_for_model(model_class) if cf.unique
+    ]
     if not unique_custom_fields:
         return ()
     return tuple(
@@ -2145,6 +2185,7 @@ def _get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
                     fields=tuple(constraint.fields),
                     condition=constraint.condition,
                     name=constraint.name,
+                    nulls_not_distinct=constraint.nulls_distinct is False,
                 )
             )
         elif len(constraint.expressions) > 0:
@@ -2154,6 +2195,7 @@ def _get_model_matchers(model_class) -> list[ObjectMatchCriteria]:
                     expressions=tuple(constraint.expressions),
                     condition=constraint.condition,
                     name=constraint.name,
+                    nulls_not_distinct=constraint.nulls_distinct is False,
                 )
             )
         else:

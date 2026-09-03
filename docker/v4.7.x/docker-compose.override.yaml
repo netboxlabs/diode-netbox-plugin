@@ -1,0 +1,5 @@
+services:
+  netbox:
+    volumes:
+      - ./netbox/launch-netbox.sh:/opt/netbox/launch-netbox.sh:z,ro
+      - ./netbox/granian.py:/opt/netbox/netbox/netbox/granian.py:z,ro
