@@ -104,6 +104,13 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 #     (mac_address, assigned_object_type, assigned_object_id).
 #   - dcim.modulebay: matched by (name, device); NetBox's parent-aware
 #     constraint does not catch unscoped duplicates the matcher dedupes.
+#   - dcim.rack: matched by (site, name) only when the payload has location
+#     absent or explicit null; NetBox's (location, name) constraint is NULLS
+#     DISTINCT and enforces nothing there. Only that location-less half of
+#     this type's payload space takes the pre-save match -- see
+#     _rack_pre_save_match_applies -- and it BINDS the row without writing to
+#     it, for the same non-authoritative-identity reason as virtual chassis
+#     below -- see _PRE_SAVE_MATCH_BIND_ONLY.
 #   - dcim.virtualchassis: matched by name when the payload has no master;
 #     NetBox has no uniqueness on VC name at all. Only the MASTERLESS half of
 #     this type's payload space takes the pre-save match -- see
@@ -156,6 +163,7 @@ _REQUIRES_PRE_SAVE_MATCH = frozenset({
     "dcim.macaddress",
     "dcim.module",
     "dcim.modulebay",
+    "dcim.rack",
     "dcim.rackreservation",
     "dcim.virtualchassis",
     "ipam.prefix",
@@ -240,10 +248,32 @@ def _virtualchassis_pre_save_match_applies(data: dict) -> bool:
     return data.get("master") is None
 
 
+def _rack_pre_save_match_applies(data: dict) -> bool:
+    """
+    The rack pre-save match covers only shapes the DB cannot backstop.
+
+    A located CREATE racing a duplicate hits the (location, name)
+    constraint and recovers through the create path's IntegrityError
+    fallback. A CREATE with location absent or explicitly null lands in
+    NULLS DISTINCT territory where nothing stops the duplicate, so those
+    take the pre-save match. Admitting the explicit null is deliberate and
+    depends on the differ preserving it into CREATE data
+    (differ._CREATE_PRESERVED_NULL_KEYS): at match time the site-name
+    matcher then stands aside (location key present), and the bind goes
+    through the auto-derived (location, name) constraint matcher instead,
+    via its ordinary IS NULL filter on location -- this branch carries no
+    site-scoped null-location matcher, so that bind is not scoped to the
+    payload's site and may resolve onto a location-null rack of the same
+    name in a different site.
+    """
+    return data.get("location") is None
+
+
 # Payload-level narrowing for entries in _REQUIRES_PRE_SAVE_MATCH whose
 # pre-save match is safe for only PART of their type's payload space. A type
 # with no gate here takes the pre-save match for every CREATE.
 _PRE_SAVE_MATCH_PAYLOAD_GATES = {
+    "dcim.rack": _rack_pre_save_match_applies,
     "dcim.virtualchassis": _virtualchassis_pre_save_match_applies,
 }
 
@@ -280,10 +310,10 @@ _PRE_SAVE_MATCH_PAYLOAD_GATES = {
 # still worth taking -- a wrong write into another source's live stack is
 # silent and unrepairable, a delayed write is neither -- but it is a trade.
 #
-# Why this set holds dcim.virtualchassis ALONE, when the no-uniqueness argument
-# above applies just as well to the nine other types this file's own gap list
-# names for absent uniqueness -- dcim.macaddress, dcim.modulebay, ipam.prefix,
-# ipam.vlan, ipam.vlangroup, ipam.vrf, virtualization.cluster,
+# Why this set holds dcim.virtualchassis and dcim.rack, when the no-uniqueness
+# argument above applies just as well to the nine other types this file's own
+# gap list names for absent uniqueness -- dcim.macaddress, dcim.modulebay,
+# ipam.prefix, ipam.vlan, ipam.vlangroup, ipam.vrf, virtualization.cluster,
 # virtualization.virtualmachine, wireless.wirelesslan (dcim.module is the
 # separate DB-constraint-backed entry above, and dcim.cable is matched by its
 # terminations): because those were measured to behave the same way, and to do
@@ -292,9 +322,20 @@ _PRE_SAVE_MATCH_PAYLOAD_GATES = {
 # fields through the pre-save match, IDENTICALLY on the parent commit and on
 # origin/develop, so none of it is a regression this branch introduces, and
 # widening the set here would change behaviour for four more types well outside
-# a VirtualChassis ingest PR. dcim.virtualchassis is in this set because this
-# branch is what put VC CREATEs on the pre-save path at all -- not because VC
-# is uniquely exposed. Broadening it is filed separately.
+# this PR's scope. dcim.virtualchassis is in this set because this branch is
+# what put VC CREATEs on the pre-save path at all -- not because VC is
+# uniquely exposed.
+#
+# dcim.rack is in this set for a related but distinct reason: a location-less
+# match binds on (site, name) alone, with location ignored, which is
+# non-authoritative identity, not proof the payload and the matched row
+# describe the same physical rack. And the CREATE data being applied is not
+# even purely the producer's own: transformer._set_defaults has already
+# injected status/width/u_height/starting_unit onto it when the producer left
+# them unasserted, so a write here could stamp those manufactured defaults
+# onto a row the payload never actually described -- see
+# _rack_pre_save_match_applies. Broadening this set further is filed
+# separately.
 #
 # Read narrowly, because this does NOT make a same-named row safe from ingest
 # generally. Once the row exists the matcher finds it by name, so the next
@@ -312,6 +353,7 @@ _PRE_SAVE_MATCH_PAYLOAD_GATES = {
 # applier._try_bind_existing_instance for the ref_id-update gap it does not
 # cover.
 _PRE_SAVE_MATCH_BIND_ONLY = frozenset({
+    "dcim.rack",
     "dcim.virtualchassis",
 })
 
@@ -331,10 +373,10 @@ def requires_pre_save_match(object_type: str, data: dict | None = None) -> bool:
     the safe direction: the pre-save match resolves a CREATE onto an existing
     row, and for every type outside _PRE_SAVE_MATCH_BIND_ONLY it then writes
     the payload there, so taking that route unproven is the direction that does
-    damage, while declining it only forgoes a dedupe. (For the one gated type
-    today, dcim.virtualchassis, the match is bind-only and writes nothing --
-    so the default is conservative about the resolution itself, not about a
-    write.)
+    damage, while declining it only forgoes a dedupe. (For the gated types
+    today, dcim.virtualchassis and dcim.rack, the match is bind-only and
+    writes nothing -- so the default is conservative about the resolution
+    itself, not about a write.)
     """
     if object_type not in _REQUIRES_PRE_SAVE_MATCH:
         return False
@@ -2499,32 +2541,35 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
 
     Includes only simple scalar fields. Entities whose identity depends
     solely on unresolved references (no scalar fields at all) are not
-    cacheable.
+    cacheable. Some object types are never cached due to identity logic
+    that depends on factors the scalar-only key cannot express.
     """
-    if object_type == "dcim.cable":
-        # Cable identity lives entirely in list fields skipped by the scalar-only
-        # cache key; always run the authoritative build_queryset matcher loop.
-        return None
-
-    if object_type == "dcim.rackreservation":
-        # Reservation identity lives in the units ArrayField, which the
-        # scalar-only key below skips -- two different reservations on one
-        # rack could share a key and serve each other's cached answer.
-        # Returning None disables both the django and request-scoped caches.
-        return None
-
-    if object_type == "dcim.virtualchassis":
-        # Not cacheable, and the reason is identity rather than cost. The key
-        # below is built from SCALAR fields only, so it cannot see
-        # common.VC_MEMBER_HINT (a list, and private) -- two payloads naming the
-        # same chassis on behalf of DIFFERENT member devices would share one
-        # key, and the first one's answer would be served to the second, which
-        # is precisely the "pick a row the payload never identified" the
-        # VirtualChassisNameMatcher.resolve rules exist to prevent. A cached hit
-        # would also skip resolve() entirely, so an ambiguity that must be
-        # reported would instead answer with whatever row was cached before the
-        # duplicate appeared. Both caches (django and request-scoped) key off
-        # this function, so returning None disables both.
+    # Types whose lookup must never be served from the scalar-only key:
+    # - dcim.cable: identity lives entirely in the termination lists the key
+    #   skips; always run the authoritative build_queryset matcher loop.
+    # - dcim.rackreservation: identity lives in the units ArrayField the key
+    #   skips; two different reservations on one rack could share a key and
+    #   serve each other's cached answer.
+    # - dcim.virtualchassis: two hazards. The key cannot see
+    #   common.VC_MEMBER_HINT (a list, and private) -- two payloads naming the
+    #   same chassis on behalf of DIFFERENT member devices share one key and the
+    #   first answer is served to the second, precisely the "pick a row the
+    #   payload never identified" VirtualChassisNameMatcher.resolve exists to
+    #   prevent. And a cached hit skips resolve() entirely, so an ambiguity that
+    #   must be reported answers with whatever was cached before the duplicate
+    #   appeared.
+    # - dcim.rack: not a key-shape problem -- a cache hit skips resolve(), so
+    #   the ambiguity refusal and the populated/oldest-null choice would be
+    #   answered by whatever row was cached before a competing row appeared, and
+    #   row creation invalidates nothing.
+    # Returning None disables both the django and request-scoped caches.
+    non_cacheable_types = {
+        "dcim.cable",
+        "dcim.rack",
+        "dcim.rackreservation",
+        "dcim.virtualchassis",
+    }
+    if object_type in non_cacheable_types:
         return None
 
     items = []

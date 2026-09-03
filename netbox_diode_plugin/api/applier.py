@@ -1267,13 +1267,13 @@ def _refuse_write_through_bound_ref(change: Change, bound_only: dict) -> None:
 
     Only the same object_type; a ref-only update of a DIFFERENT type is already
     declined by _instance_for_deferred_update. Nothing plannable reaches either
-    case, and that is pinned rather than assumed: dcim.virtualchassis is the
-    only bind-only type and it is absent from
-    transformer._IS_CIRCULAR_REFERENCE, so generate-diff never emits a VC
-    update without an object_id (test_bind_only_types_are_not_circular_
-    references fails the moment that changes). This guard is for the two ways
-    the shape arrives anyway -- a changeset a client hands to apply-change-set
-    or bulk-apply directly, and one planned before another worker created the
+    case, and that is pinned rather than assumed: every bind-only type is
+    absent from transformer._IS_CIRCULAR_REFERENCE (dcim.virtualchassis and
+    dcim.rack today), so generate-diff never emits an update for one of them
+    without an object_id (test_bind_only_types_are_not_circular_references
+    fails the moment that changes). This guard is for the two ways the shape
+    arrives anyway -- a changeset a client hands to apply-change-set or
+    bulk-apply directly, and one planned before another worker created the
     row the bind now finds.
 
     A caller that means to write the row can still say so, with an explicit
