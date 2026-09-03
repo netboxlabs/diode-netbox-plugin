@@ -2122,7 +2122,9 @@ class RackSiteNameMatcher:
         unique_asset_tag keeps winning whenever it can; otherwise proceeds
         over TAGLESS candidates only, letting a payload that adds a tag to
         an existing tagless rack bind it instead of duplicating the rack,
-        while never binding a same-named rack that carries a different tag.
+        while never binding a same-named rack that carries a different tag;
+        an explicitly empty tag is an assertion of taglessness and is held
+        to the same rule.
         A submitted facility_id narrows the same way: a candidate with that
         facility id wins outright, and candidates with a different one are
         excluded.
@@ -2133,13 +2135,14 @@ class RackSiteNameMatcher:
         if not self._real_int(site):
             return None
         qs = self.model_class.objects.filter(site_id=site, name=data["name"])
-        tag = data.get("asset_tag")
-        if tag:
-            if self.model_class.objects.filter(asset_tag=tag).exists():
+        if "asset_tag" in data:
+            tag = data["asset_tag"]
+            if tag and self.model_class.objects.filter(asset_tag=tag).exists():
                 return None
-            # A new tag may only be attached to a TAGLESS rack: a same-named
-            # rack carrying a different tag is a different physical rack, and
-            # binding it would rewrite its identity with this payload's tag.
+            # An asserted tag state -- a new tag, or explicitly none -- may
+            # only bind a TAGLESS rack: a same-named rack carrying a different
+            # tag is a different physical rack, and binding it would rewrite
+            # (or clear) its identity with this payload's value.
             qs = qs.filter(models.Q(asset_tag__isnull=True) | models.Q(asset_tag=""))
         facility_id = data.get("facility_id")
         if facility_id:

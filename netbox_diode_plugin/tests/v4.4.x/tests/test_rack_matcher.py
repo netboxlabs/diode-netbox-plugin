@@ -121,6 +121,13 @@ class RackSiteNameMatcherResolveTestCase(TestCase):
         self.assertIsNone(
             find_existing_object({"name": "r1", "site": self.site.pk, "asset_tag": "rsm-AT-B"}, "dcim.rack")
         )
+        # an explicitly empty tag asserts taglessness: it must not clear AT-A
+        for empty in ("", None):
+            self.assertIsNone(
+                find_existing_object({"name": "r1", "site": self.site.pk, "asset_tag": empty}, "dcim.rack")
+            )
+        # ...while a bare {name, site} ref (no tag asserted) still binds the tagged rack
+        self.assertEqual(find_existing_object({"name": "r1", "site": self.site.pk}, "dcim.rack"), rack)
 
     def test_facility_id_rule(self):
         """A candidate carrying the submitted facility id wins; a different one is excluded."""
