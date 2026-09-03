@@ -4,19 +4,28 @@ on:
   pull_request:
     paths:
       - "netbox_diode_plugin/**"
+      - ".github/workflows/lint-tests.yml"
+      - "Makefile"
+      - "docker/**"
   push:
     branches:
       - "!release"
     paths:
       - "netbox_diode_plugin/**"
+      - ".github/workflows/lint-tests.yml"
+      - "Makefile"
+      - "docker/**"
 
 env:
   # Default NetBox version used for coverage reporting
   DEFAULT_NETBOX_VERSION: "v4.6.10"
 
+# One run per pull request (or per branch for pushes and manual dispatch), so
+# PRs no longer queue behind each other repo-wide. Superseded runs are cancelled
+# only for pull_request events; a push to a real branch always runs to completion.
 concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: write
@@ -55,7 +64,7 @@ jobs:
           make NETBOX_VERSION=${{ matrix.netbox }} docker-compose-netbox-plugin-test-cover
         continue-on-error: true
       - name: Check results
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           if [[ "${{ steps.lint.outcome }}" == "failure" || "${{ steps.test.outcome }}" == "failure" ]]; then
             echo "Either linting or tests failed"
