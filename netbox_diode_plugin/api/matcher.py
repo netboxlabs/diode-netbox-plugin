@@ -14,7 +14,7 @@ from django.contrib.contenttypes.fields import ContentType
 from django.core.cache import cache as django_cache
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
-from django.db.models import F, Value
+from django.db.models import Count, F, Value
 from django.db.models.fields import SlugField
 from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
@@ -935,6 +935,12 @@ _LOGICAL_MATCHERS = {
             name="logical_mac_address_within_parent",
             model_class=get_object_type_model("dcim.macaddress"),
             condition=Q(assigned_object_id__isnull=True),
+        ),
+    ],
+    "dcim.rack": lambda: [
+        RackSiteNameMatcher(
+            model_class=get_object_type_model("dcim.rack"),
+            name="logical_rack_site_name_no_location",
         ),
     ],
     "dcim.rackreservation": lambda: [
@@ -1978,6 +1984,193 @@ class RackReservationUnitOverlapMatcher:
             "reservations, or merge/delete the overlapping reservations in "
             "NetBox.",
             "dcim.rackreservation",
+        )
+
+
+@dataclass
+class RackSiteNameMatcher:
+    """
+    Match a location-less rack payload by (site, name), any location.
+
+    Rack identity in NetBox is location-scoped with NULLS DISTINCT, so a
+    payload carrying only name + site has no constraint-derived matcher
+    and would duplicate the rack on every re-ingest. This matcher reads
+    such a payload as "the rack called <name> in site <site>": it asserts
+    nothing about location, so the row's location is neither filtered on
+    nor written (key-absent fields are never diffed).
+
+    A payload carrying the location key, a value or an explicit null, is
+    owned by the constraint matchers. A payload carrying an asset tag is a
+    subtler split: ``unique_asset_tag`` must keep winning WHEN IT CAN, so
+    ``has_required_fields`` no longer refuses a tagged payload outright.
+    ``fingerprint`` still abstains for any truthy asset_tag with no DB
+    access, so in-batch nodes carrying different tags never dedupe-merge
+    here; ``build_queryset`` abstains only when a rack already carries
+    that tag, and otherwise proceeds, so the first payload that ADDS a tag
+    to an existing tagless rack binds it (the UPDATE sets the tag) instead
+    of duplicating the rack and stranding the original. Resolution among
+    several candidates is bounded by populated-ness; see resolve().
+    """
+
+    model_class: type[models.Model]
+    name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
+
+    def has_required_fields(self, data: dict) -> bool:
+        """
+        Location-less shape only: name + site, no location key.
+
+        An asset tag no longer gates this matcher off outright -- see the
+        class docstring for the split between fingerprint (always abstains
+        for a truthy tag) and build_queryset (abstains only when the tag is
+        already bound elsewhere).
+        """
+        name = data.get("name")
+        return (
+            isinstance(name, str)
+            and bool(name)
+            and data.get("site") is not None
+            and "location" not in data
+        )
+
+    @staticmethod
+    def _real_int(value) -> bool:
+        """Accept only real ints: bool would otherwise mean pk 1."""
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    def fingerprint(self, data: dict) -> int | None:
+        """
+        In-batch dedupe key: site ref + name, gated to the location-less shape.
+
+        Abstains for any truthy asset_tag without touching the DB: two
+        in-batch nodes carrying different tags must not dedupe-merge, even
+        though build_queryset may still bind an existing tagless rack for
+        either of them individually at lookup time.
+
+        Deliberately NOT an ungated name key: two genuinely different
+        same-named racks in different locations of one site, sent in one
+        batch, must not dedupe-merge. Mixed-shape convergence happens at
+        apply (pre-save bind, located-CREATE adoption), not here.
+        """
+        if not self.has_required_fields(data):
+            return None
+        if data.get("asset_tag"):
+            return None
+        site = data.get("site")
+        if isinstance(site, UnresolvedReference):
+            site_key = ("__uuid__", site.uuid)
+        elif self._real_int(site):
+            site_key = site
+        else:
+            site_key = ("__str__", str(site))
+        return hash((self.model_class.__name__, self.name, site_key, data["name"]))
+
+    def build_queryset(self, data: dict) -> models.QuerySet | None:
+        """
+        Site-wide name query, only when site is a resolved int pk.
+
+        Abstains when a rack already carries this payload's asset tag, so
+        unique_asset_tag keeps winning whenever it can; otherwise proceeds,
+        letting a payload that adds a tag to an existing tagless rack bind
+        it instead of duplicating the rack.
+        """
+        if not self.has_required_fields(data):
+            return None
+        site = data.get("site")
+        if not self._real_int(site):
+            return None
+        tag = data.get("asset_tag")
+        if tag and self.model_class.objects.filter(asset_tag=tag).exists():
+            return None
+        return self.model_class.objects.filter(site_id=site, name=data["name"])
+
+    def resolve(self, queryset: models.QuerySet, data: dict):
+        """
+        Choose among same-(site, name) candidates, bounded by populated-ness.
+
+        One row binds outright. Among several, a SOLE populated row (it has
+        devices or reservations) wins -- empty duplicates starve rather
+        than absorb references. With no populated row the oldest
+        location-null row wins (the shape this payload created before the
+        fix existed). Several populated rows -- or none populated and none
+        null -- refuse loudly: binding would be a data move made on the
+        strength of a name.
+
+        Populated-ness and location are read from ONE annotated, joined
+        query rather than a per-row devices.exists() / reservations.exists()
+        / .count() probe each -- a candidate list of N rows previously cost
+        up to 3N extra queries just to decide whether to raise.
+        """
+        rows = list(
+            queryset.annotate(
+                n_dev=Count("devices", distinct=True),
+                n_res=Count("reservations", distinct=True),
+            )
+            .select_related("location")
+            .order_by("pk")
+        )
+        if not rows:
+            return None
+        if len(rows) == 1:
+            return rows[0]
+        populated = [r for r in rows if r.n_dev or r.n_res]
+        if len(populated) == 1:
+            return populated[0]
+        if not populated:
+            nulls = [r for r in rows if r.location_id is None]
+            if nulls:
+                return nulls[0]
+        raise self._ambiguous_match(rows, populated, data)
+
+    @staticmethod
+    def _rack_listing_entry(r) -> str:
+        """One row's listing entry: pk, location label, devices/reservations."""
+        location = (
+            "location=None" if r.location_id is None
+            else f"location={r.location.name} ({r.location_id})"
+        )
+        return f"pk={r.pk} {location} devices={r.n_dev} reservations={r.n_res}"
+
+    @classmethod
+    def _rack_listing(cls, rows: list, populated: list) -> str:
+        """
+        Full detail for populated rows; empty rows collapse into counts.
+
+        With no populated row at all (the caller's own tie-break already
+        failed to find a safe pick), every row is named in full instead --
+        there is nothing populated to distinguish them by, and the row
+        count in that shape stays small in practice.
+        """
+        if not populated:
+            return "; ".join(cls._rack_listing_entry(r) for r in rows)
+        entries = [cls._rack_listing_entry(r) for r in populated]
+        empty = [r for r in rows if r not in populated]
+        empty_null = sum(1 for r in empty if r.location_id is None)
+        empty_located = len(empty) - empty_null
+        if empty_null:
+            entries.append(f"and {empty_null} empty location-null rows")
+        if empty_located:
+            entries.append(f"and {empty_located} empty located rows")
+        return "; ".join(entries)
+
+    def _ambiguous_match(
+        self, rows: list, populated: list, data: dict
+    ) -> AmbiguousObjectMatch:
+        """Build the refusal naming every populated row and the site."""
+        listing = self._rack_listing(rows, populated)
+        site_pk = data.get("site")
+        site_name = (
+            get_object_type_model("dcim.site").objects
+            .filter(pk=site_pk).values_list("name", flat=True).first()
+        )
+        return AmbiguousObjectMatch(
+            f"dcim.rack payload name {data.get('name')!r} in site "
+            f"{site_name!r} (pk {site_pk}) matches {len(rows)} racks and none "
+            f"can be chosen safely: {listing}. Disambiguate with a location "
+            "key or an asset tag, or merge/rename the racks in NetBox.",
+            "dcim.rack",
         )
 
 
