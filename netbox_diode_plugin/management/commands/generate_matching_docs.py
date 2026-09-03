@@ -130,8 +130,9 @@ class Command(BaseCommand):
             return [a_field, b_field]
 
         class_field_map = {
-            "VirtualChassisNameMatcher": ["name"],
             "RackReservationUnitOverlapMatcher": ["rack", "units"],
+            "RackSiteNameMatcher": ["site", "name"],
+            "VirtualChassisNameMatcher": ["name"],
         }
         mapped_fields = class_field_map.get(matcher.__class__.__name__)
         if mapped_fields:
