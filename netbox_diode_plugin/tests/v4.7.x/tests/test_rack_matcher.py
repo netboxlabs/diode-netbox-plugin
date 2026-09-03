@@ -51,11 +51,10 @@ class RackSiteNameMatcherGateTestCase(TestCase):
         """No location key: NULLS DISTINCT territory, no DB backstop."""
         self.assertTrue(requires_pre_save_match("dcim.rack", {"name": "r", "site": 1}))
 
-    def test_explicit_null_create_takes_pre_save_match(self):
-        """Explicit null is admitted; the (location, name) IS NULL constraint matcher binds."""
-        self.assertTrue(requires_pre_save_match(
+    def test_explicit_null_create_skips_pre_save_match(self):
+        """Explicit null is not admitted: its only matcher is site-blind."""
+        self.assertFalse(requires_pre_save_match(
             "dcim.rack", {"name": "r", "site": 1, "location": None}))
-
     def test_located_create_skips_pre_save_match(self):
         """A real location value keeps its DB-constraint backstop."""
         self.assertFalse(requires_pre_save_match(

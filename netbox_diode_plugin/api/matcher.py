@@ -250,23 +250,25 @@ def _virtualchassis_pre_save_match_applies(data: dict) -> bool:
 
 def _rack_pre_save_match_applies(data: dict) -> bool:
     """
-    The rack pre-save match covers only shapes the DB cannot backstop.
+    The rack pre-save match covers only the location-less shape.
 
     A located CREATE racing a duplicate hits the (location, name)
     constraint and recovers through the create path's IntegrityError
-    fallback. A CREATE with location absent or explicitly null lands in
-    NULLS DISTINCT territory where nothing stops the duplicate, so those
-    take the pre-save match. Admitting the explicit null is deliberate and
-    depends on the differ preserving it into CREATE data
-    (differ._CREATE_PRESERVED_NULL_KEYS): at match time the site-name
-    matcher then stands aside (location key present), and the bind goes
-    through the auto-derived (location, name) constraint matcher instead,
-    via its ordinary IS NULL filter on location -- this branch carries no
-    site-scoped null-location matcher, so that bind is not scoped to the
-    payload's site and may resolve onto a location-null rack of the same
-    name in a different site.
+    fallback, so it needs no pre-save match. A CREATE with the location
+    key ABSENT lands in NULLS DISTINCT territory where nothing stops the
+    duplicate, and only the site-scoped RackSiteNameMatcher can answer
+    for it, so that shape takes the pre-save match.
+
+    An explicit ``location: null`` is deliberately NOT admitted: the
+    site-name matcher stands aside for it, and the only matcher left is
+    the derived (location, name) one, whose IS NULL filter carries no
+    site term -- a pre-save bind through it would attach a same-named
+    rack from ANOTHER site. Such CREATEs insert as they do without this
+    branch. Telling the two shapes apart at apply time depends on the
+    differ preserving the explicit null into CREATE data
+    (differ._CREATE_PRESERVED_NULL_KEYS).
     """
-    return data.get("location") is None
+    return "location" not in data
 
 
 # Payload-level narrowing for entries in _REQUIRES_PRE_SAVE_MATCH whose
