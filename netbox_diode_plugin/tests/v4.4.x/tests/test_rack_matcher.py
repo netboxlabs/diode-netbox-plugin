@@ -248,9 +248,21 @@ class RackCreatePreservesExplicitNullTestCase(TestCase):
         self.assertIn("location", change.data)
         self.assertIsNone(change.data["location"])
 
+    def test_empty_discriminators_survive_as_null(self):
+        """Asserted-empty asset_tag / facility_id reach apply as explicit nulls."""
+        change = self._create_change(
+            {"name": "rpn-r3", "site": {"name": "rpn-site"}, "asset_tag": "", "facility_id": None}
+        )
+        self.assertIn("asset_tag", change.data)
+        self.assertIsNone(change.data["asset_tag"])
+        self.assertIn("facility_id", change.data)
+        self.assertIsNone(change.data["facility_id"])
+
     def test_absent_key_stays_absent(self):
         """A location-less entity's CREATE data has no location key."""
         change = self._create_change(
             {"name": "rpn-r2", "site": {"name": "rpn-site"}}
         )
         self.assertNotIn("location", change.data)
+        self.assertNotIn("asset_tag", change.data)
+        self.assertNotIn("facility_id", change.data)
