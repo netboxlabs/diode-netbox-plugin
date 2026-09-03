@@ -2109,7 +2109,10 @@ class RackSiteNameMatcher:
             site_key = site
         else:
             site_key = ("__str__", str(site))
-        return hash((self.model_class.__name__, self.name, site_key, data["name"]))
+        return hash((
+            self.model_class.__name__, self.name, site_key, data["name"],
+            data.get("facility_id") or None,
+        ))
 
     def build_queryset(self, data: dict) -> models.QuerySet | None:
         """
@@ -2120,6 +2123,9 @@ class RackSiteNameMatcher:
         over TAGLESS candidates only, letting a payload that adds a tag to
         an existing tagless rack bind it instead of duplicating the rack,
         while never binding a same-named rack that carries a different tag.
+        A submitted facility_id narrows the same way: a candidate with that
+        facility id wins outright, and candidates with a different one are
+        excluded.
         """
         if not self.has_required_fields(data):
             return None
@@ -2135,6 +2141,18 @@ class RackSiteNameMatcher:
             # rack carrying a different tag is a different physical rack, and
             # binding it would rewrite its identity with this payload's tag.
             qs = qs.filter(models.Q(asset_tag__isnull=True) | models.Q(asset_tag=""))
+        facility_id = data.get("facility_id")
+        if facility_id:
+            # facility_id discriminates same-named racks the way an asset tag
+            # does: a candidate carrying THIS facility id is the rack meant,
+            # and one carrying a different id is another physical rack.
+            exact = qs.filter(facility_id=facility_id)
+            if exact.exists():
+                qs = exact
+            else:
+                qs = qs.filter(
+                    models.Q(facility_id__isnull=True) | models.Q(facility_id="")
+                )
         return qs
 
     def resolve(self, queryset: models.QuerySet, data: dict):

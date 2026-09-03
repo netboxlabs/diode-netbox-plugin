@@ -111,6 +111,25 @@ class RackSiteNameMatcherResolveTestCase(TestCase):
             find_existing_object({"name": "r1", "site": self.site.pk, "asset_tag": "rsm-AT-B"}, "dcim.rack")
         )
 
+    def test_facility_id_rule(self):
+        """A candidate carrying the submitted facility id wins; a different one is excluded."""
+        older_null = self._rack()
+        located = self._rack(location=self.location)
+        located.facility_id = "rsm-F1"
+        located.save()
+        self.assertEqual(
+            find_existing_object({"name": "r1", "site": self.site.pk, "facility_id": "rsm-F1"}, "dcim.rack"),
+            located,
+        )
+        self.assertEqual(
+            find_existing_object({"name": "r1", "site": self.site.pk, "facility_id": "rsm-F2"}, "dcim.rack"),
+            older_null,
+        )
+        self.assertNotEqual(
+            _matcher().fingerprint({"name": "r1", "site": self.site.pk, "facility_id": "rsm-F1"}),
+            _matcher().fingerprint({"name": "r1", "site": self.site.pk, "facility_id": "rsm-F2"}),
+        )
+
     def _populate_device(self, rack):
         return Device.objects.create(
             name=f"rsm-dev-{rack.pk}", site=rack.site, rack=rack,
