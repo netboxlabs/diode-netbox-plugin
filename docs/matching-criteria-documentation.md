@@ -114,6 +114,30 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | dcim_consoleserverport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
 
+## dcim.coolingfeed
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| dcim_coolingfeed_unique_cooling_source_name | 1 | builtin | cooling_source, name | N/A | Matches on unique constraint fields: cooling_source, name | All versions |
+
+## dcim.coolingintake
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| dcim_coolingintake_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+
+## dcim.coolingoutflow
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| dcim_coolingoutflow_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+
+## dcim.coolingsource
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| dcim_coolingsource_unique_site_name | 1 | builtin | site, name | N/A | Matches on unique constraint fields: site, name | All versions |
+
 ## dcim.device
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
@@ -122,10 +146,9 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | unique_primary_ip4 | 2 | builtin | primary_ip4 | N/A | Matches on unique field(s): primary_ip4 | All versions |
 | unique_primary_ip6 | 3 | builtin | primary_ip6 | N/A | Matches on unique field(s): primary_ip6 | All versions |
 | unique_oob_ip | 4 | builtin | oob_ip | N/A | Matches on unique field(s): oob_ip | All versions |
-| dcim_device_unique_name_site_tenant | 5 | builtin |  | N/A | Custom matcher | All versions |
-| dcim_device_unique_name_site | 6 | builtin |  | tenant is NULL | Custom matcher | All versions |
-| dcim_device_unique_rack_position_face | 7 | builtin | rack, position, face | N/A | Matches on unique constraint fields: rack, position, face | All versions |
-| dcim_device_unique_virtual_chassis_vc_position | 8 | builtin | virtual_chassis, vc_position | N/A | Matches on unique constraint fields: virtual_chassis, vc_position | All versions |
+| dcim_device_unique_name_site_tenant | 5 | builtin |  | name is NOT NULL | Custom matcher | All versions |
+| dcim_device_unique_rack_position_face | 6 | builtin | rack, position, face | N/A | Matches on unique constraint fields: rack, position, face | All versions |
+| dcim_device_unique_virtual_chassis_vc_position | 7 | builtin | virtual_chassis, vc_position | N/A | Matches on unique constraint fields: virtual_chassis, vc_position | All versions |
 
 ## dcim.devicebay
 
@@ -141,10 +164,8 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | logical_device_role_name_no_parent | 1 | logical | name | parent is NULL | Matches on fields: name where parent is NULL | ≥4.3.0 |
 | logical_device_role_slug_no_parent | 2 | logical | slug | parent is NULL | Matches on fields: slug where parent is NULL | ≥4.3.0 |
 | dcim_devicerole_parent_name | 3 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | All versions |
-| dcim_devicerole_name | 4 | builtin | name | parent is NULL | Matches on unique constraint fields: name where parent is NULL | All versions |
-| dcim_devicerole_parent_slug | 5 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
-| dcim_devicerole_slug | 6 | builtin | slug | parent is NULL | Matches on unique constraint fields: slug where parent is NULL | All versions |
-| unique_autoslug_slug | 7 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_devicerole_parent_slug | 4 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
+| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
 ## dcim.devicetype
 
@@ -166,6 +187,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | unique_primary_mac_address | 1 | builtin | primary_mac_address | N/A | Matches on unique field(s): primary_mac_address | All versions |
 | dcim_interface_unique_device_name | 2 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+| dcim_interface_unique_parent_channel_id | 3 | builtin | parent, channel_id | N/A | Matches on unique constraint fields: parent, channel_id | All versions |
 
 ## dcim.inventoryitem
 
@@ -188,10 +210,8 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | dcim_location_parent_name | 1 | builtin | site, parent, name | N/A | Matches on unique constraint fields: site, parent, name | All versions |
-| dcim_location_name | 2 | builtin | site, name | parent is NULL | Matches on unique constraint fields: site, name where parent is NULL | All versions |
-| dcim_location_parent_slug | 3 | builtin | site, parent, slug | N/A | Matches on unique constraint fields: site, parent, slug | All versions |
-| dcim_location_slug | 4 | builtin | site, slug | parent is NULL | Matches on unique constraint fields: site, slug where parent is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_location_parent_slug | 2 | builtin | site, parent, slug | N/A | Matches on unique constraint fields: site, parent, slug | All versions |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
 ## dcim.macaddress
 
@@ -222,6 +242,14 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | logical_module_bay_name_on_device | 1 | logical | name, device | N/A | Matches on fields: name, device | All versions |
 | dcim_modulebay_unique_device_module_name | 2 | builtin | device, module, name | N/A | Matches on unique constraint fields: device, module, name | All versions |
 
+## dcim.modulebaytype
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| dcim_modulebaytype_unique_manufacturer_name | 1 | builtin | manufacturer, name | N/A | Matches on unique constraint fields: manufacturer, name | All versions |
+| dcim_modulebaytype_unique_manufacturer_slug | 2 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+
 ## dcim.moduletype
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
@@ -239,10 +267,8 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | dcim_platform_manufacturer_name | 1 | builtin | manufacturer, name | N/A | Matches on unique constraint fields: manufacturer, name | All versions |
-| dcim_platform_name | 2 | builtin | name | manufacturer is NULL | Matches on unique constraint fields: name where manufacturer is NULL | All versions |
-| dcim_platform_manufacturer_slug | 3 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
-| dcim_platform_slug | 4 | builtin | slug | manufacturer is NULL | Matches on unique constraint fields: slug where manufacturer is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_platform_manufacturer_slug | 2 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
 ## dcim.powerfeed
 
@@ -319,10 +345,8 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | dcim_region_parent_name | 1 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | All versions |
-| dcim_region_name | 2 | builtin | name | parent is NULL | Matches on unique constraint fields: name where parent is NULL | All versions |
-| dcim_region_parent_slug | 3 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
-| dcim_region_slug | 4 | builtin | slug | parent is NULL | Matches on unique constraint fields: slug where parent is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_region_parent_slug | 2 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
 ## dcim.site
 
@@ -337,10 +361,8 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | dcim_sitegroup_parent_name | 1 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | All versions |
-| dcim_sitegroup_name | 2 | builtin | name | parent is NULL | Matches on unique constraint fields: name where parent is NULL | All versions |
-| dcim_sitegroup_parent_slug | 3 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
-| dcim_sitegroup_slug | 4 | builtin | slug | parent is NULL | Matches on unique constraint fields: slug where parent is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_sitegroup_parent_slug | 2 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
 ## dcim.virtualchassis
 
@@ -548,10 +570,8 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | tenancy_tenant_unique_group_name | 1 | builtin | group, name | N/A | Matches on unique constraint fields: group, name | All versions |
-| tenancy_tenant_unique_name | 2 | builtin | name | group is NULL | Matches on unique constraint fields: name where group is NULL | All versions |
-| tenancy_tenant_unique_group_slug | 3 | builtin | group, slug | N/A | Matches on unique constraint fields: group, slug | All versions |
-| tenancy_tenant_unique_slug | 4 | builtin | slug | group is NULL | Matches on unique constraint fields: slug where group is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| tenancy_tenant_unique_group_slug | 2 | builtin | group, slug | N/A | Matches on unique constraint fields: group, slug | All versions |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
 ## tenancy.tenantgroup
 
@@ -617,10 +637,8 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | logical_virtual_machine_name_no_cluster | 1 | logical | name | cluster is NULL | Matches on fields: name where cluster is NULL | All versions |
 | unique_primary_ip4 | 2 | builtin | primary_ip4 | N/A | Matches on unique field(s): primary_ip4 | All versions |
 | unique_primary_ip6 | 3 | builtin | primary_ip6 | N/A | Matches on unique field(s): primary_ip6 | All versions |
-| virtualization_virtualmachine_unique_name_cluster_tenant | 4 | builtin |  | N/A | Custom matcher | All versions |
-| virtualization_virtualmachine_unique_name_cluster | 5 | builtin |  | tenant is NULL | Custom matcher | All versions |
-| virtualization_virtualmachine_unique_name_device_tenant | 6 | builtin |  | cluster is NULL AND device is NOT NULL | Custom matcher | All versions |
-| virtualization_virtualmachine_unique_name_device | 7 | builtin |  | cluster is NULL AND device is NOT NULL AND tenant is NULL | Custom matcher | All versions |
+| virtualization_virtualmachine_unique_name_cluster_tenant | 4 | builtin |  | cluster is NOT NULL | Custom matcher | All versions |
+| virtualization_virtualmachine_unique_name_device_tenant | 5 | builtin |  | cluster is NULL AND device is NOT NULL | Custom matcher | All versions |
 
 ## virtualization.virtualmachinetype
 
@@ -686,8 +704,6 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| vpn_tunnel_group_name | 2 | builtin | group, name | N/A | Matches on unique constraint fields: group, name | All versions |
-| vpn_tunnel_name | 3 | builtin | name | group is NULL | Matches on unique constraint fields: name where group is NULL | All versions |
 
 ## vpn.tunnelgroup
 
@@ -717,8 +733,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
 | unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| wireless_wirelesslangroup_unique_parent_name | 3 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | All versions |
-| unique_autoslug_slug | 4 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
 
 ## wireless.wirelesslink
 
