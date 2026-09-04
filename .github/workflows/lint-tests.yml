@@ -38,15 +38,17 @@ jobs:
     timeout-minutes: 25
     strategy:
       matrix:
-        python: [ "3.10" ]
         netbox: [ "v4.7.0", "v4.6.10", "v4.5.5", "v4.4.10" ]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      # Host interpreter for installing the package and running Ruff only.
+      # The test suite runs inside the NetBox images (Python 3.12 for 4.4/4.5,
+      # 3.14 for 4.6/4.7), so this version does not describe the tests.
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.12"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
