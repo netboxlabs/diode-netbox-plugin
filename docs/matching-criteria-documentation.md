@@ -2,6 +2,10 @@
 
 This document describes how the Diode NetBox Plugin matches existing objects when applying changes. The matchers will be applied in the order of their precedence, unttil one of them matches.
 
+Generated on NetBox 4.7.0.
+
+Builtin matchers are derived from that release's model constraints and are listed as they exist there. Other NetBox releases the plugin supports may declare the same identity through different constraints (for example, NetBox 4.7 replaced conditional constraint pairs such as `name where parent is NULL` with single `nulls_distinct=False` constraints); the matcher derives whichever form the running release declares. In the Version Constraints column, "NetBox <version>" on a builtin row means the row reflects that release; a version range on a logical row is the plugin's own gate.
+
 ## Matcher Types
 
 - **Logical Matchers**: Custom matching criteria that represent likely user intent
@@ -11,84 +15,84 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| circuits_circuit_unique_provider_cid | 1 | builtin | provider, cid | N/A | Matches on unique constraint fields: provider, cid | All versions |
-| circuits_circuit_unique_provideraccount_cid | 2 | builtin | provider_account, cid | N/A | Matches on unique constraint fields: provider_account, cid | All versions |
+| circuits_circuit_unique_provider_cid | 1 | builtin | provider, cid | N/A | Matches on unique constraint fields: provider, cid | NetBox 4.7.0 |
+| circuits_circuit_unique_provideraccount_cid | 2 | builtin | provider_account, cid | N/A | Matches on unique constraint fields: provider_account, cid | NetBox 4.7.0 |
 
 ## circuits.circuitgroup
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## circuits.circuitgroupassignment
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| circuits_circuitgroupassignment_unique_member_group | 1 | builtin | member_type, member_id, group | N/A | Matches on unique constraint fields: member_type, member_id, group | All versions |
+| circuits_circuitgroupassignment_unique_member_group | 1 | builtin | member_type, member_id, group | N/A | Matches on unique constraint fields: member_type, member_id, group | NetBox 4.7.0 |
 
 ## circuits.circuittermination
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| circuits_circuittermination_unique_circuit_term_side | 1 | builtin | circuit, term_side | N/A | Matches on unique constraint fields: circuit, term_side | All versions |
+| circuits_circuittermination_unique_circuit_term_side | 1 | builtin | circuit, term_side | N/A | Matches on unique constraint fields: circuit, term_side | NetBox 4.7.0 |
 
 ## circuits.circuittype
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## circuits.provider
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## circuits.provideraccount
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| circuits_provideraccount_unique_provider_account | 1 | builtin | provider, account | N/A | Matches on unique constraint fields: provider, account | All versions |
-| circuits_provideraccount_unique_provider_name | 2 | builtin | provider, name | name =  | Matches on unique constraint fields: provider, name where name =  | All versions |
+| circuits_provideraccount_unique_provider_account | 1 | builtin | provider, account | N/A | Matches on unique constraint fields: provider, account | NetBox 4.7.0 |
+| circuits_provideraccount_unique_provider_name | 2 | builtin | provider, name | name =  | Matches on unique constraint fields: provider, name where name =  | NetBox 4.7.0 |
 
 ## circuits.providernetwork
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| circuits_providernetwork_unique_provider_name | 1 | builtin | provider, name | N/A | Matches on unique constraint fields: provider, name | All versions |
+| circuits_providernetwork_unique_provider_name | 1 | builtin | provider, name | N/A | Matches on unique constraint fields: provider, name | NetBox 4.7.0 |
 
 ## circuits.virtualcircuit
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| circuits_virtualcircuit_unique_provider_network_cid | 1 | builtin | provider_network, cid | N/A | Matches on unique constraint fields: provider_network, cid | All versions |
-| circuits_virtualcircuit_unique_provideraccount_cid | 2 | builtin | provider_account, cid | N/A | Matches on unique constraint fields: provider_account, cid | All versions |
+| circuits_virtualcircuit_unique_provider_network_cid | 1 | builtin | provider_network, cid | N/A | Matches on unique constraint fields: provider_network, cid | NetBox 4.7.0 |
+| circuits_virtualcircuit_unique_provideraccount_cid | 2 | builtin | provider_account, cid | N/A | Matches on unique constraint fields: provider_account, cid | NetBox 4.7.0 |
 
 ## circuits.virtualcircuittermination
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_interface | 1 | builtin | interface | N/A | Matches on unique field(s): interface | All versions |
+| unique_interface | 1 | builtin | interface | N/A | Matches on unique field(s): interface | NetBox 4.7.0 |
 
 ## circuits.virtualcircuittype
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## core.managedfile
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| core_managedfile_unique_root_path | 1 | builtin | file_root, file_path | N/A | Matches on unique constraint fields: file_root, file_path | All versions |
+| core_managedfile_unique_root_path | 1 | builtin | file_root, file_path | N/A | Matches on unique constraint fields: file_root, file_path | NetBox 4.7.0 |
 
 ## dcim.cable
 
@@ -100,39 +104,62 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## dcim.consoleport
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_consoleport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+| dcim_consoleport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
 
 ## dcim.consoleserverport
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_consoleserverport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+| dcim_consoleserverport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
+
+## dcim.coolingfeed
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| dcim_coolingfeed_unique_cooling_source_name | 1 | builtin | cooling_source, name | N/A | Matches on unique constraint fields: cooling_source, name | NetBox 4.7.0 |
+
+## dcim.coolingintake
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| dcim_coolingintake_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
+
+## dcim.coolingoutflow
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| dcim_coolingoutflow_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
+
+## dcim.coolingsource
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| dcim_coolingsource_unique_site_name | 1 | builtin | site, name | N/A | Matches on unique constraint fields: site, name | NetBox 4.7.0 |
 
 ## dcim.device
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_asset_tag | 1 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | All versions |
-| unique_primary_ip4 | 2 | builtin | primary_ip4 | N/A | Matches on unique field(s): primary_ip4 | All versions |
-| unique_primary_ip6 | 3 | builtin | primary_ip6 | N/A | Matches on unique field(s): primary_ip6 | All versions |
-| unique_oob_ip | 4 | builtin | oob_ip | N/A | Matches on unique field(s): oob_ip | All versions |
-| dcim_device_unique_name_site_tenant | 5 | builtin |  | N/A | Custom matcher | All versions |
-| dcim_device_unique_name_site | 6 | builtin |  | tenant is NULL | Custom matcher | All versions |
-| dcim_device_unique_rack_position_face | 7 | builtin | rack, position, face | N/A | Matches on unique constraint fields: rack, position, face | All versions |
-| dcim_device_unique_virtual_chassis_vc_position | 8 | builtin | virtual_chassis, vc_position | N/A | Matches on unique constraint fields: virtual_chassis, vc_position | All versions |
+| unique_asset_tag | 1 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | NetBox 4.7.0 |
+| unique_primary_ip4 | 2 | builtin | primary_ip4 | N/A | Matches on unique field(s): primary_ip4 | NetBox 4.7.0 |
+| unique_primary_ip6 | 3 | builtin | primary_ip6 | N/A | Matches on unique field(s): primary_ip6 | NetBox 4.7.0 |
+| unique_oob_ip | 4 | builtin | oob_ip | N/A | Matches on unique field(s): oob_ip | NetBox 4.7.0 |
+| dcim_device_unique_name_site_tenant | 5 | builtin |  | name is NOT NULL | Custom matcher | NetBox 4.7.0 |
+| dcim_device_unique_rack_position_face | 6 | builtin | rack, position, face | N/A | Matches on unique constraint fields: rack, position, face | NetBox 4.7.0 |
+| dcim_device_unique_virtual_chassis_vc_position | 7 | builtin | virtual_chassis, vc_position | N/A | Matches on unique constraint fields: virtual_chassis, vc_position | NetBox 4.7.0 |
 
 ## dcim.devicebay
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_installed_device | 1 | builtin | installed_device | N/A | Matches on unique field(s): installed_device | All versions |
-| dcim_devicebay_unique_device_name | 2 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+| unique_installed_device | 1 | builtin | installed_device | N/A | Matches on unique field(s): installed_device | NetBox 4.7.0 |
+| dcim_devicebay_unique_device_name | 2 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
 
 ## dcim.devicerole
 
@@ -140,58 +167,55 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | logical_device_role_name_no_parent | 1 | logical | name | parent is NULL | Matches on fields: name where parent is NULL | ≥4.3.0 |
 | logical_device_role_slug_no_parent | 2 | logical | slug | parent is NULL | Matches on fields: slug where parent is NULL | ≥4.3.0 |
-| dcim_devicerole_parent_name | 3 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | All versions |
-| dcim_devicerole_name | 4 | builtin | name | parent is NULL | Matches on unique constraint fields: name where parent is NULL | All versions |
-| dcim_devicerole_parent_slug | 5 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
-| dcim_devicerole_slug | 6 | builtin | slug | parent is NULL | Matches on unique constraint fields: slug where parent is NULL | All versions |
-| unique_autoslug_slug | 7 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_devicerole_parent_name | 3 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | NetBox 4.7.0 |
+| dcim_devicerole_parent_slug | 4 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.devicetype
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_devicetype_unique_manufacturer_model | 1 | builtin | manufacturer, model | N/A | Matches on unique constraint fields: manufacturer, model | All versions |
-| dcim_devicetype_unique_manufacturer_slug | 2 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_devicetype_unique_manufacturer_model | 1 | builtin | manufacturer, model | N/A | Matches on unique constraint fields: manufacturer, model | NetBox 4.7.0 |
+| dcim_devicetype_unique_manufacturer_slug | 2 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.frontport
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_frontport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+| dcim_frontport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
 
 ## dcim.interface
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_primary_mac_address | 1 | builtin | primary_mac_address | N/A | Matches on unique field(s): primary_mac_address | All versions |
-| dcim_interface_unique_device_name | 2 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+| unique_primary_mac_address | 1 | builtin | primary_mac_address | N/A | Matches on unique field(s): primary_mac_address | NetBox 4.7.0 |
+| dcim_interface_unique_device_name | 2 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
+| dcim_interface_unique_parent_channel_id | 3 | builtin | parent, channel_id | N/A | Matches on unique constraint fields: parent, channel_id | NetBox 4.7.0 |
 
 ## dcim.inventoryitem
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | logical_inventory_item_name_on_device_no_parent | 1 | logical | name, device | parent is NULL | Matches on fields: name, device where parent is NULL | All versions |
-| unique_asset_tag | 2 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | All versions |
-| dcim_inventoryitem_unique_device_parent_name | 3 | builtin | device, parent, name | N/A | Matches on unique constraint fields: device, parent, name | All versions |
+| unique_asset_tag | 2 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | NetBox 4.7.0 |
+| dcim_inventoryitem_unique_device_parent_name | 3 | builtin | device, parent, name | N/A | Matches on unique constraint fields: device, parent, name | NetBox 4.7.0 |
 
 ## dcim.inventoryitemrole
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.location
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_location_parent_name | 1 | builtin | site, parent, name | N/A | Matches on unique constraint fields: site, parent, name | All versions |
-| dcim_location_name | 2 | builtin | site, name | parent is NULL | Matches on unique constraint fields: site, name where parent is NULL | All versions |
-| dcim_location_parent_slug | 3 | builtin | site, parent, slug | N/A | Matches on unique constraint fields: site, parent, slug | All versions |
-| dcim_location_slug | 4 | builtin | site, slug | parent is NULL | Matches on unique constraint fields: site, slug where parent is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_location_parent_name | 1 | builtin | site, parent, name | N/A | Matches on unique constraint fields: site, parent, name | NetBox 4.7.0 |
+| dcim_location_parent_slug | 2 | builtin | site, parent, slug | N/A | Matches on unique constraint fields: site, parent, slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.macaddress
 
@@ -204,86 +228,92 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.module
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_module_bay | 1 | builtin | module_bay | N/A | Matches on unique field(s): module_bay | All versions |
-| unique_asset_tag | 2 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | All versions |
+| unique_module_bay | 1 | builtin | module_bay | N/A | Matches on unique field(s): module_bay | NetBox 4.7.0 |
+| unique_asset_tag | 2 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | NetBox 4.7.0 |
 
 ## dcim.modulebay
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | logical_module_bay_name_on_device | 1 | logical | name, device | N/A | Matches on fields: name, device | All versions |
-| dcim_modulebay_unique_device_module_name | 2 | builtin | device, module, name | N/A | Matches on unique constraint fields: device, module, name | All versions |
+| dcim_modulebay_unique_device_module_name | 2 | builtin | device, module, name | N/A | Matches on unique constraint fields: device, module, name | NetBox 4.7.0 |
+
+## dcim.modulebaytype
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| dcim_modulebaytype_unique_manufacturer_name | 1 | builtin | manufacturer, name | N/A | Matches on unique constraint fields: manufacturer, name | NetBox 4.7.0 |
+| dcim_modulebaytype_unique_manufacturer_slug | 2 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.moduletype
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_moduletype_unique_manufacturer_model | 1 | builtin | manufacturer, model | N/A | Matches on unique constraint fields: manufacturer, model | All versions |
+| dcim_moduletype_unique_manufacturer_model | 1 | builtin | manufacturer, model | N/A | Matches on unique constraint fields: manufacturer, model | NetBox 4.7.0 |
 
 ## dcim.moduletypeprofile
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## dcim.platform
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_platform_manufacturer_name | 1 | builtin | manufacturer, name | N/A | Matches on unique constraint fields: manufacturer, name | All versions |
-| dcim_platform_name | 2 | builtin | name | manufacturer is NULL | Matches on unique constraint fields: name where manufacturer is NULL | All versions |
-| dcim_platform_manufacturer_slug | 3 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
-| dcim_platform_slug | 4 | builtin | slug | manufacturer is NULL | Matches on unique constraint fields: slug where manufacturer is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_platform_manufacturer_name | 1 | builtin | manufacturer, name | N/A | Matches on unique constraint fields: manufacturer, name | NetBox 4.7.0 |
+| dcim_platform_manufacturer_slug | 2 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.powerfeed
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_powerfeed_unique_power_panel_name | 1 | builtin | power_panel, name | N/A | Matches on unique constraint fields: power_panel, name | All versions |
+| dcim_powerfeed_unique_power_panel_name | 1 | builtin | power_panel, name | N/A | Matches on unique constraint fields: power_panel, name | NetBox 4.7.0 |
 
 ## dcim.poweroutlet
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_poweroutlet_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+| dcim_poweroutlet_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
 
 ## dcim.powerpanel
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_powerpanel_unique_site_name | 1 | builtin | site, name | N/A | Matches on unique constraint fields: site, name | All versions |
+| dcim_powerpanel_unique_site_name | 1 | builtin | site, name | N/A | Matches on unique constraint fields: site, name | NetBox 4.7.0 |
 
 ## dcim.powerport
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_powerport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+| dcim_powerport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
 
 ## dcim.rack
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | logical_rack_site_name_no_location | 1 | logical | site, name | N/A | Match a location-less rack payload by (site, name), any location. | All versions |
-| unique_asset_tag | 2 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | All versions |
-| dcim_rack_unique_location_name | 3 | builtin | location, name | N/A | Matches on unique constraint fields: location, name | All versions |
-| dcim_rack_unique_location_facility_id | 4 | builtin | location, facility_id | N/A | Matches on unique constraint fields: location, facility_id | All versions |
+| unique_asset_tag | 2 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | NetBox 4.7.0 |
+| dcim_rack_unique_location_name | 3 | builtin | location, name | N/A | Matches on unique constraint fields: location, name | NetBox 4.7.0 |
+| dcim_rack_unique_location_facility_id | 4 | builtin | location, facility_id | N/A | Matches on unique constraint fields: location, facility_id | NetBox 4.7.0 |
 
 ## dcim.rackgroup
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.rackreservation
 
@@ -295,86 +325,82 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.racktype
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_slug | 1 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| dcim_racktype_unique_manufacturer_model | 2 | builtin | manufacturer, model | N/A | Matches on unique constraint fields: manufacturer, model | All versions |
-| dcim_racktype_unique_manufacturer_slug | 3 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
-| unique_autoslug_slug | 4 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_slug | 1 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| dcim_racktype_unique_manufacturer_model | 2 | builtin | manufacturer, model | N/A | Matches on unique constraint fields: manufacturer, model | NetBox 4.7.0 |
+| dcim_racktype_unique_manufacturer_slug | 3 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 4 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.rearport
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_rearport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+| dcim_rearport_unique_device_name | 1 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
 
 ## dcim.region
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_region_parent_name | 1 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | All versions |
-| dcim_region_name | 2 | builtin | name | parent is NULL | Matches on unique constraint fields: name where parent is NULL | All versions |
-| dcim_region_parent_slug | 3 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
-| dcim_region_slug | 4 | builtin | slug | parent is NULL | Matches on unique constraint fields: slug where parent is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_region_parent_name | 1 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | NetBox 4.7.0 |
+| dcim_region_parent_slug | 2 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.site
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.sitegroup
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| dcim_sitegroup_parent_name | 1 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | All versions |
-| dcim_sitegroup_name | 2 | builtin | name | parent is NULL | Matches on unique constraint fields: name where parent is NULL | All versions |
-| dcim_sitegroup_parent_slug | 3 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
-| dcim_sitegroup_slug | 4 | builtin | slug | parent is NULL | Matches on unique constraint fields: slug where parent is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| dcim_sitegroup_parent_name | 1 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | NetBox 4.7.0 |
+| dcim_sitegroup_parent_slug | 2 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## dcim.virtualchassis
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | logical_vc_name_no_master | 1 | logical | name | N/A | Best-effort VirtualChassis matcher: by name, only when the payload has no master. | All versions |
-| unique_master | 2 | builtin | master | N/A | Matches on unique field(s): master | All versions |
+| unique_master | 2 | builtin | master | N/A | Matches on unique field(s): master | NetBox 4.7.0 |
 
 ## dcim.virtualdevicecontext
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_primary_ip4 | 1 | builtin | primary_ip4 | N/A | Matches on unique field(s): primary_ip4 | All versions |
-| unique_primary_ip6 | 2 | builtin | primary_ip6 | N/A | Matches on unique field(s): primary_ip6 | All versions |
-| dcim_virtualdevicecontext_device_identifier | 3 | builtin | device, identifier | N/A | Matches on unique constraint fields: device, identifier | All versions |
-| dcim_virtualdevicecontext_device_name | 4 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
+| unique_primary_ip4 | 1 | builtin | primary_ip4 | N/A | Matches on unique field(s): primary_ip4 | NetBox 4.7.0 |
+| unique_primary_ip6 | 2 | builtin | primary_ip6 | N/A | Matches on unique field(s): primary_ip6 | NetBox 4.7.0 |
+| dcim_virtualdevicecontext_device_identifier | 3 | builtin | device, identifier | N/A | Matches on unique constraint fields: device, identifier | NetBox 4.7.0 |
+| dcim_virtualdevicecontext_device_name | 4 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | NetBox 4.7.0 |
 
 ## extras.customfield
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## extras.customfieldchoiceset
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## extras.customlink
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## extras.journalentry
 
@@ -386,9 +412,9 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## ipam.aggregate
 
@@ -401,15 +427,15 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_asn | 1 | builtin | asn | N/A | Matches on unique field(s): asn | All versions |
+| unique_asn | 1 | builtin | asn | N/A | Matches on unique field(s): asn | NetBox 4.7.0 |
 
 ## ipam.asnrange
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## ipam.fhrpgroup
 
@@ -421,7 +447,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| ipam_fhrpgroupassignment_unique_interface_group | 1 | builtin | interface_type, interface_id, group | N/A | Matches on unique constraint fields: interface_type, interface_id, group | All versions |
+| ipam_fhrpgroupassignment_unique_interface_group | 1 | builtin | interface_type, interface_id, group | N/A | Matches on unique constraint fields: interface_type, interface_id, group | NetBox 4.7.0 |
 
 ## ipam.ipaddress
 
@@ -448,23 +474,23 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## ipam.role
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## ipam.routetarget
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## ipam.service
 
@@ -481,32 +507,32 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | logical_vlan_vid_no_group_or_svlan_or_site | 1 | logical | vid | group is NULL AND qinq_svlan is NULL AND site is NULL | Matches on fields: vid where group is NULL AND qinq_svlan is NULL AND site is NULL | All versions |
 | logical_vlan_in_site | 2 | logical | vid, site | group is NULL AND qinq_svlan is NULL AND site is NOT NULL | Matches on fields: vid, site where group is NULL AND qinq_svlan is NULL AND site is NOT NULL | All versions |
-| ipam_vlan_unique_group_vid | 3 | builtin | group, vid | N/A | Matches on unique constraint fields: group, vid | All versions |
-| ipam_vlan_unique_group_name | 4 | builtin | group, name | N/A | Matches on unique constraint fields: group, name | All versions |
-| ipam_vlan_unique_qinq_svlan_vid | 5 | builtin | qinq_svlan, vid | N/A | Matches on unique constraint fields: qinq_svlan, vid | All versions |
-| ipam_vlan_unique_qinq_svlan_name | 6 | builtin | qinq_svlan, name | N/A | Matches on unique constraint fields: qinq_svlan, name | All versions |
+| ipam_vlan_unique_group_vid | 3 | builtin | group, vid | N/A | Matches on unique constraint fields: group, vid | NetBox 4.7.0 |
+| ipam_vlan_unique_group_name | 4 | builtin | group, name | N/A | Matches on unique constraint fields: group, name | NetBox 4.7.0 |
+| ipam_vlan_unique_qinq_svlan_vid | 5 | builtin | qinq_svlan, vid | N/A | Matches on unique constraint fields: qinq_svlan, vid | NetBox 4.7.0 |
+| ipam_vlan_unique_qinq_svlan_name | 6 | builtin | qinq_svlan, name | N/A | Matches on unique constraint fields: qinq_svlan, name | NetBox 4.7.0 |
 
 ## ipam.vlangroup
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | logical_vlan_group_name_no_scope | 1 | logical | name | scope_type is NULL | Matches on fields: name where scope_type is NULL | All versions |
-| ipam_vlangroup_unique_scope_name | 2 | builtin | scope_type, scope_id, name | N/A | Matches on unique constraint fields: scope_type, scope_id, name | All versions |
-| ipam_vlangroup_unique_scope_slug | 3 | builtin | scope_type, scope_id, slug | N/A | Matches on unique constraint fields: scope_type, scope_id, slug | All versions |
-| unique_autoslug_slug | 4 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| ipam_vlangroup_unique_scope_name | 2 | builtin | scope_type, scope_id, name | N/A | Matches on unique constraint fields: scope_type, scope_id, name | NetBox 4.7.0 |
+| ipam_vlangroup_unique_scope_slug | 3 | builtin | scope_type, scope_id, slug | N/A | Matches on unique constraint fields: scope_type, scope_id, slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 4 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## ipam.vlantranslationpolicy
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## ipam.vlantranslationrule
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| ipam_vlantranslationrule_unique_policy_local_vid | 1 | builtin | policy, local_vid | N/A | Matches on unique constraint fields: policy, local_vid | All versions |
-| ipam_vlantranslationrule_unique_policy_remote_vid | 2 | builtin | policy, remote_vid | N/A | Matches on unique constraint fields: policy, remote_vid | All versions |
+| ipam_vlantranslationrule_unique_policy_local_vid | 1 | builtin | policy, local_vid | N/A | Matches on unique constraint fields: policy, local_vid | NetBox 4.7.0 |
+| ipam_vlantranslationrule_unique_policy_remote_vid | 2 | builtin | policy, remote_vid | N/A | Matches on unique constraint fields: policy, remote_vid | NetBox 4.7.0 |
 
 ## ipam.vrf
 
@@ -514,7 +540,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | logical_vrf_name_no_tenant | 1 | logical | name | rd is NULL AND tenant is NULL | Matches on fields: name where rd is NULL AND tenant is NULL | All versions |
 | logical_vrf_name_within_tenant | 2 | logical | name, tenant | rd is NULL AND tenant is NOT NULL | Matches on fields: name, tenant where rd is NULL AND tenant is NOT NULL | All versions |
-| unique_rd | 3 | builtin | rd | N/A | Matches on unique field(s): rd | All versions |
+| unique_rd | 3 | builtin | rd | N/A | Matches on unique field(s): rd | NetBox 4.7.0 |
 
 ## tenancy.contact
 
@@ -526,58 +552,56 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| tenancy_contactassignment_unique_object_contact_role | 1 | builtin | object_type, object_id, contact, role | N/A | Matches on unique constraint fields: object_type, object_id, contact, role | All versions |
+| tenancy_contactassignment_unique_object_contact_role | 1 | builtin | object_type, object_id, contact, role | N/A | Matches on unique constraint fields: object_type, object_id, contact, role | NetBox 4.7.0 |
 
 ## tenancy.contactgroup
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| tenancy_contactgroup_unique_parent_name | 1 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | All versions |
-| unique_autoslug_slug | 2 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| tenancy_contactgroup_unique_parent_name | 1 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | NetBox 4.7.0 |
+| unique_autoslug_slug | 2 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## tenancy.contactrole
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## tenancy.tenant
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| tenancy_tenant_unique_group_name | 1 | builtin | group, name | N/A | Matches on unique constraint fields: group, name | All versions |
-| tenancy_tenant_unique_name | 2 | builtin | name | group is NULL | Matches on unique constraint fields: name where group is NULL | All versions |
-| tenancy_tenant_unique_group_slug | 3 | builtin | group, slug | N/A | Matches on unique constraint fields: group, slug | All versions |
-| tenancy_tenant_unique_slug | 4 | builtin | slug | group is NULL | Matches on unique constraint fields: slug where group is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| tenancy_tenant_unique_group_name | 1 | builtin | group, name | N/A | Matches on unique constraint fields: group, name | NetBox 4.7.0 |
+| tenancy_tenant_unique_group_slug | 2 | builtin | group, slug | N/A | Matches on unique constraint fields: group, slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## tenancy.tenantgroup
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## users.owner
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## users.ownergroup
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## users.user
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_username | 1 | builtin | username | N/A | Matches on unique field(s): username | All versions |
+| unique_username | 1 | builtin | username | N/A | Matches on unique field(s): username | NetBox 4.7.0 |
 
 ## virtualization.cluster
 
@@ -585,123 +609,119 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | logical_cluster_within_scope | 1 | logical | name, scope_type, scope_id | scope_type is NOT NULL | Matches on fields: name, scope_type, scope_id where scope_type is NOT NULL | All versions |
 | logical_cluster_with_no_scope_or_group | 2 | logical | name | group is NULL AND scope_type is NULL | Matches on fields: name where group is NULL AND scope_type is NULL | All versions |
-| virtualization_cluster_unique_group_name | 3 | builtin | group, name | N/A | Matches on unique constraint fields: group, name | All versions |
-| virtualization_cluster_unique__site_name | 4 | builtin | _site, name | N/A | Matches on unique constraint fields: _site, name | All versions |
+| virtualization_cluster_unique_group_name | 3 | builtin | group, name | N/A | Matches on unique constraint fields: group, name | NetBox 4.7.0 |
+| virtualization_cluster_unique__site_name | 4 | builtin | _site, name | N/A | Matches on unique constraint fields: _site, name | NetBox 4.7.0 |
 
 ## virtualization.clustergroup
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## virtualization.clustertype
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## virtualization.virtualdisk
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| virtualization_virtualdisk_unique_virtual_machine_name | 1 | builtin | virtual_machine, name | N/A | Matches on unique constraint fields: virtual_machine, name | All versions |
+| virtualization_virtualdisk_unique_virtual_machine_name | 1 | builtin | virtual_machine, name | N/A | Matches on unique constraint fields: virtual_machine, name | NetBox 4.7.0 |
 
 ## virtualization.virtualmachine
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | logical_virtual_machine_name_no_cluster | 1 | logical | name | cluster is NULL | Matches on fields: name where cluster is NULL | All versions |
-| unique_primary_ip4 | 2 | builtin | primary_ip4 | N/A | Matches on unique field(s): primary_ip4 | All versions |
-| unique_primary_ip6 | 3 | builtin | primary_ip6 | N/A | Matches on unique field(s): primary_ip6 | All versions |
-| virtualization_virtualmachine_unique_name_cluster_tenant | 4 | builtin |  | N/A | Custom matcher | All versions |
-| virtualization_virtualmachine_unique_name_cluster | 5 | builtin |  | tenant is NULL | Custom matcher | All versions |
-| virtualization_virtualmachine_unique_name_device_tenant | 6 | builtin |  | cluster is NULL AND device is NOT NULL | Custom matcher | All versions |
-| virtualization_virtualmachine_unique_name_device | 7 | builtin |  | cluster is NULL AND device is NOT NULL AND tenant is NULL | Custom matcher | All versions |
+| unique_primary_ip4 | 2 | builtin | primary_ip4 | N/A | Matches on unique field(s): primary_ip4 | NetBox 4.7.0 |
+| unique_primary_ip6 | 3 | builtin | primary_ip6 | N/A | Matches on unique field(s): primary_ip6 | NetBox 4.7.0 |
+| virtualization_virtualmachine_unique_name_cluster_tenant | 4 | builtin |  | cluster is NOT NULL | Custom matcher | NetBox 4.7.0 |
+| virtualization_virtualmachine_unique_name_device_tenant | 5 | builtin |  | cluster is NULL AND device is NOT NULL | Custom matcher | NetBox 4.7.0 |
 
 ## virtualization.virtualmachinetype
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_slug | 1 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| virtualization_virtualmachinetype_unique_name | 2 | builtin |  | N/A | Custom matcher | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_slug | 1 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| virtualization_virtualmachinetype_unique_name | 2 | builtin |  | N/A | Custom matcher | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## virtualization.vminterface
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_primary_mac_address | 1 | builtin | primary_mac_address | N/A | Matches on unique field(s): primary_mac_address | All versions |
-| virtualization_vminterface_unique_virtual_machine_name | 2 | builtin | virtual_machine, name | N/A | Matches on unique constraint fields: virtual_machine, name | All versions |
+| unique_primary_mac_address | 1 | builtin | primary_mac_address | N/A | Matches on unique field(s): primary_mac_address | NetBox 4.7.0 |
+| virtualization_vminterface_unique_virtual_machine_name | 2 | builtin | virtual_machine, name | N/A | Matches on unique constraint fields: virtual_machine, name | NetBox 4.7.0 |
 
 ## vpn.ikepolicy
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## vpn.ikeproposal
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## vpn.ipsecpolicy
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## vpn.ipsecprofile
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## vpn.ipsecproposal
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## vpn.l2vpn
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## vpn.l2vpntermination
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| vpn_l2vpntermination_assigned_object | 1 | builtin | assigned_object_type, assigned_object_id | N/A | Matches on unique constraint fields: assigned_object_type, assigned_object_id | All versions |
+| vpn_l2vpntermination_assigned_object | 1 | builtin | assigned_object_type, assigned_object_id | N/A | Matches on unique constraint fields: assigned_object_type, assigned_object_id | NetBox 4.7.0 |
 
 ## vpn.tunnel
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| vpn_tunnel_group_name | 2 | builtin | group, name | N/A | Matches on unique constraint fields: group, name | All versions |
-| vpn_tunnel_name | 3 | builtin | name | group is NULL | Matches on unique constraint fields: name where group is NULL | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
 
 ## vpn.tunnelgroup
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## vpn.tunneltermination
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| vpn_tunneltermination_termination | 1 | builtin | termination_type, termination_id | N/A | Matches on unique constraint fields: termination_type, termination_id | All versions |
+| vpn_tunneltermination_termination | 1 | builtin | termination_type, termination_id | N/A | Matches on unique constraint fields: termination_type, termination_id | NetBox 4.7.0 |
 
 ## wireless.wirelesslan
 
@@ -715,13 +735,12 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
-| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | All versions |
-| wireless_wirelesslangroup_unique_parent_name | 3 | builtin | parent, name | N/A | Matches on unique constraint fields: parent, name | All versions |
-| unique_autoslug_slug | 4 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | NetBox 4.7.0 |
+| unique_slug | 2 | builtin | slug | N/A | Matches on unique field(s): slug | NetBox 4.7.0 |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | NetBox 4.7.0 |
 
 ## wireless.wirelesslink
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| wireless_wirelesslink_unique_interfaces | 1 | builtin | interface_a, interface_b | N/A | Matches on unique constraint fields: interface_a, interface_b | All versions |
+| wireless_wirelesslink_unique_interfaces | 1 | builtin | interface_a, interface_b | N/A | Matches on unique constraint fields: interface_a, interface_b | NetBox 4.7.0 |
