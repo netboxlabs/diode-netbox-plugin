@@ -47,7 +47,7 @@ docker-compose-netbox-plugin-test-lint:
 
 .PHONY: docker-compose-netbox-plugin-test-cover
 docker-compose-netbox-plugin-test-cover:
-	@$(DOCKER_COMPOSE) $(COMPOSE_FILES) -f $(DOCKER_COMMON_PATH)/docker-compose.test.yaml run --rm -u root -e COVERAGE_FILE=/opt/netbox/netbox/coverage/.coverage -e COVERAGE_CORE=sysmon netbox sh -c "echo \"[timing] test start \$$(date -u +%T)\" && coverage run --source=netbox_diode_plugin --omit=*/migrations/* ./manage.py test --keepdb $(TEST_SELECTOR); rc=\$$?; echo \"[timing] test end \$$(date -u +%T)\"; [ \$$rc -eq 0 ] && coverage xml -o /opt/netbox/netbox/coverage/report.xml && coverage report -m | tee /opt/netbox/netbox/coverage/report.txt; exit \$$rc"; \
+	@$(DOCKER_COMPOSE) $(COMPOSE_FILES) -f $(DOCKER_COMMON_PATH)/docker-compose.test.yaml run --rm -u root -e COVERAGE_FILE=/opt/netbox/netbox/coverage/.coverage -e COVERAGE_CORE=sysmon netbox sh -c "echo \"[timing] test start \$$(date -u +%T)\" && coverage run --source=netbox_diode_plugin --omit=*/migrations/* ./manage.py test --keepdb $(TEST_SELECTOR); rc=\$$?; echo \"[timing] test end \$$(date -u +%T)\"; if [ \$$rc -eq 0 ]; then coverage xml -o /opt/netbox/netbox/coverage/report.xml && coverage report -m > /opt/netbox/netbox/coverage/report.txt; rc=\$$?; cat /opt/netbox/netbox/coverage/report.txt; fi; exit \$$rc"; \
 	EXIT_CODE=$$?; \
 	$(MAKE) docker-compose-netbox-plugin-down; \
 	exit $$EXIT_CODE
