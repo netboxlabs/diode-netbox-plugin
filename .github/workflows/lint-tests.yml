@@ -44,11 +44,13 @@ jobs:
         uses: actions/checkout@v7
       # Host interpreter for installing the package and running Ruff only.
       # The test suite runs inside the NetBox images (Python 3.12 for 4.4/4.5,
-      # 3.14 for 4.6/4.7), so this version does not describe the tests.
+      # 3.14 for 4.6/4.7), so this version does not describe the tests. It is
+      # the package's declared floor (requires-python in pyproject.toml), so
+      # the install step below doubles as the check that the floor still holds.
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.10"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
