@@ -13,8 +13,9 @@ DOCKER_COMMON_PATH := docker/common
 DOCKER_OVERRIDE := $(DOCKER_PATH)/docker-compose.override.yaml
 COMPOSE_FILES := -f $(DOCKER_COMMON_PATH)/docker-compose.yaml $(if $(wildcard $(DOCKER_OVERRIDE)),-f $(DOCKER_OVERRIDE))
 # CI-only overlay (GitHub sets CI=true): relaxes Postgres durability for the
-# throwaway test database. Never included for developer stacks.
-ifneq ($(CI),)
+# throwaway test database. Never included for developer stacks, including when
+# CI is set to a false-ish value such as "false" or "0".
+ifeq ($(CI),true)
   COMPOSE_FILES += -f $(DOCKER_COMMON_PATH)/docker-compose.ci.yaml
 endif
 TEST_SELECTOR := "/opt/netbox/netbox/netbox_diode_plugin/tests/$(NETBOX_MINOR_VERSION)/tests/"
