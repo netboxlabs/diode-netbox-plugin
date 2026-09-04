@@ -14,7 +14,7 @@ from django.contrib.contenttypes.fields import ContentType
 from django.core.cache import cache as django_cache
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
-from django.db.models import F, Value
+from django.db.models import Count, F, Value
 from django.db.models.fields import SlugField
 from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
@@ -104,6 +104,13 @@ def invalidate_find_obj_entry(object_type: str, object_id: int):
 #     (mac_address, assigned_object_type, assigned_object_id).
 #   - dcim.modulebay: matched by (name, device); NetBox's parent-aware
 #     constraint does not catch unscoped duplicates the matcher dedupes.
+#   - dcim.rack: matched by (site, name) only when the payload has location
+#     absent or explicit null; NetBox's (location, name) constraint is NULLS
+#     DISTINCT and enforces nothing there. Only that location-less half of
+#     this type's payload space takes the pre-save match -- see
+#     _rack_pre_save_match_applies -- and it BINDS the row without writing to
+#     it, for the same non-authoritative-identity reason as virtual chassis
+#     below -- see _PRE_SAVE_MATCH_BIND_ONLY.
 #   - dcim.virtualchassis: matched by name when the payload has no master;
 #     NetBox has no uniqueness on VC name at all. Only the MASTERLESS half of
 #     this type's payload space takes the pre-save match -- see
@@ -156,6 +163,7 @@ _REQUIRES_PRE_SAVE_MATCH = frozenset({
     "dcim.macaddress",
     "dcim.module",
     "dcim.modulebay",
+    "dcim.rack",
     "dcim.rackreservation",
     "dcim.virtualchassis",
     "ipam.prefix",
@@ -240,10 +248,34 @@ def _virtualchassis_pre_save_match_applies(data: dict) -> bool:
     return data.get("master") is None
 
 
+def _rack_pre_save_match_applies(data: dict) -> bool:
+    """
+    The rack pre-save match covers only the location-less shape.
+
+    A located CREATE racing a duplicate hits the (location, name)
+    constraint and recovers through the create path's IntegrityError
+    fallback, so it needs no pre-save match. A CREATE with the location
+    key ABSENT lands in NULLS DISTINCT territory where nothing stops the
+    duplicate, and only the site-scoped RackSiteNameMatcher can answer
+    for it, so that shape takes the pre-save match.
+
+    An explicit ``location: null`` is deliberately NOT admitted: the
+    site-name matcher stands aside for it, and the only matcher left is
+    the derived (location, name) one, whose IS NULL filter carries no
+    site term -- a pre-save bind through it would attach a same-named
+    rack from ANOTHER site. Such CREATEs insert as they do without this
+    branch. Telling the two shapes apart at apply time depends on the
+    differ preserving the explicit null into CREATE data
+    (differ._CREATE_PRESERVED_NULL_KEYS).
+    """
+    return "location" not in data
+
+
 # Payload-level narrowing for entries in _REQUIRES_PRE_SAVE_MATCH whose
 # pre-save match is safe for only PART of their type's payload space. A type
 # with no gate here takes the pre-save match for every CREATE.
 _PRE_SAVE_MATCH_PAYLOAD_GATES = {
+    "dcim.rack": _rack_pre_save_match_applies,
     "dcim.virtualchassis": _virtualchassis_pre_save_match_applies,
 }
 
@@ -280,10 +312,10 @@ _PRE_SAVE_MATCH_PAYLOAD_GATES = {
 # still worth taking -- a wrong write into another source's live stack is
 # silent and unrepairable, a delayed write is neither -- but it is a trade.
 #
-# Why this set holds dcim.virtualchassis ALONE, when the no-uniqueness argument
-# above applies just as well to the nine other types this file's own gap list
-# names for absent uniqueness -- dcim.macaddress, dcim.modulebay, ipam.prefix,
-# ipam.vlan, ipam.vlangroup, ipam.vrf, virtualization.cluster,
+# Why this set holds dcim.virtualchassis and dcim.rack, when the no-uniqueness
+# argument above applies just as well to the nine other types this file's own
+# gap list names for absent uniqueness -- dcim.macaddress, dcim.modulebay,
+# ipam.prefix, ipam.vlan, ipam.vlangroup, ipam.vrf, virtualization.cluster,
 # virtualization.virtualmachine, wireless.wirelesslan (dcim.module is the
 # separate DB-constraint-backed entry above, and dcim.cable is matched by its
 # terminations): because those were measured to behave the same way, and to do
@@ -292,9 +324,20 @@ _PRE_SAVE_MATCH_PAYLOAD_GATES = {
 # fields through the pre-save match, IDENTICALLY on the parent commit and on
 # origin/develop, so none of it is a regression this branch introduces, and
 # widening the set here would change behaviour for four more types well outside
-# a VirtualChassis ingest PR. dcim.virtualchassis is in this set because this
-# branch is what put VC CREATEs on the pre-save path at all -- not because VC
-# is uniquely exposed. Broadening it is filed separately.
+# this PR's scope. dcim.virtualchassis is in this set because this branch is
+# what put VC CREATEs on the pre-save path at all -- not because VC is
+# uniquely exposed.
+#
+# dcim.rack is in this set for a related but distinct reason: a location-less
+# match binds on (site, name) alone, with location ignored, which is
+# non-authoritative identity, not proof the payload and the matched row
+# describe the same physical rack. And the CREATE data being applied is not
+# even purely the producer's own: transformer._set_defaults has already
+# injected status/width/u_height/starting_unit onto it when the producer left
+# them unasserted, so a write here could stamp those manufactured defaults
+# onto a row the payload never actually described -- see
+# _rack_pre_save_match_applies. Broadening this set further is filed
+# separately.
 #
 # Read narrowly, because this does NOT make a same-named row safe from ingest
 # generally. Once the row exists the matcher finds it by name, so the next
@@ -312,6 +355,7 @@ _PRE_SAVE_MATCH_PAYLOAD_GATES = {
 # applier._try_bind_existing_instance for the ref_id-update gap it does not
 # cover.
 _PRE_SAVE_MATCH_BIND_ONLY = frozenset({
+    "dcim.rack",
     "dcim.virtualchassis",
 })
 
@@ -331,10 +375,10 @@ def requires_pre_save_match(object_type: str, data: dict | None = None) -> bool:
     the safe direction: the pre-save match resolves a CREATE onto an existing
     row, and for every type outside _PRE_SAVE_MATCH_BIND_ONLY it then writes
     the payload there, so taking that route unproven is the direction that does
-    damage, while declining it only forgoes a dedupe. (For the one gated type
-    today, dcim.virtualchassis, the match is bind-only and writes nothing --
-    so the default is conservative about the resolution itself, not about a
-    write.)
+    damage, while declining it only forgoes a dedupe. (For the gated types
+    today, dcim.virtualchassis and dcim.rack, the match is bind-only and
+    writes nothing -- so the default is conservative about the resolution
+    itself, not about a write.)
     """
     if object_type not in _REQUIRES_PRE_SAVE_MATCH:
         return False
@@ -935,6 +979,12 @@ _LOGICAL_MATCHERS = {
             name="logical_mac_address_within_parent",
             model_class=get_object_type_model("dcim.macaddress"),
             condition=Q(assigned_object_id__isnull=True),
+        ),
+    ],
+    "dcim.rack": lambda: [
+        RackSiteNameMatcher(
+            model_class=get_object_type_model("dcim.rack"),
+            name="logical_rack_site_name_no_location",
         ),
     ],
     "dcim.rackreservation": lambda: [
@@ -1982,6 +2032,224 @@ class RackReservationUnitOverlapMatcher:
 
 
 @dataclass
+class RackSiteNameMatcher:
+    """
+    Match a location-less rack payload by (site, name), any location.
+
+    Rack identity in NetBox is location-scoped with NULLS DISTINCT, so a
+    payload carrying only name + site has no constraint-derived matcher
+    and would duplicate the rack on every re-ingest. This matcher reads
+    such a payload as "the rack called <name> in site <site>": it asserts
+    nothing about location, so the row's location is neither filtered on
+    nor written (key-absent fields are never diffed).
+
+    A payload carrying the location key, a value or an explicit null, is
+    owned by the constraint matchers. A payload carrying an asset tag is a
+    subtler split: ``unique_asset_tag`` must keep winning WHEN IT CAN, so
+    ``has_required_fields`` no longer refuses a tagged payload outright.
+    ``fingerprint`` still abstains for any truthy asset_tag with no DB
+    access, so in-batch nodes carrying different tags never dedupe-merge
+    here; ``build_queryset`` abstains only when a rack already carries
+    that tag, and otherwise proceeds, so the first payload that ADDS a tag
+    to an existing tagless rack binds it (the UPDATE sets the tag) instead
+    of duplicating the rack and stranding the original. Resolution among
+    several candidates is bounded by populated-ness; see resolve().
+    """
+
+    model_class: type[models.Model]
+    name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
+
+    def has_required_fields(self, data: dict) -> bool:
+        """
+        Location-less shape only: name + site, no location key.
+
+        An asset tag no longer gates this matcher off outright -- see the
+        class docstring for the split between fingerprint (always abstains
+        for a truthy tag) and build_queryset (abstains only when the tag is
+        already bound elsewhere).
+        """
+        name = data.get("name")
+        return (
+            isinstance(name, str)
+            and bool(name)
+            and data.get("site") is not None
+            and "location" not in data
+        )
+
+    @staticmethod
+    def _real_int(value) -> bool:
+        """Accept only real ints: bool would otherwise mean pk 1."""
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    def fingerprint(self, data: dict) -> int | None:
+        """
+        In-batch dedupe key: site ref + name, gated to the location-less shape.
+
+        Abstains for any truthy asset_tag without touching the DB: two
+        in-batch nodes carrying different tags must not dedupe-merge, even
+        though build_queryset may still bind an existing tagless rack for
+        either of them individually at lookup time.
+
+        Deliberately NOT an ungated name key: two genuinely different
+        same-named racks in different locations of one site, sent in one
+        batch, must not dedupe-merge. Mixed-shape convergence happens at
+        apply (the bind-only pre-save match), not here.
+        """
+        if not self.has_required_fields(data):
+            return None
+        if data.get("asset_tag"):
+            return None
+        site = data.get("site")
+        if isinstance(site, UnresolvedReference):
+            site_key = ("__uuid__", site.uuid)
+        elif self._real_int(site):
+            site_key = site
+        else:
+            site_key = ("__str__", str(site))
+        return hash((
+            self.model_class.__name__, self.name, site_key, data["name"],
+            data.get("facility_id") or None,
+        ))
+
+    def build_queryset(self, data: dict) -> models.QuerySet | None:
+        """
+        Site-wide name query, only when site is a resolved int pk.
+
+        Abstains when a rack already carries this payload's asset tag, so
+        unique_asset_tag keeps winning whenever it can; otherwise proceeds
+        over TAGLESS candidates only, letting a payload that adds a tag to
+        an existing tagless rack bind it instead of duplicating the rack,
+        while never binding a same-named rack that carries a different tag;
+        an explicitly empty tag is an assertion of taglessness and is held
+        to the same rule.
+        A submitted facility_id narrows the same way: a candidate with that
+        facility id wins outright, candidates with a different one are
+        excluded, and an explicitly empty value binds only racks without one.
+        """
+        if not self.has_required_fields(data):
+            return None
+        site = data.get("site")
+        if not self._real_int(site):
+            return None
+        qs = self.model_class.objects.filter(site_id=site, name=data["name"])
+        if "asset_tag" in data:
+            tag = data["asset_tag"]
+            if tag and self.model_class.objects.filter(asset_tag=tag).exists():
+                return None
+            # An asserted tag state -- a new tag, or explicitly none -- may
+            # only bind a TAGLESS rack: a same-named rack carrying a different
+            # tag is a different physical rack, and binding it would rewrite
+            # (or clear) its identity with this payload's value.
+            qs = qs.filter(models.Q(asset_tag__isnull=True) | models.Q(asset_tag=""))
+        if "facility_id" in data:
+            # facility_id discriminates same-named racks the way an asset tag
+            # does: a candidate carrying THIS facility id is the rack meant,
+            # one carrying a different id is another physical rack, and an
+            # explicitly empty value asserts "no facility id" -- it may bind
+            # only a rack that has none.
+            facility_id = data["facility_id"]
+            exact = qs.filter(facility_id=facility_id) if facility_id else qs.none()
+            if facility_id and exact.exists():
+                qs = exact
+            else:
+                qs = qs.filter(
+                    models.Q(facility_id__isnull=True) | models.Q(facility_id="")
+                )
+        return qs
+
+    def resolve(self, queryset: models.QuerySet, data: dict):
+        """
+        Choose among same-(site, name) candidates, bounded by populated-ness.
+
+        One row binds outright. Among several, a SOLE populated row (it has
+        devices, reservations or power feeds) wins -- empty duplicates starve rather
+        than absorb references. With no populated row the oldest
+        location-null row wins (the shape this payload created before the
+        fix existed). Several populated rows -- or none populated and none
+        null -- refuse loudly: binding would be a data move made on the
+        strength of a name.
+
+        Populated-ness and location are read from ONE annotated, joined
+        query rather than per-row devices/reservations/powerfeeds .exists()
+        / .count() probe each -- a candidate list of N rows previously cost
+        up to 3N extra queries just to decide whether to raise.
+        """
+        rows = list(
+            queryset.annotate(
+                n_dev=Count("devices", distinct=True),
+                n_res=Count("reservations", distinct=True),
+                n_pf=Count("powerfeeds", distinct=True),
+            )
+            .select_related("location")
+            .order_by("pk")
+        )
+        if not rows:
+            return None
+        if len(rows) == 1:
+            return rows[0]
+        populated = [r for r in rows if r.n_dev or r.n_res or r.n_pf]
+        if len(populated) == 1:
+            return populated[0]
+        if not populated:
+            nulls = [r for r in rows if r.location_id is None]
+            if nulls:
+                return nulls[0]
+        raise self._ambiguous_match(rows, populated, data)
+
+    @staticmethod
+    def _rack_listing_entry(r) -> str:
+        """One row's listing entry: pk, location label, devices/reservations/power feeds."""
+        location = (
+            "location=None" if r.location_id is None
+            else f"location={r.location.name} ({r.location_id})"
+        )
+        return f"pk={r.pk} {location} devices={r.n_dev} reservations={r.n_res} powerfeeds={r.n_pf}"
+
+    @classmethod
+    def _rack_listing(cls, rows: list, populated: list) -> str:
+        """
+        Full detail for populated rows; empty rows collapse into counts.
+
+        With no populated row at all (the caller's own tie-break already
+        failed to find a safe pick), every row is named in full instead --
+        there is nothing populated to distinguish them by, and the row
+        count in that shape stays small in practice.
+        """
+        if not populated:
+            return "; ".join(cls._rack_listing_entry(r) for r in rows)
+        entries = [cls._rack_listing_entry(r) for r in populated]
+        empty = [r for r in rows if r not in populated]
+        empty_null = sum(1 for r in empty if r.location_id is None)
+        empty_located = len(empty) - empty_null
+        if empty_null:
+            entries.append(f"and {empty_null} empty location-null rows")
+        if empty_located:
+            entries.append(f"and {empty_located} empty located rows")
+        return "; ".join(entries)
+
+    def _ambiguous_match(
+        self, rows: list, populated: list, data: dict
+    ) -> AmbiguousObjectMatch:
+        """Build the refusal naming every populated row and the site."""
+        listing = self._rack_listing(rows, populated)
+        site_pk = data.get("site")
+        site_name = (
+            get_object_type_model("dcim.site").objects
+            .filter(pk=site_pk).values_list("name", flat=True).first()
+        )
+        return AmbiguousObjectMatch(
+            f"dcim.rack payload name {data.get('name')!r} in site "
+            f"{site_name!r} (pk {site_pk}) matches {len(rows)} racks and none "
+            f"can be chosen safely: {listing}. Disambiguate with a location "
+            "key or an asset tag, or merge/rename the racks in NetBox.",
+            "dcim.rack",
+        )
+
+
+@dataclass
 class VRFIPNetworkIPMatcher:
     """Matches ip in a vrf, ignores mask."""
 
@@ -2306,32 +2574,35 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
 
     Includes only simple scalar fields. Entities whose identity depends
     solely on unresolved references (no scalar fields at all) are not
-    cacheable.
+    cacheable. Some object types are never cached due to identity logic
+    that depends on factors the scalar-only key cannot express.
     """
-    if object_type == "dcim.cable":
-        # Cable identity lives entirely in list fields skipped by the scalar-only
-        # cache key; always run the authoritative build_queryset matcher loop.
-        return None
-
-    if object_type == "dcim.rackreservation":
-        # Reservation identity lives in the units ArrayField, which the
-        # scalar-only key below skips -- two different reservations on one
-        # rack could share a key and serve each other's cached answer.
-        # Returning None disables both the django and request-scoped caches.
-        return None
-
-    if object_type == "dcim.virtualchassis":
-        # Not cacheable, and the reason is identity rather than cost. The key
-        # below is built from SCALAR fields only, so it cannot see
-        # common.VC_MEMBER_HINT (a list, and private) -- two payloads naming the
-        # same chassis on behalf of DIFFERENT member devices would share one
-        # key, and the first one's answer would be served to the second, which
-        # is precisely the "pick a row the payload never identified" the
-        # VirtualChassisNameMatcher.resolve rules exist to prevent. A cached hit
-        # would also skip resolve() entirely, so an ambiguity that must be
-        # reported would instead answer with whatever row was cached before the
-        # duplicate appeared. Both caches (django and request-scoped) key off
-        # this function, so returning None disables both.
+    # Types whose lookup must never be served from the scalar-only key:
+    # - dcim.cable: identity lives entirely in the termination lists the key
+    #   skips; always run the authoritative build_queryset matcher loop.
+    # - dcim.rackreservation: identity lives in the units ArrayField the key
+    #   skips; two different reservations on one rack could share a key and
+    #   serve each other's cached answer.
+    # - dcim.virtualchassis: two hazards. The key cannot see
+    #   common.VC_MEMBER_HINT (a list, and private) -- two payloads naming the
+    #   same chassis on behalf of DIFFERENT member devices share one key and the
+    #   first answer is served to the second, precisely the "pick a row the
+    #   payload never identified" VirtualChassisNameMatcher.resolve exists to
+    #   prevent. And a cached hit skips resolve() entirely, so an ambiguity that
+    #   must be reported answers with whatever was cached before the duplicate
+    #   appeared.
+    # - dcim.rack: not a key-shape problem -- a cache hit skips resolve(), so
+    #   the ambiguity refusal and the populated/oldest-null choice would be
+    #   answered by whatever row was cached before a competing row appeared, and
+    #   row creation invalidates nothing.
+    # Returning None disables both the django and request-scoped caches.
+    non_cacheable_types = {
+        "dcim.cable",
+        "dcim.rack",
+        "dcim.rackreservation",
+        "dcim.virtualchassis",
+    }
+    if object_type in non_cacheable_types:
         return None
 
     items = []

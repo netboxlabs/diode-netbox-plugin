@@ -18,6 +18,7 @@ from netbox_diode_plugin.api.matcher import (
     GlobalIPNetworkIPMatcher,
     ObjectMatchCriteria,
     RackReservationUnitOverlapMatcher,
+    RackSiteNameMatcher,
     VirtualChassisNameMatcher,
 )
 from netbox_diode_plugin.management.commands.generate_matching_docs import (
@@ -169,6 +170,13 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
 
         result = self.command.get_matcher_fields(matcher)
         self.assertEqual(result, ["rack", "units"])
+
+    def test_get_matcher_fields_rack_site_name(self):
+        """Test deriving Fields for a real RackSiteNameMatcher via the class-name map."""
+        matcher = RackSiteNameMatcher(model_class=None, name="x")
+
+        result = self.command.get_matcher_fields(matcher)
+        self.assertEqual(result, ["site", "name"])
 
     def test_get_matcher_fields_global_ip_network(self):
         """Test deriving Fields for a real GlobalIPNetworkIPMatcher via ip_fields."""

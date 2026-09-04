@@ -272,9 +272,10 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_asset_tag | 1 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | All versions |
-| dcim_rack_unique_location_name | 2 | builtin | location, name | N/A | Matches on unique constraint fields: location, name | All versions |
-| dcim_rack_unique_location_facility_id | 3 | builtin | location, facility_id | N/A | Matches on unique constraint fields: location, facility_id | All versions |
+| logical_rack_site_name_no_location | 1 | logical | site, name | N/A | Match a location-less rack payload by (site, name), any location. | All versions |
+| unique_asset_tag | 2 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | All versions |
+| dcim_rack_unique_location_name | 3 | builtin | location, name | N/A | Matches on unique constraint fields: location, name | All versions |
+| dcim_rack_unique_location_facility_id | 4 | builtin | location, facility_id | N/A | Matches on unique constraint fields: location, facility_id | All versions |
 
 ## dcim.rackgroup
 
