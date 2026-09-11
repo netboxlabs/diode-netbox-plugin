@@ -19,10 +19,8 @@ reject is passed through untouched so apply reports NetBox's own error.
 How a rule is chosen is deliberately NetBox-driven: the EUI rules call the model
 field's own ``to_python``, and the strip rule follows DRF's ``ModelSerializer``
 field mapping, so the plugin never carries a private copy of NetBox's format
-rules. Rewrites that live in a model's ``save()`` (e.g. ``IPAddress.dns_name``
-is lowercased there) are deliberately NOT mirrored: there is no field to
-delegate to, so a copy here would be a policy NetBox may change without the
-plugin noticing.
+rules. Rewrites that live in a model's ``save()`` have no field to delegate to
+and are listed explicitly in ``_SAVE_TIME_RULES``.
 """
 
 import logging
@@ -41,6 +39,13 @@ logger = logging.getLogger("netbox.diode_data")
 # serializers map these to DRF ModelField, whose to_internal_value is exactly
 # that call, so this is what apply would do to the value anyway.
 _TO_PYTHON_FIELD_CLASSES = (MACAddressField, WWNField)
+
+# Rewrites NetBox performs in save() rather than in a field. Keyed by object
+# type, then field; the callable receives a str and returns the stored form.
+_SAVE_TIME_RULES: dict[str, dict[str, Callable[[str], str]]] = {
+    # ipam.models.ip.IPAddress.save(): "Force dns_name to lowercase"
+    "ipam.ipaddress": {"dns_name": str.lower},
+}
 
 
 def _via_to_python(field: models.Field) -> Callable:
@@ -76,6 +81,13 @@ def _is_trimmed_text(field: models.Field) -> bool:
     return isinstance(field, models.CharField | models.TextField) and not field.choices
 
 
+def _compose(first: Callable | None, second: Callable) -> Callable:
+    """Apply ``first`` then ``second``; ``first`` may be absent."""
+    if first is None:
+        return second
+    return lambda value: second(first(value))
+
+
 @lru_cache(maxsize=256)
 def _rules_for(object_type: str) -> dict[str, Callable]:
     """The per-field rewrite plan for an object type; empty when the type has no model."""
@@ -91,6 +103,8 @@ def _rules_for(object_type: str) -> dict[str, Callable]:
             rules[field.name] = _via_to_python(field)
         elif _is_trimmed_text(field):
             rules[field.name] = _strip
+    for name, rule in _SAVE_TIME_RULES.get(object_type, {}).items():
+        rules[name] = _compose(rules.get(name), rule)
     return rules
 
 

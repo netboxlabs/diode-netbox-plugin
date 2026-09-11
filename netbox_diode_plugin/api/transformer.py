@@ -894,9 +894,6 @@ def _transform_proto_json_1(proto_json: dict, object_type: str, supported_models
     proto_json = _ensure_snake_case(proto_json, object_type)
     apply_format_transformations(proto_json, object_type)
     apply_entity_migrations(proto_json, object_type)
-    # Last rewrite before anything reads the values: matching, fingerprints and
-    # the differ must all see the form NetBox stores, or a value NetBox
-    # rewrites on write re-plans as an UPDATE on every ingest (diode#373).
     canonicalize_entity(proto_json, object_type)
     _check_reverse_side_names_its_parent(proto_json, object_type, metadata)
 
