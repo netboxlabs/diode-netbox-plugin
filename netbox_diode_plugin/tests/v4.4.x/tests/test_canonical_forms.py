@@ -8,7 +8,6 @@ from uuid import uuid4
 
 from dcim.models import Device, DeviceRole, DeviceType, Interface, MACAddress, Manufacturer, Site
 from django.test import TestCase
-from ipam.models import IPAddress
 from rest_framework import status
 from utilities.testing import APITestCase
 
@@ -69,12 +68,10 @@ class CanonicalizeEntityTests(TestCase):
         out = self._canon("dcim.device", status=" active ")
         self.assertEqual(out["status"], " active ")
 
-    # --- per-field rules for save()-time rewrites ----------------------------
-
-    def test_ip_address_dns_name_is_lowercased_and_stripped(self):
-        """IPAddress.save() lowercases dns_name; the strip rule composes with it."""
+    def test_save_time_rewrites_are_not_mirrored(self):
+        """IPAddress.save() lowercases dns_name, but that is NetBox policy, not a field rule; only strip applies."""
         out = self._canon("ipam.ipaddress", dns_name=" Host.Example.COM ")
-        self.assertEqual(out["dns_name"], "host.example.com")
+        self.assertEqual(out["dns_name"], "Host.Example.COM")
 
     # --- guards ----------------------------------------------------------------
 
@@ -163,7 +160,6 @@ class CanonicalFormsDiffTests(APITestCase):
         self.mac = MACAddress.objects.create(mac_address="9C:1D:36:FC:96:2F", assigned_object=self.interface)
         self.interface.primary_mac_address = self.mac
         self.interface.save()
-        self.ip = IPAddress.objects.create(address="10.0.0.5/24", dns_name="host.example.com")
 
     def _changes(self, object_type, entity_key, entity):
         response = self.client.post(
@@ -213,14 +209,6 @@ class CanonicalFormsDiffTests(APITestCase):
         ref["name"] = f"  {self.device.name} "
         ref["serial"] = " ABC123 "
         changes = self._changes("dcim.device", "device", ref)
-        self.assertEqual(changes, [])
-
-    def test_mixed_case_dns_name_replans_nothing(self):
-        """IPAddress.save() lowercases dns_name, so mixed case is not a change."""
-        changes = self._changes("ipam.ipaddress", "ip_address", {
-            "address": "10.0.0.5/24",
-            "dns_name": "Host.Example.COM",
-        })
         self.assertEqual(changes, [])
 
     def test_a_real_mac_change_is_still_planned(self):
