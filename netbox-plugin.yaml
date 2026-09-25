@@ -1,0 +1,29 @@
+schema_version: 1
+
+package_name: netboxlabs-diode-netbox-plugin
+plugin_name: netbox_diode_plugin
+
+netbox_min: "4.4.10"
+netbox_max: "4.7.99"
+
+config:
+  required_settings: []
+  default_settings:
+    diode_target: "grpc://localhost:8080/diode"
+    diode_target_override: null
+    diode_username: diode
+    netbox_to_diode_client_id: netbox-to-diode
+    netbox_to_diode_client_secret: null
+    secrets_path: /run/secrets/
+    netbox_to_diode_client_secret_name: netbox_to_diode
+    diode_max_auth_retries: 3
+    required_token_audience: []
+    find_obj_cache_ttl: 30
+    diode_target_display: null
+    apply_bypass_counter_updates: false
+    apply_bypass_change_logging: false
+    apply_bypass_search_indexing: false
+    apply_bypass_customfield_query_cache: false
+    apply_buffer_change_logging: false
+    apply_buffer_counter_updates: false
+    apply_deadlock_max_retries: 2
