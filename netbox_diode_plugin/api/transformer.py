@@ -1785,17 +1785,17 @@ def _log_bound_without_writing(object_type: str, data: dict, existing) -> None:
     )
 
 
-def _may_add_a_candidate(node: dict) -> bool:
+def _may_change_candidates(node: dict) -> bool:
     """
-    Whether a fallback-typed node could leave a new part-number candidate behind.
+    Whether a fallback-typed node could change which rows carry a part number the fallback considers.
 
-    Only one that asserts a part number, or that names its row by something other
-    than its model (netbox_id, slug, a custom field) and so can rename or move a
-    row that keeps its stored part number. A plain (manufacturer, model) payload
-    resolves to its own model's row or creates one without a part number, so it
-    is skipped without a lookup.
+    Only one that sends a part number, blank included since that clears it, or
+    that names its row by something other than its model (netbox_id, slug, a
+    custom field) and so can rename or move a row keeping its stored part number.
+    A plain (manufacturer, model) payload resolves to its own model's row or
+    creates one without a part number, so it is skipped without a lookup.
     """
-    if asserted_part_number(node) is not None:
+    if 'part_number' in node:
         return True
     return node.get('_netbox_id') is not None or bool(node.get('slug')) or bool(node.get('custom_fields'))
 
@@ -1831,54 +1831,58 @@ def _row_before(node: dict, manufacturer):
     return None
 
 
-def _is_candidate(manufacturer_pk, model, part, key) -> bool:
-    """Whether a row with these values is one the fallback considers for key under a manufacturer."""
-    return (
-        part is not None and part == key[1] and manufacturer_pk == key[0][1]
-        and part_number_key({"model": model}) is not None
-    )
-
-
-def _pending_candidate(node: dict, canonical: dict) -> tuple | None:
+def _candidate_key(manufacturer_pk, model, part) -> tuple | None:
     """
-    The (manufacturer, part number) a node leaves a new fallback candidate for, or None.
+    The (manufacturer, part number) a row with these values is a fallback candidate for, or None.
 
-    Worked out from the row after the write: an update is partial, so each of
-    manufacturer, model and part number is the payload's where it sends one and
-    the stored row's where it does not. It is a new candidate when that row is
-    one the fallback considers and the row before the write was not. A row whose
-    model is its part number is left out: it binds, or is named after the part,
-    which the model matcher finds first.
+    A row named after a placeholder is never one, and neither is a row whose
+    model is its part number: the model matcher finds that one first.
+    """
+    model = part_number_key({"model": model})
+    if manufacturer_pk is None or part is None or model is None or model == part:
+        return None
+    return (("pk", manufacturer_pk), part)
+
+
+def _candidacy_changes(node: dict, canonical: dict) -> set:
+    """
+    The (manufacturer, part number) keys whose fallback candidates a node's write changes.
+
+    Worked out from the row before and after the write: an update is partial, so
+    each of manufacturer, model and part number is the payload's where it sends
+    one and the stored row's where it does not. A key changes when the row gains
+    candidacy for it or loses it, by a new or cleared part number, a rename to or
+    from a placeholder, or a move between manufacturers.
     """
     manufacturer = _manufacturer_identity(node['manufacturer'], canonical) if 'manufacturer' in node else None
     row = _row_before(node, manufacturer)
+    before = None
+    if row is not None:
+        before = _candidate_key(row.manufacturer_id, row.model, asserted_part_number({"part_number": row.part_number}))
     if manufacturer is None:
         manufacturer = ("pk", row.manufacturer_id) if row is not None else None
     model = node.get('model') if 'model' in node else (row.model if row is not None else None)
     part = asserted_part_number(node) if 'part_number' in node else (
         asserted_part_number({"part_number": row.part_number}) if row is not None else None
     )
-    if manufacturer is None or manufacturer[0] != "pk" or part is None:
-        return None
-    key = (manufacturer, part)
-    if part_number_key({"model": model}) == part or not _is_candidate(manufacturer[1], model, part, key):
-        return None
-    if row is not None and _is_candidate(row.manufacturer_id, row.model, asserted_part_number({"part_number": row.part_number}), key):
-        return None
-    return key
+    after = None
+    if manufacturer is not None and manufacturer[0] == "pk":
+        after = _candidate_key(manufacturer[1], model, part)
+    if before == after:
+        return set()
+    return {key for key in (before, after) if key is not None}
 
 
 def _asserted_part_numbers(entities: list[dict]) -> tuple[dict, dict]:
-    """(manufacturer, part number) pairs this graph leaves a new candidate for, with the nodes doing it."""
-    nodes = [n for n in entities if has_fallback(n.get('_object_type')) and _may_add_a_candidate(n)]
+    """(manufacturer, part number) keys whose fallback candidates this graph changes, with the nodes changing them."""
+    nodes = [n for n in entities if has_fallback(n.get('_object_type')) and _may_change_candidates(n)]
     if not nodes:
         return {}, {}
     canonical = _canonical_manufacturers(entities)
     asserted = {}
     for node in nodes:
-        pending = _pending_candidate(node, canonical)
-        if pending is not None:
-            asserted.setdefault(pending, set()).add(node.get('_uuid'))
+        for key in _candidacy_changes(node, canonical):
+            asserted.setdefault(key, set()).add(node.get('_uuid'))
     return asserted, canonical
 
 
@@ -1902,9 +1906,9 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
         if _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved):
             continue
 
-        # A part number another node of this graph asserts for the same
-        # manufacturer is written with the same changeset, so a bind made now
-        # could be ambiguous once it applies.
+        # Another node of this graph changes which rows carry this part number
+        # for the same manufacturer, so a bind made now could be wrong or
+        # ambiguous once the changeset applies.
         key = part_number_key(data) if has_fallback(object_type) else None
         fallback = key is None or not (asserted.get((manufacturer, key), set()) - {data['_uuid']})
         existing = find_existing_object(data, object_type, fallback=fallback)
