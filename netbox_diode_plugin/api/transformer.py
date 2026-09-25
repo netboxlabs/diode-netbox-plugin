@@ -1780,33 +1780,63 @@ def _log_bound_without_writing(object_type: str, data: dict, existing) -> None:
     )
 
 
-def _ref_identity(value):
-    """A reference's identity before resolution: the referenced node's uuid, or the pk it already names."""
-    return value.uuid if isinstance(value, UnresolvedReference) else value
+def _adds_a_candidate(node: dict) -> bool:
+    """
+    Whether a fallback-typed node writes a second row carrying its part number.
+
+    That is a node with a usable model of its own that asserts a different part
+    number. A node whose model is a placeholder writes a row the fallback never
+    considers, and one asserting its own model binds or is named after the part,
+    which the model matcher finds first.
+    """
+    model, part = part_number_key(node), asserted_part_number(node)
+    return part is not None and model is not None and model != part
 
 
-def _asserted_part_numbers(entities: list[dict]) -> dict[tuple, set]:
-    """(manufacturer, part number) pairs the graph's fallback-typed nodes assert, each with the nodes asserting it."""
-    asserted = {}
+def _canonical_manufacturers(entities: list[dict]) -> dict:
+    """Each manufacturer node's identity: the row it resolves to, else the node itself."""
+    canonical = {}
     for node in entities:
-        if has_fallback(node.get('_object_type')):
-            value = asserted_part_number(node)
-            if value is not None:
-                key = (_ref_identity(node.get('manufacturer')), value)
-                asserted.setdefault(key, set()).add(node.get('_uuid'))
-    return asserted
+        if node.get('_object_type') != 'dcim.manufacturer' or node.get('_is_post_create'):
+            continue
+        pk = node.get('_netbox_id')
+        if pk is None:
+            existing = find_existing_object(node, 'dcim.manufacturer')
+            pk = existing.pk if existing is not None else None
+        canonical[node['_uuid']] = ("pk", pk) if pk is not None else ("node", node['_uuid'])
+    return canonical
+
+
+def _manufacturer_identity(value, canonical: dict):
+    """The manufacturer a reference names, so different selectors of one row compare equal."""
+    if isinstance(value, UnresolvedReference):
+        return canonical.get(value.uuid, ("node", value.uuid))
+    return ("pk", value)
+
+
+def _asserted_part_numbers(entities: list[dict]) -> tuple[dict, dict]:
+    """(manufacturer, part number) pairs this graph writes onto a second row, with the nodes writing them."""
+    nodes = [n for n in entities if has_fallback(n.get('_object_type')) and _adds_a_candidate(n)]
+    if not nodes:
+        return {}, {}
+    canonical = _canonical_manufacturers(entities)
+    asserted = {}
+    for node in nodes:
+        key = (_manufacturer_identity(node.get('manufacturer'), canonical), asserted_part_number(node))
+        asserted.setdefault(key, set()).add(node.get('_uuid'))
+    return asserted, canonical
 
 
 def _resolve_existing_references(entities: list[dict]) -> list[dict]:
     seen = {}
     new_refs = {}
     resolved = []
-    asserted = _asserted_part_numbers(entities)
+    asserted, canonical = _asserted_part_numbers(entities)
 
     for data in entities:
         object_type = data['_object_type']
         # Compared with the graph's assertions, which predate resolution.
-        manufacturer = _ref_identity(data.get('manufacturer'))
+        manufacturer = _manufacturer_identity(data.get('manufacturer'), canonical)
         data = copy.deepcopy(data)
         _update_resolved_refs(data, new_refs)
 

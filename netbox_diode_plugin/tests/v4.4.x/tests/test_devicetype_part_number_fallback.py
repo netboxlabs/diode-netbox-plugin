@@ -315,6 +315,26 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(created, ["Other vendor 48-port"], [c.to_dict() for c in cs.changes])
 
+    def test_the_same_manufacturer_by_another_selector_still_counts(self):
+        """One end naming the manufacturer by name, the other by slug, is still one manufacturer."""
+        other = {"model": "Series 9200 48-port rev B", "part_number": PART, "manufacturer": {"slug": "pnf-vendor"}}
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = sorted(c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE)
+        self.assertEqual(created, sorted([PART, "Series 9200 48-port rev B"]), [c.to_dict() for c in cs.changes])
+
+    def test_a_pending_placeholder_type_is_not_a_candidate(self):
+        """A type named Unknown carrying the part number, created in the same graph, leaves the bind."""
+        other = self._device_type(model="Unknown", part_number=PART)
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, ["Unknown"], [c.to_dict() for c in cs.changes])
+
+    def test_an_agreeing_node_elsewhere_in_the_graph_is_not_a_candidate(self):
+        """Another node asserting the part as its own model and part number adds no second row."""
+        other = {"model": PART, "part_number": PART, "manufacturer": {"slug": "pnf-vendor"}}
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+
     def test_an_agreeing_part_number_still_binds(self):
         """A node asserting its own model as its part number does not count against itself."""
         cs = generate_changeset(self._device_type(part_number=PART), "dcim.devicetype").change_set
