@@ -834,12 +834,16 @@ def _move_deferred_companions(object_type, node, post_create):
                 post_create[scalar_field] = node.pop(scalar_field)
 
 @profiled("transform")
-def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]: # noqa: C901
+def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict, # noqa: C901
+                         warnings: dict | None = None) -> list[dict]:
     """
     Transform keys of proto json dict to flattened dictionaries with model field keys.
 
     This also handles placing `_type` fields for generic references,
     a certain form of deduplication and resolution of existing objects.
+
+    A node bound without writing leaves the output, so what the caller must hear
+    about it, by object type and field, goes into warnings when one is passed.
     """
     entities = _transform_proto_json_1(proto_json, object_type, supported_models)
 
@@ -862,7 +866,7 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
         deduplicated = prune_orphaned_nodes(deduplicated, referenced_before)
     _set_auto_slugs(deduplicated, supported_models)
     _handle_cached_scope(deduplicated, supported_models)
-    resolved = _resolve_existing_references(deduplicated)
+    resolved = _resolve_existing_references(deduplicated, warnings)
     # A device type bound without writing is dropped, and the nodes only it
     # referenced (a new tag, a custom field's object) would be created orphaned.
     kept = {node['_uuid'] for node in resolved}
@@ -1771,17 +1775,48 @@ def _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved) -> bool:
 # the payload carried is discarded with the node.
 _BOUND_IDENTITY_FIELDS = frozenset({"id", "manufacturer", "model"})
 
+# What the caller is told for each field a bind by part number did not apply.
+_BOUND_NOT_APPLIED = (
+    "Not applied: this {object_type} was bound to the existing one with id {pk}, whose part number is the "
+    "submitted model, and a row bound that way is never written to. To change that row, address it by its id."
+)
 
-def _log_bound_without_writing(object_type: str, data: dict, existing) -> None:
-    """Say what a bind discarded: at INFO when it dropped fields or warnings, else at DEBUG."""
-    # Field names only: values, and warning messages that can quote them, stay out of the log.
-    dropped = sorted(k for k in data if not k.startswith("_") and k not in _BOUND_IDENTITY_FIELDS)
-    warned = sorted(data.get("_warnings") or {})
-    level = logging.INFO if dropped or warned else logging.DEBUG
+_NOT_HELD = object()
+
+
+def _fields_not_applied(data: dict, existing) -> list[str]:
+    """The submitted fields a bind discards: all but identity and scalar values the row already holds."""
+    names = []
+    for name, value in data.items():
+        if name.startswith("_") or name in _BOUND_IDENTITY_FIELDS:
+            continue
+        if isinstance(value, str | int | float | bool) and getattr(existing, name, _NOT_HELD) == value:
+            continue
+        names.append(name)
+    return sorted(names)
+
+
+def _report_bound_without_writing(object_type: str, data: dict, existing, warnings: dict | None) -> None:
+    """
+    Tell the caller what a bind discarded, and log it: at INFO when it discarded anything, else at DEBUG.
+
+    The node leaves the changeset, so the warnings it carried would leave with it,
+    and the caller would read a clean plan with its fields quietly gone. Both go
+    into warnings instead, named by field. The log keeps to field names, since
+    values, and warning messages that can quote them, stay out of it.
+    """
+    dropped = _fields_not_applied(data, existing)
+    carried = data.get("_warnings") or {}
+    if warnings is not None:
+        for field, messages in carried.items():
+            warnings.setdefault(object_type, {}).setdefault(field, []).extend(messages)
+        for field in dropped:
+            message = _BOUND_NOT_APPLIED.format(object_type=object_type, pk=existing.pk)
+            warnings.setdefault(object_type, {}).setdefault(field, []).append(message)
     logger.log(
-        level,
-        "%s bound to pk=%s by part number without writing; fields not applied: %s; warnings dropped for: %s",
-        object_type, existing.pk, dropped or "none", warned or "none",
+        logging.INFO if dropped or carried else logging.DEBUG,
+        "%s bound to pk=%s by part number without writing; fields not applied: %s; warnings passed on for: %s",
+        object_type, existing.pk, dropped or "none", sorted(carried) or "none",
     )
 
 
@@ -1886,7 +1921,7 @@ def _asserted_part_numbers(entities: list[dict]) -> tuple[dict, dict]:
     return asserted, canonical
 
 
-def _resolve_existing_references(entities: list[dict]) -> list[dict]:
+def _resolve_existing_references(entities: list[dict], warnings: dict | None = None) -> list[dict]:
     seen = {}
     new_refs = {}
     resolved = []
@@ -1924,7 +1959,7 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
             if binds_without_writing(object_type, data, existing):
                 # The payload names this row's part, not the row itself: bind
                 # the reference and emit no change, so the row is never renamed.
-                _log_bound_without_writing(object_type, data, existing)
+                _report_bound_without_writing(object_type, data, existing, warnings)
                 continue
             _mark_seen(data, object_type, existing, seen)
             data['id'] = existing.id

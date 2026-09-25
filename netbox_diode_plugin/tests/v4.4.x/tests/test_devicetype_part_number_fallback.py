@@ -32,6 +32,7 @@ from netbox_diode_plugin.api.matcher import (
     part_number_key,
 )
 from netbox_diode_plugin.api.supported_models import get_serializer_for_model
+from netbox_diode_plugin.api.transformer import _fields_not_applied
 
 PART = "SW-9200-48P"
 CATALOG_MODEL = "Series 9200 48-port"
@@ -664,15 +665,44 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         with self.assertLogs("netbox.diode_data", level="INFO") as logs:
             generate_changeset(payload, "dcim.devicetype")
         message = "\n".join(logs.output)
-        self.assertIn("warnings dropped for: ['metadata']", message)
+        self.assertIn("warnings passed on for: ['metadata']", message)
         self.assertNotIn("not-a-number", message)
 
     def test_a_plain_bind_is_not_logged_at_info(self):
-        """A discovery payload carrying only its model and manufacturer binds quietly."""
+        """A discovery payload carrying only its model and manufacturer binds quietly, with nothing to report."""
         with self.assertLogs("netbox.diode_data", level="DEBUG") as logs:
-            generate_changeset(self._device_type(), "dcim.devicetype")
+            cs = generate_changeset(self._device_type(), "dcim.devicetype").change_set
         bound = [r for r in logs.records if "by part number without writing" in r.getMessage()]
         self.assertEqual([r.levelname for r in bound], ["DEBUG"])
+        self.assertNotIn("dcim.devicetype", cs.warnings or {})
+
+    def test_a_bind_tells_the_caller_which_fields_it_did_not_apply(self):
+        """The plan's warnings name each discarded field and the row it was bound to."""
+        cs = generate_changeset(self._device_type(description="from ingest"), "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        warned = (cs.warnings or {}).get("dcim.devicetype", {})
+        self.assertEqual(sorted(warned), ["description"], cs.warnings)
+        self.assertIn(f"id {self.catalog.pk}", warned["description"][0])
+
+    def test_a_bind_passes_its_node_warnings_to_the_caller(self):
+        """Warnings the bound node carried reach the plan instead of leaving with the node."""
+        payload = self._device_type(metadata={"source_match": {"netbox_id": "not-a-number"}})
+        cs = generate_changeset(payload, "dcim.devicetype").change_set
+        warned = (cs.warnings or {}).get("dcim.devicetype", {})
+        self.assertIn("Invalid netbox_id: not-a-number", warned.get("metadata", []), cs.warnings)
+
+    def test_a_field_the_row_lacks_is_named_not_fatal(self):
+        """A submitted value the bound row has no attribute for is reported, never a lookup error."""
+        row = SimpleNamespace(description="")
+        data = {"model": PART, "description": "", "vendor_note": "x"}
+        self.assertEqual(_fields_not_applied(data, row), ["vendor_note"])
+
+    def test_a_bind_names_only_fields_the_row_does_not_hold(self):
+        """A slug and part number the row already carries are not reported as discarded."""
+        payload = self._device_type(slug="pnf-vendor-sw-9200-48p", part_number=PART, comments="from ingest")
+        cs = generate_changeset(payload, "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        self.assertEqual(sorted((cs.warnings or {}).get("dcim.devicetype", {})), ["comments"], cs.warnings)
 
     def test_a_model_of_its_own_with_a_shared_part_number_creates_its_type(self):
         """A payload naming its own model is never folded into another model that shares the part number."""
