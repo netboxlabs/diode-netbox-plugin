@@ -1310,7 +1310,9 @@ def binds_without_writing(object_type: str, data: dict, existing) -> bool:
     any matcher (by slug, say), whose part number is the payload's model while its
     own model is not: discovery reports the part ID as the model. Any other match,
     a slug naming the row with its own model for instance, is diffed and written
-    as before; so is a row addressed by netbox_id, which never reaches this check.
+    as before; so is a row addressed by netbox_id, which never reaches this check,
+    and a payload asserting a part number other than its model, which names
+    another part just as it does for the fallback matcher.
     """
     if object_type not in _FALLBACK_MATCHERS:
         return False
@@ -1319,6 +1321,7 @@ def binds_without_writing(object_type: str, data: dict, existing) -> bool:
     model_key = part_number_key(data)
     return (
         model_key is not None
+        and _usable_part_value(data.get("part_number")) in (None, model_key)
         and getattr(existing, "manufacturer_id", None) == data.get("manufacturer")
         and getattr(existing, "part_number", None) == model_key
         and getattr(existing, "model", None) != model_key

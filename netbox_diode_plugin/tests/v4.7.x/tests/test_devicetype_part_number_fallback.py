@@ -595,6 +595,14 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         self.assertEqual([c.object_id for c in updates], [self.catalog.pk], [c.to_dict() for c in cs.changes])
         self.assertEqual(updates[0].data.get("model"), "Series 9200 48-port PoE")
 
+    def test_a_slug_match_asserting_a_variant_part_number_is_written(self):
+        """A payload naming the row by slug with a contradicting part number is a deliberate update."""
+        payload = self._device_type(slug="pnf-vendor-sw-9200-48p", part_number=PART + "-AFI")
+        cs = generate_changeset(payload, "dcim.devicetype").change_set
+        updates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.UPDATE]
+        self.assertEqual([c.object_id for c in updates], [self.catalog.pk], [c.to_dict() for c in cs.changes])
+        self.assertEqual(updates[0].data.get("part_number"), PART + "-AFI")
+
     def test_apply_time_recovery_never_binds_by_part_number(self):
         """A create that fails for another reason still fails; the fallback answers no conflict."""
         serializer_class = get_serializer_for_model(DeviceType)
