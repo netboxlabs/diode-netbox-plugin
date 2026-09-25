@@ -1776,7 +1776,7 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
         if _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved):
             continue
 
-        existing = find_existing_object(data, object_type)
+        existing = find_existing_object(data, object_type, fallback=True)
         if existing is not None:
             new_refs[data['_uuid']] = existing.id
             if object_type in MATCH_ONLY_TYPES:

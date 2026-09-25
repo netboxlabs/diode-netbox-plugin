@@ -11,6 +11,7 @@ from netbox_diode_plugin.api.applier import _create_or_find_instance, _is_auto_c
 from netbox_diode_plugin.api.common import ChangeType, UnresolvedReference
 from netbox_diode_plugin.api.differ import extract_supported_models, generate_changeset
 from netbox_diode_plugin.api.matcher import (
+    _FALLBACK_MATCH_ATTR,
     _FALLBACK_MATCHERS,
     _REQUIRES_PRE_SAVE_MATCH,
     PartNumberFallbackMatcher,
@@ -40,9 +41,19 @@ def _writes(cs, object_type=None):
 class PartNumberKeyTestCase(SimpleTestCase):
     """What a payload names its part by."""
 
-    def test_asserted_part_number_wins_over_model(self):
-        """An asserted part number is the key; the model is not consulted."""
-        self.assertEqual(part_number_key({"model": "anything", "part_number": " PN-1 "}), "PN-1")
+    def test_a_model_of_its_own_is_the_key(self):
+        """A usable model is the key even when a different part number is asserted."""
+        self.assertEqual(part_number_key({"model": " SW-1 ", "part_number": "PN-1"}), "SW-1")
+
+    def test_part_number_stands_in_for_a_missing_or_placeholder_model(self):
+        """Only without a usable model does an asserted part number become the key."""
+        for data in ({"part_number": " PN-1 "}, {"model": "", "part_number": "PN-1"},
+                     {"model": "Unknown", "part_number": "PN-1"}):
+            self.assertEqual(part_number_key(data), "PN-1", data)
+
+    def test_placeholder_part_number_does_not_hide_the_model(self):
+        """An unknown part number leaves the model as the key."""
+        self.assertEqual(part_number_key({"model": "SW-1", "part_number": "unknown"}), "SW-1")
 
     def test_blank_part_number_falls_back_to_model(self):
         """An explicitly empty part number reads as absent."""
@@ -55,7 +66,10 @@ class PartNumberKeyTestCase(SimpleTestCase):
             {"model": "   "},
             {"model": "Unknown"},
             {"model": "UNKNOWN"},
-            {"model": "SW-1", "part_number": "unknown"},
+            {"model": "N/A"},
+            {"model": "none"},
+            {"model": "-"},
+            {"model": "Unknown", "part_number": "n/a"},
             {},
         ):
             self.assertIsNone(part_number_key(data), data)
@@ -82,15 +96,24 @@ class PartNumberFallbackMatcherTestCase(TestCase):
         django_cache.clear()
 
     def _find(self, **data):
-        return find_existing_object({"manufacturer": self.mfr.pk, **data}, "dcim.devicetype")
+        return find_existing_object({"manufacturer": self.mfr.pk, **data}, "dcim.devicetype", fallback=True)
 
     def test_model_equal_to_a_part_number_binds_that_type(self):
         """The payload's model is the catalog type's part number."""
         self.assertEqual(self._find(model=PART), self.catalog)
 
-    def test_asserted_part_number_binds_when_model_misses(self):
-        """An asserted part number is matched even when the model names something else."""
-        self.assertEqual(self._find(model="SW 9200 family", part_number=PART), self.catalog)
+    def test_part_number_binds_when_the_payload_has_no_usable_model(self):
+        """An asserted part number stands in for a missing or placeholder model."""
+        self.assertEqual(self._find(part_number=PART), self.catalog)
+        self.assertEqual(self._find(model="Unknown", part_number=PART), self.catalog)
+
+    def test_a_model_of_its_own_is_never_bound_by_a_shared_part_number(self):
+        """A payload naming its own model is keyed on it, so the shared part number binds nothing."""
+        self.assertIsNone(self._find(model="Series 9200 48-port rev C", part_number=PART))
+
+    def test_fallback_is_opt_in(self):
+        """Without fallback=True the lookup never finds a row by part number."""
+        self.assertIsNone(find_existing_object({"manufacturer": self.mfr.pk, "model": PART}, "dcim.devicetype"))
 
     def test_model_matcher_still_wins(self):
         """A type whose model is the part ID is found first; the fallback never runs."""
@@ -99,7 +122,9 @@ class PartNumberFallbackMatcherTestCase(TestCase):
 
     def test_other_manufacturer_is_never_bound(self):
         """Part numbers are scoped to the manufacturer."""
-        found = find_existing_object({"manufacturer": self.other_mfr.pk, "model": PART}, "dcim.devicetype")
+        found = find_existing_object(
+            {"manufacturer": self.other_mfr.pk, "model": PART}, "dcim.devicetype", fallback=True,
+        )
         self.assertIsNone(found)
 
     def test_unresolved_manufacturer_abstains(self):
@@ -142,9 +167,10 @@ class PartNumberFallbackMatcherTestCase(TestCase):
         """
         Apply-time lookups that write their payload must never meet a fallback type.
 
-        The pre-save match and the auto-created-component update both save the
-        payload onto whatever find_existing_object returns; for a fallback type
-        that can be a row found by part number, which would then be renamed.
+        The pre-save match and the auto-created-component update save the payload
+        onto the row they find. Both skip the fallback tier already; keeping the
+        fallback types out of them is the second guard, since a row found by part
+        number would be renamed.
         """
         for object_type in _FALLBACK_MATCHERS:
             self.assertNotIn(object_type, _REQUIRES_PRE_SAVE_MATCH)
@@ -213,14 +239,29 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         self.assertEqual(_writes(cs, "dcim.device"), [], [c.to_dict() for c in cs.changes])
 
     def test_second_plan_in_the_same_request_still_writes_nothing(self):
-        """A repeat served from the request cache binds the same way."""
+        """A fallback answer served again from the request cache still binds: the tag travels with it."""
+        payload = self._device_type(model="Unknown", part_number=PART)
         token = enter_request_obj_cache()
         try:
-            generate_changeset(self._device_type(), "dcim.devicetype")
-            key = _find_obj_cache_key({"manufacturer": self.mfr.pk, "model": PART}, "dcim.devicetype")
-            self.assertIn(key, _request_obj_cache.get(), "the second plan must be served from the request cache")
-            cs = generate_changeset(self._device_type(), "dcim.devicetype").change_set
+            generate_changeset(payload, "dcim.devicetype")
+            key = _find_obj_cache_key(
+                {"manufacturer": self.mfr.pk, "model": "Unknown", "part_number": PART}, "dcim.devicetype",
+            )
+            cached = _request_obj_cache.get().get(key)
+            self.assertEqual(cached, self.catalog, "the second plan must be served from the request cache")
+            self.assertTrue(getattr(cached, _FALLBACK_MATCH_ATTR, False))
+            cs = generate_changeset(payload, "dcim.devicetype").change_set
             self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        finally:
+            exit_request_obj_cache(token)
+
+    def test_identity_lookup_skips_a_fallback_answer_in_the_request_cache(self):
+        """An apply-time lookup never takes a part-number answer cached earlier in the request."""
+        data = {"manufacturer": self.mfr.pk, "model": PART}
+        token = enter_request_obj_cache()
+        try:
+            self.assertEqual(find_existing_object(data, "dcim.devicetype", fallback=True), self.catalog)
+            self.assertIsNone(find_existing_object(data, "dcim.devicetype"))
         finally:
             exit_request_obj_cache(token)
 
@@ -305,16 +346,24 @@ class PartNumberBindWritesNothingTestCase(TestCase):
             binds_without_writing("dcim.devicetype", {**data, "manufacturer": self.mfr.pk + 999}, self.catalog)
         )
         self.assertFalse(binds_without_writing("dcim.moduletype", data, self.catalog))
-        asserted = {"manufacturer": self.mfr.pk, "model": "SW 9200 family", "part_number": PART}
+        asserted = {"manufacturer": self.mfr.pk, "model": "Unknown", "part_number": PART}
         self.assertFalse(binds_without_writing("dcim.devicetype", asserted, self.catalog), "reached another way")
-        found = find_existing_object(asserted, "dcim.devicetype")
+        found = find_existing_object(asserted, "dcim.devicetype", fallback=True)
         self.assertEqual(found, self.catalog)
         self.assertTrue(binds_without_writing("dcim.devicetype", asserted, found), "found by the fallback")
 
-    def test_asserted_part_number_with_another_model_binds_without_writing(self):
-        """Found only through the asserted part number, the row is bound and never renamed."""
-        cs = generate_changeset(self._device_type(model="SW 9200 family", part_number=PART), "dcim.devicetype").change_set
+    def test_part_number_without_a_usable_model_binds_without_writing(self):
+        """Found through the part number standing in for a placeholder model, the row is bound, not renamed."""
+        cs = generate_changeset(self._device_type(model="Unknown", part_number=PART), "dcim.devicetype").change_set
         self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        self._assert_catalog_untouched()
+
+    def test_a_model_of_its_own_with_a_shared_part_number_creates_its_type(self):
+        """A payload naming its own model is never folded into another model that shares the part number."""
+        payload = self._device_type(model="Series 9200 48-port rev C", part_number=PART)
+        cs = generate_changeset(payload, "dcim.devicetype").change_set
+        creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
         self._assert_catalog_untouched()
 
     def test_deliberate_update_by_slug_still_writes(self):
@@ -394,6 +443,19 @@ class PartNumberBindConvergesTestCase(TestCase):
         device, interface = self._entities("pnf-dev6")
         self._ingest(interface, "dcim.interface")
         self._assert_converged("pnf-dev6", device, interface)
+
+    def test_plan_ahead_converges_inside_one_request(self):
+        """The bulk endpoints plan and apply under a request cache; the outcome is the same."""
+        device, interface = self._entities("pnf-dev8")
+        token = enter_request_obj_cache()
+        try:
+            device_plan = generate_changeset(device, "dcim.device").change_set
+            interface_plan = generate_changeset(interface, "dcim.interface").change_set
+            apply_changeset(device_plan, request=None)
+            apply_changeset(interface_plan, request=None)
+        finally:
+            exit_request_obj_cache(token)
+        self._assert_converged("pnf-dev8", device, interface)
 
     def test_plan_ahead_device_and_interface_converge(self):
         """Both planned before either applies: the second device create binds, the interface updates."""

@@ -1238,21 +1238,35 @@ _FALLBACK_MATCHERS = {
 }
 
 # Values producers send when they could not identify the part; never a key.
-_PART_NUMBER_PLACEHOLDERS = frozenset({"unknown"})
+_PART_NUMBER_PLACEHOLDERS = frozenset({"unknown", "n/a", "none", "-"})
 
 # Set on a row a fallback matcher returned, so the transformer knows the payload
 # named that row's part rather than the row itself.
 _FALLBACK_MATCH_ATTR = "_diode_matched_by_fallback"
 
 
+def _usable_part_value(value) -> str | None:
+    """A stripped value that can identify a part, or None for blanks and placeholders."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or value.lower() in _PART_NUMBER_PLACEHOLDERS:
+        return None
+    return value
+
+
 def part_number_key(data: dict) -> str | None:
-    """The part identifier a payload names: its part_number when asserted, else its model."""
-    for field_name in ("part_number", "model"):
-        value = data.get(field_name)
-        if isinstance(value, str) and value.strip():
-            value = value.strip()
-            return None if value.lower() in _PART_NUMBER_PLACEHOLDERS else value
-    return None
+    """
+    The part identifier a payload names: its model, or its part_number when it has no usable model.
+
+    A payload with a model of its own is keyed on that model even when it also
+    asserts a part number, so a type it means to create is never bound to a
+    different model that happens to share the part number.
+    """
+    model = _usable_part_value(data.get("model"))
+    if model is not None:
+        return model
+    return _usable_part_value(data.get("part_number"))
 
 
 def binds_without_writing(object_type: str, data: dict, existing) -> bool:
@@ -1270,7 +1284,7 @@ def binds_without_writing(object_type: str, data: dict, existing) -> bool:
         return False
     if getattr(existing, _FALLBACK_MATCH_ATTR, False):
         return True
-    model_key = part_number_key({"model": data.get("model")})
+    model_key = _usable_part_value(data.get("model"))
     return (
         model_key is not None
         and getattr(existing, "manufacturer_id", None) == data.get("manufacturer")
@@ -2385,7 +2399,7 @@ def _ip_only(value: str) -> str|None:
 
 @dataclass
 class PartNumberFallbackMatcher:
-    """Match the type whose part number is the payload's part identifier."""
+    """Match the type whose part number is the payload's model, or its part number when it has no usable model."""
 
     model_class: type[models.Model]
     name: str
@@ -2423,8 +2437,9 @@ class PartNumberFallbackMatcher:
             # Left unmatched, the ingest creates the type exactly as it did
             # before this matcher existed.
             logger.warning(
-                "dcim.devicetype part number %r matches %d device types, binding none: %s",
-                part_number_key(data), queryset.count(), "; ".join(f"pk={r.pk} model={r.model!r}" for r in rows),
+                "dcim.devicetype part number %r matches %s device types, binding none: %s",
+                part_number_key(data), f"{len(rows)} or more" if len(rows) == 10 else len(rows),
+                "; ".join(f"pk={r.pk} model={r.model!r}" for r in rows),
             )
         return None
 
@@ -2739,15 +2754,16 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     return f"diode:fobj:{key_hash}"
 
 
-def find_existing_object(data: dict, object_type: str, fallback: bool = True): # noqa: C901
+def find_existing_object(data: dict, object_type: str, fallback: bool = False): # noqa: C901
     """
     Find an existing object that matches the given data.
 
     Uses all object match criteria to look for an existing
     object. Returns the first match found.
 
-    fallback=False skips the fallback tier, for lookups that ask whether a row
-    with this identity already exists: a row found by part number never is.
+    The fallback tier is opt-in: only planning asks for it (fallback=True). A
+    lookup asking whether a row with this identity already exists must not
+    consult it, since a row found by part number never is one.
 
     Returns the object if found, otherwise None.
     """
@@ -2763,6 +2779,7 @@ def find_existing_object(data: dict, object_type: str, fallback: bool = True): #
     cache_key = _find_obj_cache_key(data, object_type) if cache_ttl > 0 else None
 
     req_cache = _request_obj_cache.get(None)
+    # A fallback answer cached earlier in the request is not an identity match.
     if (
         req_cache is not None and cache_key is not None and cache_key in req_cache
         and (fallback or not getattr(req_cache[cache_key], _FALLBACK_MATCH_ATTR, False))

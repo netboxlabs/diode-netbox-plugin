@@ -286,8 +286,8 @@ class Command(BaseCommand):
             "(unique fields, unique constraints, custom fields, auto-slugs)"
         )
         markdown.append(
-            "- **Fallback Matchers**: Consulted only after every other matcher misses; "
-            "they bind an existing object without writing to it"
+            "- **Fallback Matchers**: Consulted only after every other matcher misses. What they find is bound "
+            "without being written to, and so is a device type found by any matcher whose part number is the payload's model"
         )
         markdown.append("")
 
