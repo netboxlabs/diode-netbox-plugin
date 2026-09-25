@@ -2815,12 +2815,14 @@ def find_existing_object(data: dict, object_type: str, fallback: bool = False): 
     cache_key = _find_obj_cache_key(data, object_type) if cache_ttl > 0 else None
 
     req_cache = _request_obj_cache.get(None)
-    # A fallback answer cached earlier in the request is not an identity match.
-    if (
-        req_cache is not None and cache_key is not None and cache_key in req_cache
-        and (fallback or not getattr(req_cache[cache_key], _FALLBACK_MATCH_ATTR, False))
+    cached = req_cache.get(cache_key) if req_cache is not None and cache_key is not None else None
+    if cached is not None and getattr(cached, _FALLBACK_MATCH_ATTR, False) and (
+        not fallback or data.get("custom_fields")
     ):
-        cached = req_cache[cache_key]
+        # A fallback answer is not an identity match, and the key leaves out
+        # custom fields, which unique custom-field matchers read before it.
+        cached = None
+    if cached is not None:
         if ctx:
             ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
             ctx.increment("find_obj_found")

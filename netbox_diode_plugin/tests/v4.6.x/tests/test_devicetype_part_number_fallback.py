@@ -4,9 +4,12 @@
 
 from types import SimpleNamespace
 
+from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Interface, InterfaceTemplate, Manufacturer, Site
 from django.core.cache import cache as django_cache
 from django.test import SimpleTestCase, TestCase
+from extras.choices import CustomFieldTypeChoices
+from extras.models import CustomField
 from rest_framework.exceptions import ValidationError
 
 from netbox_diode_plugin.api.applier import _create_or_find_instance, _is_auto_created_component, apply_changeset
@@ -18,6 +21,7 @@ from netbox_diode_plugin.api.matcher import (
     _REQUIRES_PRE_SAVE_MATCH,
     PartNumberFallbackMatcher,
     _find_obj_cache_key,
+    _get_custom_field_matchers,
     _request_obj_cache,
     binds_without_writing,
     enter_request_obj_cache,
@@ -543,3 +547,48 @@ class PartNumberBindConvergesTestCase(TestCase):
         apply_changeset(device_plan, request=None)
         apply_changeset(interface_plan, request=None)
         self._assert_converged("pnf-dev7", device, interface)
+
+
+class PartNumberFallbackCustomFieldTestCase(TestCase):
+    """A cached part-number answer never stands in for a unique custom field's match."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """A catalog-style type, and another type keyed by a unique custom field."""
+        cls.mfr = Manufacturer.objects.create(name="pnf-vendor", slug="pnf-vendor")
+        cls.catalog = DeviceType.objects.create(
+            manufacturer=cls.mfr, model=CATALOG_MODEL, slug="pnf-vendor-sw-9200-48p", part_number=PART,
+        )
+        field = CustomField.objects.create(
+            name="pnf_key", type=CustomFieldTypeChoices.TYPE_TEXT, required=False, unique=True,
+        )
+        field.object_types.set([ObjectType.objects.get_for_model(DeviceType)])
+        field.save()
+        cls.keyed = DeviceType.objects.create(
+            manufacturer=cls.mfr, model="pnf-keyed", slug="pnf-keyed", custom_field_data={"pnf_key": "KEY-1"},
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        """The rolled-back custom field fires no delete signal, so drop its cached matcher here."""
+        super().tearDownClass()
+        _get_custom_field_matchers.cache_clear()
+
+    def setUp(self):
+        """Each test answers from the database, not from a lookup an earlier test cached."""
+        django_cache.clear()
+
+    def tearDown(self):
+        """Leave no cached lookups behind for other test modules."""
+        django_cache.clear()
+
+    def test_custom_field_match_is_not_served_a_cached_fallback_answer(self):
+        """The cache key omits custom fields, so a keyed payload runs its matchers again."""
+        token = enter_request_obj_cache()
+        try:
+            plain = {"manufacturer": self.mfr.pk, "model": PART}
+            self.assertEqual(find_existing_object(plain, "dcim.devicetype", fallback=True), self.catalog)
+            keyed = {**plain, "custom_fields": {"pnf_key": "KEY-1"}}
+            self.assertEqual(find_existing_object(keyed, "dcim.devicetype", fallback=True), self.keyed)
+        finally:
+            exit_request_obj_cache(token)
