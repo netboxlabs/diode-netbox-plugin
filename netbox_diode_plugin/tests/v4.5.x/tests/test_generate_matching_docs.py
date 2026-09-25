@@ -722,7 +722,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         rows = self._combined()["dcim.devicetype"]
         self.assertEqual(rows[-1].name, "fallback_devicetype_part_number")
         self.assertEqual(rows[-1].matcher_source, "fallback")
-        self.assertEqual(rows[-1].fields, ["manufacturer", "part_number"])
+        self.assertEqual(rows[-1].fields, ["manufacturer", "model"])
         self.assertNotIn("fallback_devicetype_part_number", [r.name for r in rows[:-1]])
 
     def test_builtin_analysis_leaves_fallback_matchers_out(self):
@@ -734,7 +734,7 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         """The Matcher Types list names the fallback tier and the table types its row."""
         markdown = self.command.generate_markdown_table(self._combined())
         self.assertIn("- **Fallback Matchers**:", markdown)
-        self.assertIn("| fallback_devicetype_part_number | 4 | fallback | manufacturer, part_number |", markdown)
+        self.assertIn("| fallback_devicetype_part_number | 4 | fallback | manufacturer, model |", markdown)
 
     def test_command_output_includes_the_fallback_row(self):
         """The command itself passes the fallback analysis through to the table."""

@@ -154,7 +154,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | dcim_devicetype_unique_manufacturer_model | 1 | builtin | manufacturer, model | N/A | Matches on unique constraint fields: manufacturer, model | All versions |
 | dcim_devicetype_unique_manufacturer_slug | 2 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
 | unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
-| fallback_devicetype_part_number | 4 | fallback | manufacturer, part_number | N/A | Match the type whose part number is the payload's model. | All versions |
+| fallback_devicetype_part_number | 4 | fallback | manufacturer, model | N/A | Match the type whose part number is the payload's model. | All versions |
 
 ## dcim.frontport
 

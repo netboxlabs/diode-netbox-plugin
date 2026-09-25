@@ -132,7 +132,8 @@ class Command(BaseCommand):
 
         class_field_map = {
             "RackReservationUnitOverlapMatcher": ["rack", "units"],
-            "PartNumberFallbackMatcher": ["manufacturer", "part_number"],
+            # The payload fields it reads: the model is compared with existing part numbers.
+            "PartNumberFallbackMatcher": ["manufacturer", "model"],
             "RackSiteNameMatcher": ["site", "name"],
             "VirtualChassisNameMatcher": ["name"],
         }
