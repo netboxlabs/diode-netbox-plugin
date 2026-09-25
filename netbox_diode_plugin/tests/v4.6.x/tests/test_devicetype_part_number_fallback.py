@@ -350,6 +350,24 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
 
+    def test_a_placeholder_row_renamed_by_the_graph_counts(self):
+        """A row named Unknown that the graph renames, keeping the part number, becomes a candidate."""
+        unknown = DeviceType.objects.create(manufacturer=self.mfr, model="Unknown", slug="pnf-unknown3", part_number=PART)
+        other = self._device_type(model="Series 9200 48-port renamed", part_number=PART,
+                                  metadata={"source_match": {"netbox_id": unknown.pk}})
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
+
+    def test_a_row_moved_to_this_manufacturer_counts(self):
+        """A row of another manufacturer that the graph moves here, with the part number, becomes a candidate."""
+        elsewhere = Manufacturer.objects.create(name="pnf-elsewhere", slug="pnf-elsewhere")
+        moved = DeviceType.objects.create(manufacturer=elsewhere, model="pnf-moved", slug="pnf-moved", part_number=PART)
+        other = self._device_type(model="pnf-moved", part_number=PART, metadata={"source_match": {"netbox_id": moved.pk}})
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
+
     def test_an_agreeing_part_number_still_binds(self):
         """A node asserting its own model as its part number does not count against itself."""
         cs = generate_changeset(self._device_type(part_number=PART), "dcim.devicetype").change_set

@@ -1814,22 +1814,29 @@ def _manufacturer_identity(value, canonical: dict):
     return ("pk", value)
 
 
-def _already_carries(node: dict, manufacturer: tuple, part: str) -> bool:
+def _already_a_candidate(node: dict, manufacturer: tuple, part: str) -> bool:
     """
-    Whether the row a node resolves to already carries the part number.
+    Whether the row a node resolves to is one the fallback query already sees for this part.
 
-    Writing it there adds no candidate: that row is already one, and the
-    fallback query sees it. A new row, or an existing one given the part
-    number by this changeset, is a candidate the query cannot see yet.
+    That row carries the part number under this manufacturer and is not named
+    after a placeholder, so writing to it adds no candidate. A new row, or an
+    existing one this changeset makes eligible (gives it the part number,
+    renames it away from a placeholder, moves it to this manufacturer), is a
+    candidate the query cannot see yet.
     """
+    if manufacturer[0] != "pk":
+        return False
     model_class = get_object_type_model(node['_object_type'])
     if node.get('_netbox_id') is not None:
         row = model_class.objects.filter(pk=node['_netbox_id']).first()
-    elif manufacturer[0] == "pk":
-        row = find_existing_object({**node, "manufacturer": manufacturer[1]}, node['_object_type'])
     else:
-        return False
-    return row is not None and row.part_number == part
+        row = find_existing_object({**node, "manufacturer": manufacturer[1]}, node['_object_type'])
+    return (
+        row is not None
+        and row.part_number == part
+        and row.manufacturer_id == manufacturer[1]
+        and part_number_key({"model": row.model}) is not None
+    )
 
 
 def _asserted_part_numbers(entities: list[dict]) -> tuple[dict, dict]:
@@ -1841,7 +1848,7 @@ def _asserted_part_numbers(entities: list[dict]) -> tuple[dict, dict]:
     asserted = {}
     for node in nodes:
         manufacturer, part = _manufacturer_identity(node.get('manufacturer'), canonical), asserted_part_number(node)
-        if _already_carries(node, manufacturer, part):
+        if _already_a_candidate(node, manufacturer, part):
             continue
         asserted.setdefault((manufacturer, part), set()).add(node.get('_uuid'))
     return asserted, canonical
