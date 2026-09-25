@@ -27,7 +27,7 @@ from netbox_diode_plugin.api.matcher import (
     enter_request_obj_cache,
     exit_request_obj_cache,
     find_existing_object,
-    forget_fallback_answers,
+    forget_cached_answers,
     get_model_matchers,
     part_number_key,
 )
@@ -339,16 +339,33 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         finally:
             exit_request_obj_cache(token)
 
-    def test_forgetting_fallback_answers_spares_everything_else(self):
-        """Only tagged answers for the written type leave the request cache."""
+    def test_forgetting_cached_answers_spares_other_types(self):
+        """Every cached answer for the written type leaves the request cache; other types keep theirs."""
         token = enter_request_obj_cache()
         try:
             cache_map = _request_obj_cache.get()
             cache_map["identity"] = self.catalog
             cache_map["other-type"] = self.site
-            forget_fallback_answers("dcim.site")
-            forget_fallback_answers("dcim.devicetype")
+            forget_cached_answers("dcim.site")
             self.assertEqual(set(cache_map), {"identity", "other-type"})
+            forget_cached_answers("dcim.devicetype")
+            self.assertEqual(set(cache_map), {"other-type"})
+        finally:
+            exit_request_obj_cache(token)
+
+    def test_a_bulk_write_refreshes_a_row_bound_by_slug(self):
+        """In one bulk request, a slug match read before another entity renumbers the row is read again."""
+        by_slug = self._device_type(slug="pnf-vendor-sw-9200-48p")
+        token = enter_request_obj_cache()
+        try:
+            first = generate_changeset(by_slug, "dcim.devicetype").change_set
+            self.assertEqual(_writes(first, "dcim.devicetype"), [], [c.to_dict() for c in first.changes])
+            renumber = self._device_type(model=CATALOG_MODEL, part_number="SW-9200-48P-B",
+                                         metadata={"source_match": {"netbox_id": self.catalog.pk}})
+            apply_changeset(generate_changeset(renumber, "dcim.devicetype").change_set, request=None)
+            again = generate_changeset(by_slug, "dcim.devicetype").change_set
+            models = [c.data.get("model") for c in _writes(again, "dcim.devicetype") if c.object_id == self.catalog.pk]
+            self.assertEqual(models, [PART], [c.to_dict() for c in again.changes])
         finally:
             exit_request_obj_cache(token)
 

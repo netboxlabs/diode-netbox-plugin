@@ -1313,14 +1313,17 @@ def fallback_candidate_part(model, part_number) -> str | None:
     return part
 
 
-def forget_fallback_answers(object_type: str) -> None:
+def forget_cached_answers(object_type: str) -> None:
     """
-    Drop the request-cached fallback answers for object_type, after a row of it was written.
+    Drop the request-cached answers for object_type, after a row of it was written.
 
     One bulk request plans and applies many entities under a single request
-    cache. A row written by an earlier entity, another type carrying the same
-    part number or a type named after it, changes what the fallback would
-    answer, so a later lookup must run the matchers again.
+    cache, which holds rows as they were read. For a type with a fallback, what
+    a later lookup binds depends on the rows as they are now: another type
+    carrying the same part number or named after it changes the fallback's
+    answer, and a row whose own part number changed may no longer be bound
+    without writing. Every answer for the type is looked up again; other types
+    keep theirs.
     """
     if object_type not in _FALLBACK_MATCHERS:
         return
@@ -1328,10 +1331,7 @@ def forget_fallback_answers(object_type: str) -> None:
     if not req_cache:
         return
     model_class = get_object_type_model(object_type)
-    stale = [
-        key for key, value in req_cache.items()
-        if isinstance(value, model_class) and getattr(value, _FALLBACK_MATCH_ATTR, False)
-    ]
+    stale = [key for key, value in req_cache.items() if isinstance(value, model_class)]
     for key in stale:
         del req_cache[key]
 
