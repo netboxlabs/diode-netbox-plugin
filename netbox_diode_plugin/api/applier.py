@@ -99,6 +99,8 @@ def _is_auto_created_component(object_type: str) -> bool:
         "dcim.consoleserverport",
         "dcim.powerport",
         "dcim.poweroutlet",
+        "dcim.coolingintake",
+        "dcim.coolingoutflow",
         "dcim.interface",
         "dcim.rearport",
         "dcim.frontport",

@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from netbox_diode_plugin.api.differ import extract_supported_models
@@ -240,8 +241,16 @@ class Command(BaseCommand):
 
         return combined
 
-    def generate_markdown_table(self, docs: dict[str, list[MatcherInfo]]) -> str:
-        """Generate a markdown table from the documentation."""
+    def generate_markdown_table(self, docs: dict[str, list[MatcherInfo]], netbox_version: str | None = None) -> str:
+        """
+        Generate a markdown table from the documentation.
+
+        Builtin matchers are derived from the model constraints of the NetBox
+        release the command runs on, so the document is scoped to that release:
+        its version is stamped in the header and on every builtin row that has
+        no plugin-side version gate. Logical matchers carry the plugin's own
+        min/max gates, which hold across releases.
+        """
         markdown = []
         markdown.append("# NetBox Diode Plugin - Object Matching Criteria")
         markdown.append("")
@@ -250,6 +259,19 @@ class Command(BaseCommand):
             "The matchers will be applied in the order of their precedence, unttil one of them matches."
         )
         markdown.append("")
+        if netbox_version:
+            markdown.append(f"Generated on NetBox {netbox_version}.")
+            markdown.append("")
+            markdown.append(
+                "Builtin matchers are derived from that release's model constraints and are listed as they exist "
+                "there. Other NetBox releases the plugin supports may declare the same identity through different "
+                "constraints (for example, NetBox 4.7 replaced conditional constraint pairs such as "
+                "`name where parent is NULL` with single `nulls_distinct=False` constraints); the matcher derives "
+                "whichever form the running release declares. In the Version Constraints column, "
+                "\"NetBox <version>\" on a builtin row means the row reflects that release; a version range on a "
+                "logical row is the plugin's own gate."
+            )
+            markdown.append("")
         markdown.append("## Matcher Types")
         markdown.append("")
         markdown.append("- **Logical Matchers**: Custom matching criteria that represent likely user intent")
@@ -284,7 +306,12 @@ class Command(BaseCommand):
                 fields_str = ", ".join(matcher.fields).replace("|", "\\|") if matcher.fields else ""
                 condition_str = matcher.condition.replace("|", "\\|") if matcher.condition and matcher.condition != "None" else "N/A"
                 description = matcher.description.replace("|", "\\|") if matcher.description else "N/A"
-                version_str = matcher.version_constraints.replace("|", "\\|") if matcher.version_constraints else "All versions"
+                if matcher.version_constraints:
+                    version_str = matcher.version_constraints.replace("|", "\\|")
+                elif netbox_version and matcher.matcher_source == "builtin":
+                    version_str = f"NetBox {netbox_version}"
+                else:
+                    version_str = "All versions"
 
                 markdown.append(
                     f"| {name} | {precedence} | {matcher_type} | {fields_str} | {condition_str} | {description} | {version_str} |"
@@ -293,6 +320,13 @@ class Command(BaseCommand):
             markdown.append("")
 
         return "\n".join(markdown)
+
+    @staticmethod
+    def get_netbox_version() -> str | None:
+        """The running NetBox release, or None when it cannot be read."""
+        release = getattr(settings, "RELEASE", None)
+        version = getattr(release, "version", None) or getattr(settings, "VERSION", None)
+        return str(version) if version else None
 
     def handle(self, *args, **options):
         """Handle the command execution."""
@@ -306,5 +340,6 @@ class Command(BaseCommand):
         combined_docs = self.combine_matchers(logical_docs, builtin_docs)
 
         self.stdout.write("Generating markdown documentation...")
-        markdown_content = self.generate_markdown_table(combined_docs)
+        markdown_content = self.generate_markdown_table(
+            combined_docs, netbox_version=self.get_netbox_version())
         self.stdout.write(markdown_content)

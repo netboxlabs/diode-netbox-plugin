@@ -7,6 +7,7 @@ import sys
 from unittest import mock
 from unittest.mock import patch
 
+from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db.models import Q
@@ -709,3 +710,45 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
 
         # Check that empty fields list is handled
         self.assertIn("| test_matcher | 1 | logical |  | N/A | Test description | All versions |", result)
+
+
+
+class DocumentVersionScopeTestCase(TestCase):
+    """The generated document is scoped to the NetBox release it was produced on."""
+
+    def setUp(self):
+        """Set up test."""
+        self.command = Command()
+        self.docs = {
+            "dcim.site": [
+                MatcherInfo(name="logical_site", matcher_source="logical",
+                            fields=["name"], description="logical, no gate"),
+                MatcherInfo(name="logical_gated", matcher_source="logical",
+                            fields=["slug"], description="logical, gated", version_constraints="≥4.3.0"),
+                MatcherInfo(name="dcim_site_unique_name", matcher_source="builtin",
+                            fields=["name"], description="builtin"),
+            ],
+        }
+
+    def test_header_and_builtin_rows_carry_the_release(self):
+        """A builtin row without a plugin gate is stamped with the release, not "All versions"."""
+        result = self.command.generate_markdown_table(self.docs, netbox_version="4.7.0")
+        self.assertIn("Generated on NetBox 4.7.0.", result)
+        self.assertIn("nulls_distinct=False", result)
+        self.assertIn("| dcim_site_unique_name | 3 | builtin | name | N/A | builtin | NetBox 4.7.0 |", result)
+        self.assertIn("| logical_site | 1 | logical | name | N/A | logical, no gate | All versions |", result)
+        self.assertIn("| logical_gated | 2 | logical | slug | N/A | logical, gated | ≥4.3.0 |", result)
+
+    def test_without_a_release_nothing_is_stamped(self):
+        """Callers that pass no release keep the previous output."""
+        result = self.command.generate_markdown_table(self.docs)
+        self.assertNotIn("Generated on NetBox", result)
+        self.assertIn("| dcim_site_unique_name | 3 | builtin | name | N/A | builtin | All versions |", result)
+
+    def test_handle_stamps_the_running_release(self):
+        """The command reads the release from settings and passes it through."""
+        self.assertEqual(self.command.get_netbox_version(), str(settings.RELEASE.version))
+        self.command.stdout = io.StringIO()
+        with mock.patch.object(self.command, "get_netbox_version", return_value="9.9.9"):
+            self.command.handle()
+        self.assertIn("Generated on NetBox 9.9.9.", self.command.stdout.getvalue())
