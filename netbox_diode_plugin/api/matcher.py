@@ -8,6 +8,7 @@ import logging
 import time
 from dataclasses import dataclass
 from functools import cache, lru_cache
+from typing import ClassVar
 
 import netaddr
 from django.contrib.contenttypes.fields import ContentType
@@ -2385,6 +2386,11 @@ class PartNumberFallbackMatcher:
     min_version: str | None = None
     max_version: str | None = None
 
+    # Re-checked on every request: a cached answer would outlive an edit to the
+    # row's part number, and the transformer would then plan the payload's model
+    # onto that row. The request-scoped cache still serves repeats within one call.
+    cache_across_requests: ClassVar[bool] = False
+
     def has_required_fields(self, data: dict) -> bool:
         """A manufacturer and a usable part identifier."""
         return "manufacturer" in data and part_number_key(data) is not None
@@ -2411,7 +2417,7 @@ class PartNumberFallbackMatcher:
             # before this matcher existed.
             logger.warning(
                 "dcim.devicetype part number %r matches %d device types, binding none: %s",
-                part_number_key(data), len(rows), "; ".join(f"pk={r.pk} model={r.model!r}" for r in rows),
+                part_number_key(data), queryset.count(), "; ".join(f"pk={r.pk} model={r.model!r}" for r in rows),
             )
         return None
 
@@ -2766,6 +2772,7 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
                 django_cache.delete(cache_key)
                 django_cache.delete(_find_obj_rev_key(object_type, cached_id))
 
+    matched_by = None
     if not cache_hit:
         for matcher in get_model_matchers(model_class):
             if not matcher.has_required_fields(data):
@@ -2785,9 +2792,10 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
                 existing = q.order_by('pk').first()
             if existing is not None:
                 result = existing
+                matched_by = matcher
                 break
 
-        if cache_key and result is not None:
+        if cache_key and result is not None and getattr(matched_by, "cache_across_requests", True):
             django_cache.set(cache_key, result.id, cache_ttl)
             django_cache.set(_find_obj_rev_key(object_type, result.id), cache_key, cache_ttl)
 

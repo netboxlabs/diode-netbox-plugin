@@ -2,17 +2,22 @@
 # Copyright 2026 NetBox Labs, Inc.
 """Tests for binding a device type by its part number when its model matches nothing."""
 
-from dcim.models import Device, DeviceRole, DeviceType, Interface, InterfaceTemplate, Manufacturer, ModuleType, Site
+from dcim.models import Device, DeviceRole, DeviceType, Interface, InterfaceTemplate, Manufacturer, Site
 from django.core.cache import cache as django_cache
 from django.test import SimpleTestCase, TestCase
 
-from netbox_diode_plugin.api.applier import apply_changeset
+from netbox_diode_plugin.api.applier import _is_auto_created_component, apply_changeset
 from netbox_diode_plugin.api.common import ChangeType, UnresolvedReference
-from netbox_diode_plugin.api.differ import generate_changeset
+from netbox_diode_plugin.api.differ import extract_supported_models, generate_changeset
 from netbox_diode_plugin.api.matcher import (
+    _FALLBACK_MATCHERS,
+    _REQUIRES_PRE_SAVE_MATCH,
     PartNumberFallbackMatcher,
     _find_obj_cache_key,
+    _request_obj_cache,
     binds_without_writing,
+    enter_request_obj_cache,
+    exit_request_obj_cache,
     find_existing_object,
     get_model_matchers,
     part_number_key,
@@ -124,10 +129,24 @@ class PartNumberFallbackMatcherTestCase(TestCase):
         self.assertEqual(names[-1], "fallback_devicetype_part_number")
         self.assertEqual(names.count("fallback_devicetype_part_number"), 1)
 
-    def test_no_fallback_for_other_types(self):
-        """Module types keep their matchers unchanged."""
-        names = [m.name for m in get_model_matchers(ModuleType)]
-        self.assertEqual([n for n in names if n.startswith("fallback_")], [])
+    def test_only_device_types_have_a_fallback(self):
+        """Every other supported type keeps its matchers unchanged."""
+        for object_type, info in extract_supported_models().items():
+            names = [m.name for m in get_model_matchers(info["model"]) if m.name.startswith("fallback_")]
+            expected = ["fallback_devicetype_part_number"] if object_type == "dcim.devicetype" else []
+            self.assertEqual(names, expected, object_type)
+
+    def test_fallback_types_never_take_a_writing_apply_path(self):
+        """
+        Apply-time lookups that write their payload must never meet a fallback type.
+
+        The pre-save match and the auto-created-component update both save the
+        payload onto whatever find_existing_object returns; for a fallback type
+        that can be a row found by part number, which would then be renamed.
+        """
+        for object_type in _FALLBACK_MATCHERS:
+            self.assertNotIn(object_type, _REQUIRES_PRE_SAVE_MATCH)
+            self.assertFalse(_is_auto_created_component(object_type), object_type)
 
     def test_fallback_never_fingerprints(self):
         """In-batch dedupe is not widened by part number."""
@@ -191,13 +210,54 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
         self.assertEqual(_writes(cs, "dcim.device"), [], [c.to_dict() for c in cs.changes])
 
-    def test_second_plan_inside_the_cache_window_still_writes_nothing(self):
-        """The bind reads the payload and the row, so a cached lookup decides the same."""
+    def test_second_plan_in_the_same_request_still_writes_nothing(self):
+        """A repeat served from the request cache binds the same way."""
+        token = enter_request_obj_cache()
+        try:
+            generate_changeset(self._device_type(), "dcim.devicetype")
+            key = _find_obj_cache_key({"manufacturer": self.mfr.pk, "model": PART}, "dcim.devicetype")
+            self.assertIn(key, _request_obj_cache.get(), "the second plan must be served from the request cache")
+            cs = generate_changeset(self._device_type(), "dcim.devicetype").change_set
+            self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        finally:
+            exit_request_obj_cache(token)
+
+    def test_a_part_number_edit_is_seen_by_the_next_plan(self):
+        """A fallback answer is not cached across requests, so an edited row is never renamed."""
         generate_changeset(self._device_type(), "dcim.devicetype")
         key = _find_obj_cache_key({"manufacturer": self.mfr.pk, "model": PART}, "dcim.devicetype")
-        self.assertEqual(django_cache.get(key), self.catalog.pk, "the second plan must be served from the cache")
+        self.assertIsNone(django_cache.get(key))
+        DeviceType.objects.filter(pk=self.catalog.pk).update(part_number="SW-9200-48P-A")
         cs = generate_changeset(self._device_type(), "dcim.devicetype").change_set
-        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        updates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.UPDATE]
+        self.assertEqual(updates, [], [c.to_dict() for c in cs.changes])
+        self.catalog.refresh_from_db()
+        self.assertEqual(self.catalog.model, CATALOG_MODEL)
+
+    def test_device_on_a_duplicate_stays_there(self):
+        """A device already on a type named after the part ID plans no move."""
+        duplicate = DeviceType.objects.create(manufacturer=self.mfr, model=PART, slug="pnf-dup3")
+        Device.objects.create(name="pnf-dev4", site=self.site, role=self.role, device_type=duplicate)
+        cs = generate_changeset(self._device("pnf-dev4"), "dcim.device").change_set
+        self.assertEqual(_writes(cs), [], [c.to_dict() for c in cs.changes])
+
+    def test_a_second_type_with_the_part_number_later_splits_the_device_again(self):
+        """
+        Several candidates bind nothing, even for a device already bound.
+
+        This is the chosen behaviour, kept from before the fallback existed: the
+        plan creates a type named after the part ID and moves the device onto it.
+        """
+        Device.objects.create(name="pnf-dev5", site=self.site, role=self.role, device_type=self.catalog)
+        DeviceType.objects.create(
+            manufacturer=self.mfr, model="Series 9200 48-port rev B", slug="pnf-rev-b2", part_number=PART,
+        )
+        with self.assertLogs("netbox_diode_plugin.api.matcher", level="WARNING"):
+            cs = generate_changeset(self._device("pnf-dev5"), "dcim.device").change_set
+        creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
+        moves = [c for c in _writes(cs, "dcim.device") if c.change_type == ChangeType.UPDATE]
+        self.assertEqual(len(moves), 1, [c.to_dict() for c in cs.changes])
 
     def test_slug_match_on_a_row_identified_by_part_number_is_not_renamed(self):
         """Reached through (manufacturer, slug), the catalog row keeps its model."""
@@ -271,17 +331,17 @@ class PartNumberBindConvergesTestCase(TestCase):
     def _ingest(entity, object_type):
         apply_changeset(generate_changeset(entity, object_type).change_set, request=None)
 
-    def test_device_and_its_template_interface_converge(self):
-        """One interface, updated in place, and an empty plan on the next pass."""
+    @staticmethod
+    def _entities(name):
         device = {
-            "name": "pnf-dev3", "site": {"name": "pnf-site"}, "role": {"name": "pnf-role"},
+            "name": name, "site": {"name": "pnf-site"}, "role": {"name": "pnf-role"},
             "device_type": {"model": PART, "manufacturer": {"name": "pnf-vendor"}},
         }
         interface = {"name": "eth0", "type": "1000base-t", "description": "from ingest", "device": device}
-        self._ingest(device, "dcim.device")
-        self._ingest(interface, "dcim.interface")
+        return device, interface
 
-        created = Device.objects.get(name="pnf-dev3")
+    def _assert_converged(self, name, device, interface):
+        created = Device.objects.get(name=name)
         self.assertEqual(created.device_type_id, self.catalog.pk)
         interfaces = Interface.objects.filter(device=created, name="eth0")
         self.assertEqual(interfaces.count(), 1)
@@ -289,7 +349,28 @@ class PartNumberBindConvergesTestCase(TestCase):
         self.assertEqual(DeviceType.objects.filter(manufacturer=self.mfr).count(), 1)
         self.catalog.refresh_from_db()
         self.assertEqual((self.catalog.model, self.catalog.part_number), (CATALOG_MODEL, PART))
-
         for entity, object_type in ((device, "dcim.device"), (interface, "dcim.interface")):
             cs = generate_changeset(entity, object_type).change_set
             self.assertEqual(_writes(cs), [], [c.to_dict() for c in cs.changes])
+
+    def test_device_and_its_template_interface_converge(self):
+        """Device first, then its interface: one interface, updated in place, then an empty plan."""
+        device, interface = self._entities("pnf-dev3")
+        self._ingest(device, "dcim.device")
+        self._ingest(interface, "dcim.interface")
+        self._assert_converged("pnf-dev3", device, interface)
+
+    def test_interface_nesting_a_new_device_converges(self):
+        """One changeset creates the device and the interface its template already created."""
+        device, interface = self._entities("pnf-dev6")
+        self._ingest(interface, "dcim.interface")
+        self._assert_converged("pnf-dev6", device, interface)
+
+    def test_plan_ahead_device_and_interface_converge(self):
+        """Both planned before either applies: the second device create binds, the interface updates."""
+        device, interface = self._entities("pnf-dev7")
+        device_plan = generate_changeset(device, "dcim.device").change_set
+        interface_plan = generate_changeset(interface, "dcim.interface").change_set
+        apply_changeset(device_plan, request=None)
+        apply_changeset(interface_plan, request=None)
+        self._assert_converged("pnf-dev7", device, interface)
