@@ -1759,6 +1759,23 @@ def _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved) -> bool:
     return True
 
 
+# Fields a device type bound by its part number is identified by; anything else
+# the payload carried is discarded with the node.
+_BOUND_IDENTITY_FIELDS = frozenset({"id", "manufacturer", "model"})
+
+
+def _log_bound_without_writing(object_type: str, data: dict, existing) -> None:
+    """Say what a bind discarded: at INFO when it dropped fields or warnings, else at DEBUG."""
+    dropped = sorted(k for k in data if not k.startswith("_") and k not in _BOUND_IDENTITY_FIELDS)
+    warnings = data.get("_warnings")
+    level = logging.INFO if dropped or warnings else logging.DEBUG
+    logger.log(
+        level,
+        "%s bound to pk=%s by part number without writing; fields not applied: %s; warnings dropped: %s",
+        object_type, existing.pk, dropped or "none", warnings or "none",
+    )
+
+
 def _resolve_existing_references(entities: list[dict]) -> list[dict]:
     seen = {}
     new_refs = {}
@@ -1789,6 +1806,7 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
             if binds_without_writing(object_type, data, existing):
                 # The payload names this row's part, not the row itself: bind
                 # the reference and emit no change, so the row is never renamed.
+                _log_bound_without_writing(object_type, data, existing)
                 continue
             _mark_seen(data, object_type, existing, seen)
             data['id'] = existing.id

@@ -2,6 +2,8 @@
 # Copyright 2026 NetBox Labs, Inc.
 """Tests for binding a device type by its part number when its model matches nothing."""
 
+from types import SimpleNamespace
+
 from dcim.models import Device, DeviceRole, DeviceType, Interface, InterfaceTemplate, Manufacturer, Site
 from django.core.cache import cache as django_cache
 from django.test import SimpleTestCase, TestCase
@@ -45,11 +47,11 @@ class PartNumberKeyTestCase(SimpleTestCase):
         """A usable model is the key even when a different part number is asserted."""
         self.assertEqual(part_number_key({"model": " SW-1 ", "part_number": "PN-1"}), "SW-1")
 
-    def test_part_number_stands_in_for_a_missing_or_placeholder_model(self):
-        """Only without a usable model does an asserted part number become the key."""
+    def test_an_asserted_part_number_is_never_the_key(self):
+        """Without a usable model there is no key, whatever part number is asserted."""
         for data in ({"part_number": " PN-1 "}, {"model": "", "part_number": "PN-1"},
                      {"model": "Unknown", "part_number": "PN-1"}):
-            self.assertEqual(part_number_key(data), "PN-1", data)
+            self.assertIsNone(part_number_key(data), data)
 
     def test_placeholder_part_number_does_not_hide_the_model(self):
         """An unknown part number leaves the model as the key."""
@@ -102,10 +104,15 @@ class PartNumberFallbackMatcherTestCase(TestCase):
         """The payload's model is the catalog type's part number."""
         self.assertEqual(self._find(model=PART), self.catalog)
 
-    def test_part_number_binds_when_the_payload_has_no_usable_model(self):
-        """An asserted part number stands in for a missing or placeholder model."""
-        self.assertEqual(self._find(part_number=PART), self.catalog)
-        self.assertEqual(self._find(model="Unknown", part_number=PART), self.catalog)
+    def test_an_asserted_part_number_alone_binds_nothing(self):
+        """Only the payload's model is matched against part numbers."""
+        self.assertIsNone(self._find(part_number=PART))
+        self.assertIsNone(self._find(model="Unknown", part_number=PART))
+
+    def test_a_placeholder_named_type_is_never_a_candidate(self):
+        """A type named Unknown that carries the part number does not make the match ambiguous."""
+        DeviceType.objects.create(manufacturer=self.mfr, model="Unknown", slug="pnf-unknown", part_number=PART)
+        self.assertEqual(self._find(model=PART), self.catalog)
 
     def test_a_model_of_its_own_is_never_bound_by_a_shared_part_number(self):
         """A payload naming its own model is keyed on it, so the shared part number binds nothing."""
@@ -239,14 +246,12 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         self.assertEqual(_writes(cs, "dcim.device"), [], [c.to_dict() for c in cs.changes])
 
     def test_second_plan_in_the_same_request_still_writes_nothing(self):
-        """A fallback answer served again from the request cache still binds: the tag travels with it."""
-        payload = self._device_type(model="Unknown", part_number=PART)
+        """A fallback answer served again from the request cache still binds, and keeps its tag."""
+        payload = self._device_type()
         token = enter_request_obj_cache()
         try:
             generate_changeset(payload, "dcim.devicetype")
-            key = _find_obj_cache_key(
-                {"manufacturer": self.mfr.pk, "model": "Unknown", "part_number": PART}, "dcim.devicetype",
-            )
+            key = _find_obj_cache_key({"manufacturer": self.mfr.pk, "model": PART}, "dcim.devicetype")
             cached = _request_obj_cache.get().get(key)
             self.assertEqual(cached, self.catalog, "the second plan must be served from the request cache")
             self.assertTrue(getattr(cached, _FALLBACK_MATCH_ATTR, False))
@@ -346,17 +351,45 @@ class PartNumberBindWritesNothingTestCase(TestCase):
             binds_without_writing("dcim.devicetype", {**data, "manufacturer": self.mfr.pk + 999}, self.catalog)
         )
         self.assertFalse(binds_without_writing("dcim.moduletype", data, self.catalog))
-        asserted = {"manufacturer": self.mfr.pk, "model": "Unknown", "part_number": PART}
-        self.assertFalse(binds_without_writing("dcim.devicetype", asserted, self.catalog), "reached another way")
-        found = find_existing_object(asserted, "dcim.devicetype", fallback=True)
-        self.assertEqual(found, self.catalog)
-        self.assertTrue(binds_without_writing("dcim.devicetype", asserted, found), "found by the fallback")
+        found = find_existing_object(data, "dcim.devicetype", fallback=True)
+        self.assertTrue(getattr(found, _FALLBACK_MATCH_ATTR, False))
+        tagged = SimpleNamespace(manufacturer_id=self.mfr.pk, part_number="other", model="other")
+        setattr(tagged, _FALLBACK_MATCH_ATTR, True)
+        self.assertTrue(binds_without_writing("dcim.devicetype", data, tagged), "whatever the fallback found binds")
 
-    def test_part_number_without_a_usable_model_binds_without_writing(self):
-        """Found through the part number standing in for a placeholder model, the row is bound, not renamed."""
+    def test_binds_without_writing_compares_the_stripped_model(self):
+        """A row whose own model is the payload's model, once stripped, is not bound."""
+        row = SimpleNamespace(manufacturer_id=self.mfr.pk, part_number="SW-1", model="SW-1")
+        data = {"manufacturer": self.mfr.pk, "model": "SW-1 "}
+        self.assertFalse(binds_without_writing("dcim.devicetype", data, row))
+
+    def test_an_asserted_part_number_alone_creates_the_type_as_before(self):
+        """A placeholder model with a part number binds nothing; the plan is today's create."""
         cs = generate_changeset(self._device_type(model="Unknown", part_number=PART), "dcim.devicetype").change_set
-        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
         self._assert_catalog_untouched()
+
+    def test_a_placeholder_named_type_leaves_the_bind_intact(self):
+        """With a type named Unknown carrying the part number, the catalog type is still bound."""
+        DeviceType.objects.create(manufacturer=self.mfr, model="Unknown", slug="pnf-unknown2", part_number=PART)
+        cs = generate_changeset(self._device_type(), "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+
+    def test_a_bind_that_discards_fields_is_logged(self):
+        """Fields a bound type carried are named at INFO, with the row they were not applied to."""
+        with self.assertLogs("netbox.diode_data", level="INFO") as logs:
+            generate_changeset(self._device_type(description="from ingest"), "dcim.devicetype")
+        message = "\n".join(logs.output)
+        self.assertIn(f"pk={self.catalog.pk}", message)
+        self.assertIn("description", message)
+
+    def test_a_plain_bind_is_not_logged_at_info(self):
+        """A discovery payload carrying only its model and manufacturer binds quietly."""
+        with self.assertLogs("netbox.diode_data", level="DEBUG") as logs:
+            generate_changeset(self._device_type(), "dcim.devicetype")
+        bound = [r for r in logs.records if "by part number without writing" in r.getMessage()]
+        self.assertEqual([r.levelname for r in bound], ["DEBUG"])
 
     def test_a_model_of_its_own_with_a_shared_part_number_creates_its_type(self):
         """A payload naming its own model is never folded into another model that shares the part number."""

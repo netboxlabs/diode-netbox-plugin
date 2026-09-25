@@ -1257,16 +1257,13 @@ def _usable_part_value(value) -> str | None:
 
 def part_number_key(data: dict) -> str | None:
     """
-    The part identifier a payload names: its model, or its part_number when it has no usable model.
+    The value a payload is matched against existing part numbers by: its usable model.
 
-    A payload with a model of its own is keyed on that model even when it also
-    asserts a part number, so a type it means to create is never bound to a
+    An asserted part_number is never a key. A payload with a model of its own is
+    naming that model, so a type it means to create is never bound to a
     different model that happens to share the part number.
     """
-    model = _usable_part_value(data.get("model"))
-    if model is not None:
-        return model
-    return _usable_part_value(data.get("part_number"))
+    return _usable_part_value(data.get("model"))
 
 
 def binds_without_writing(object_type: str, data: dict, existing) -> bool:
@@ -1275,21 +1272,22 @@ def binds_without_writing(object_type: str, data: dict, existing) -> bool:
 
     The payload is then bound to the row and nothing is written to it, so a
     curated model is never renamed to a part number. That holds when a fallback
-    matcher found the row, and when the payload's model is the row's part number
-    however the row was found (by slug, say): discovery reports the part ID as
-    the model. Any other match, a slug naming the row with its own model for
-    instance, is diffed and written as before.
+    matcher found the row, and for a row of the payload's manufacturer, however
+    it was found (by slug, say), whose part number is the payload's model while
+    its own model is not: discovery reports the part ID as the model. Any other
+    match, a slug naming the row with its own model for instance, is diffed and
+    written as before.
     """
     if object_type not in _FALLBACK_MATCHERS:
         return False
     if getattr(existing, _FALLBACK_MATCH_ATTR, False):
         return True
-    model_key = _usable_part_value(data.get("model"))
+    model_key = part_number_key(data)
     return (
         model_key is not None
         and getattr(existing, "manufacturer_id", None) == data.get("manufacturer")
         and getattr(existing, "part_number", None) == model_key
-        and getattr(existing, "model", None) != data.get("model")
+        and getattr(existing, "model", None) != model_key
     )
 
 
@@ -2399,7 +2397,7 @@ def _ip_only(value: str) -> str|None:
 
 @dataclass
 class PartNumberFallbackMatcher:
-    """Match the type whose part number is the payload's model, or its part number when it has no usable model."""
+    """Match the type whose part number is the payload's model."""
 
     model_class: type[models.Model]
     name: str
@@ -2413,20 +2411,27 @@ class PartNumberFallbackMatcher:
     is_fallback: ClassVar[bool] = True
 
     def has_required_fields(self, data: dict) -> bool:
-        """A manufacturer and a usable part identifier."""
+        """A manufacturer and a usable model."""
         return "manufacturer" in data and part_number_key(data) is not None
 
     def fingerprint(self, data: dict) -> None:
         """Abstain: a part number is not identity, so in-batch nodes never merge on it."""
 
     def build_queryset(self, data: dict) -> models.QuerySet | None:
-        """Types of this manufacturer carrying the key as their part number."""
+        """Types of this manufacturer carrying the key as their part number, placeholder-named types aside."""
         if not self.has_required_fields(data):
             return None
         manufacturer = data.get("manufacturer")
         if not isinstance(manufacturer, int) or isinstance(manufacturer, bool):
             return None
-        return self.model_class.objects.filter(manufacturer_id=manufacturer, part_number=part_number_key(data))
+        # A type named "Unknown" and the like stands for unidentified hardware,
+        # not for the part; counting it would make the real match ambiguous.
+        placeholder_named = Q()
+        for placeholder in _PART_NUMBER_PLACEHOLDERS:
+            placeholder_named |= Q(model__iexact=placeholder)
+        return self.model_class.objects.filter(
+            manufacturer_id=manufacturer, part_number=part_number_key(data),
+        ).exclude(placeholder_named)
 
     def resolve(self, queryset: models.QuerySet, data: dict):
         """One row binds; several bind nothing, since part_number is not unique."""
