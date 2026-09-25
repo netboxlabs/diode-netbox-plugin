@@ -478,6 +478,15 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
 
+    def test_a_slug_bind_is_not_made_while_the_graph_changes_the_part_number(self):
+        """One end reaching the catalog type by slug is written, not bound, when the other renumbers that type."""
+        by_slug = self._device_type(slug="pnf-vendor-sw-9200-48p")
+        other = self._device_type(model=CATALOG_MODEL, part_number="SW-9200-48P-B",
+                                  metadata={"source_match": {"netbox_id": self.catalog.pk}})
+        cs = generate_changeset(self._cable(by_slug, other), "dcim.cable").change_set
+        models = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.object_id == self.catalog.pk]
+        self.assertIn(PART, models, [c.to_dict() for c in cs.changes])
+
     def test_the_graph_clearing_the_catalog_part_number_counts(self):
         """An explicit blank part number clears it, so the catalog type stops being a candidate."""
         other = self._device_type(model=CATALOG_MODEL, part_number="")

@@ -1943,10 +1943,11 @@ def _resolve_existing_references(entities: list[dict], warnings: dict | None = N
 
         # Another node of this graph changes which rows carry this part number
         # for the same manufacturer, so a bind made now could be wrong or
-        # ambiguous once the changeset applies.
+        # ambiguous once the changeset applies. Neither the fallback nor a bind
+        # without writing through any other matcher may then rely on it.
         key = part_number_key(data) if has_fallback(object_type) else None
-        fallback = key is None or not (asserted.get((manufacturer, key), set()) - {data['_uuid']})
-        existing = find_existing_object(data, object_type, fallback=fallback)
+        part_number_settled = key is None or not (asserted.get((manufacturer, key), set()) - {data['_uuid']})
+        existing = find_existing_object(data, object_type, fallback=part_number_settled)
         if existing is not None:
             new_refs[data['_uuid']] = existing.id
             if object_type in MATCH_ONLY_TYPES:
@@ -1956,7 +1957,7 @@ def _resolve_existing_references(entities: list[dict], warnings: dict | None = N
                 # change for them would fail validation anyway (e.g. NetBox's
                 # User requires a password we never carry).
                 continue
-            if binds_without_writing(object_type, data, existing):
+            if part_number_settled and binds_without_writing(object_type, data, existing):
                 # The payload names this row's part, not the row itself: bind
                 # the reference and emit no change, so the row is never renamed.
                 _report_bound_without_writing(object_type, data, existing, warnings)
