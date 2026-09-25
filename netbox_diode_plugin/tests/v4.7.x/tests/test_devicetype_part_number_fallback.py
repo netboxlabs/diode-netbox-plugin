@@ -368,6 +368,37 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
 
+    def test_a_placeholder_row_renamed_without_its_part_number_counts(self):
+        """An update is partial: a renamed Unknown row keeps its stored part number and becomes a candidate."""
+        unknown = DeviceType.objects.create(manufacturer=self.mfr, model="Unknown", slug="pnf-unknown4", part_number=PART)
+        other = self._device_type(model="Series 9200 48-port renamed", metadata={"source_match": {"netbox_id": unknown.pk}})
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
+
+    def test_a_row_moved_here_without_its_part_number_counts(self):
+        """A row moved to this manufacturer keeps its stored part number and becomes a candidate."""
+        elsewhere = Manufacturer.objects.create(name="pnf-elsewhere2", slug="pnf-elsewhere2")
+        moved = DeviceType.objects.create(manufacturer=elsewhere, model="pnf-moved2", slug="pnf-moved2", part_number=PART)
+        other = self._device_type(model="pnf-moved2", metadata={"source_match": {"netbox_id": moved.pk}})
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
+
+    def test_a_bound_types_new_tag_is_not_created(self):
+        """A bound type is not written, so a new object only it referenced is not created either."""
+        cs = generate_changeset(self._device_type(tags=[{"name": "pnf-new-tag"}]), "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "extras.tag"), [], [c.to_dict() for c in cs.changes])
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+
+    def test_a_tag_the_device_also_uses_is_still_created(self):
+        """A child another written node references survives the bound type's drop."""
+        payload = self._device("pnf-dev9", tags=[{"name": "pnf-shared-tag"}])
+        payload["device_type"] = self._device_type(tags=[{"name": "pnf-shared-tag"}])
+        cs = generate_changeset(payload, "dcim.device").change_set
+        creates = [c for c in _writes(cs, "extras.tag") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
+
     def test_an_agreeing_part_number_still_binds(self):
         """A node asserting its own model as its part number does not count against itself."""
         cs = generate_changeset(self._device_type(part_number=PART), "dcim.devicetype").change_set
