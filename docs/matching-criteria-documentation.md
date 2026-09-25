@@ -6,7 +6,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 - **Logical Matchers**: Custom matching criteria that represent likely user intent
 - **Builtin Matchers**: Automatically generated from NetBox model constraints (unique fields, unique constraints, custom fields, auto-slugs)
-- **Fallback Matchers**: Consulted only when planning, after every other matcher misses. What they find is bound without being written to, and so is a device type of the payload's manufacturer, found by any matcher, whose part number is the payload's model while its own model is not
+- **Fallback Matchers**: Consulted only when planning, after every other matcher misses. What they find is bound without being written to, and so is a device type of the payload's manufacturer, found by any matcher, whose part number is the payload's model while its own model is neither that model nor a placeholder
 
 ## circuits.circuit
 

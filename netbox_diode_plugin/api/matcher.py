@@ -1342,14 +1342,14 @@ def binds_without_writing(object_type: str, data: dict, existing) -> bool:
 
     The payload is then bound to the row and nothing is written to it, so a
     curated model is never renamed to a part number. That holds when a fallback
-    matcher found the row, and for a row of the payload's manufacturer, found by
-    any matcher (by slug, say), whose part number is the payload's model while its
-    own model is not, both read stripped as the fallback reads them: discovery
-    reports the part ID as the model. Any other match, a slug naming the row with
-    its own model for instance, is diffed and written as before; so is a row
-    addressed by netbox_id, which never reaches this check, and a payload whose
-    part number names another part, as it does for the fallback matcher, or is a
-    value NetBox rejects.
+    matcher found the row, and when another matcher (by slug, say) found a row
+    of the payload's manufacturer that the fallback would take for the payload's
+    model: discovery reports the part ID as the model. Any other match is diffed
+    and written as before: a slug naming the row with its own model, a type named
+    after a placeholder, which the payload now identifies, a row addressed by
+    netbox_id, which never reaches this check, and a payload whose part number
+    names another part, as it does for the fallback matcher, or is a value NetBox
+    rejects.
     """
     if object_type not in _FALLBACK_MATCHERS:
         return False
@@ -1360,8 +1360,8 @@ def binds_without_writing(object_type: str, data: dict, existing) -> bool:
         model_key is not None
         and _part_number_agrees(data, model_key)
         and getattr(existing, "manufacturer_id", None) == data.get("manufacturer")
-        and _usable_part_value(getattr(existing, "part_number", None)) == model_key
-        and _as_stored_text(getattr(existing, "model", None)) != model_key
+        and fallback_candidate_part(getattr(existing, "model", None), getattr(existing, "part_number", None))
+        == model_key
     )
 
 

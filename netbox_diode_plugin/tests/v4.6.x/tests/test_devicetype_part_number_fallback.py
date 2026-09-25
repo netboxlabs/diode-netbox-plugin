@@ -616,6 +616,13 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         padded_model = SimpleNamespace(manufacturer_id=self.mfr.pk, part_number=PART, model=f" {PART} ")
         self.assertFalse(binds_without_writing("dcim.devicetype", data, padded_model))
 
+    def test_binds_without_writing_leaves_placeholder_rows_to_be_written(self):
+        """A row named after a placeholder or nothing is no candidate, so a payload identifying it is written."""
+        data = {"manufacturer": self.mfr.pk, "model": PART}
+        for model in ("Unknown", " n/a ", "\t"):
+            row = SimpleNamespace(manufacturer_id=self.mfr.pk, part_number=PART, model=model)
+            self.assertFalse(binds_without_writing("dcim.devicetype", data, row), model)
+
     def test_binds_without_writing_compares_the_stripped_model(self):
         """A row whose own model is the payload's model, once stripped, is not bound."""
         row = SimpleNamespace(manufacturer_id=self.mfr.pk, part_number="SW-1", model="SW-1")
@@ -690,6 +697,15 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         updates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.UPDATE]
         self.assertEqual([c.object_id for c in updates], [self.catalog.pk], [c.to_dict() for c in cs.changes])
         self.assertEqual(updates[0].data.get("part_number"), PART + "-AFI")
+
+    def test_a_placeholder_type_named_by_slug_takes_the_identified_model(self):
+        """A type named Unknown that the payload names by slug is renamed to the model it now reports."""
+        unknown = DeviceType.objects.create(manufacturer=self.mfr, model="Unknown", slug="pnf-unknown5", part_number=PART)
+        cs = generate_changeset(self._device_type(slug="pnf-unknown5"), "dcim.devicetype").change_set
+        updates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.UPDATE]
+        self.assertEqual([c.object_id for c in updates], [unknown.pk], [c.to_dict() for c in cs.changes])
+        self.assertEqual(updates[0].data.get("model"), PART)
+        self._assert_catalog_untouched()
 
     def test_a_slug_match_with_a_numeric_part_number_is_written(self):
         """A part number sent as a number is an update like any other, not an absent value."""
