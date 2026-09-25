@@ -414,6 +414,13 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
 
+    def test_a_node_that_binds_by_slug_elsewhere_in_the_graph_changes_nothing(self):
+        """Another end reaching the catalog row by slug, with the part ID as model, is bound and writes nothing."""
+        other = {"model": PART, "slug": "pnf-vendor-sw-9200-48p", "manufacturer": {"slug": "pnf-vendor"}}
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        self._assert_catalog_untouched()
+
     def test_an_agreeing_part_number_still_binds(self):
         """A node asserting its own model as its part number does not count against itself."""
         cs = generate_changeset(self._device_type(part_number=PART), "dcim.devicetype").change_set

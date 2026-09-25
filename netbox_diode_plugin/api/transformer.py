@@ -1856,6 +1856,11 @@ def _candidacy_changes(node: dict, canonical: dict) -> set:
     """
     manufacturer = _manufacturer_identity(node['manufacturer'], canonical) if 'manufacturer' in node else None
     row = _row_before(node, manufacturer)
+    if row is not None and manufacturer is not None and manufacturer[0] == "pk" and binds_without_writing(
+        node['_object_type'], {**node, "manufacturer": manufacturer[1]}, row,
+    ):
+        # This node will be bound to its row without writing, so it changes nothing.
+        return set()
     before = None
     if row is not None:
         before = _candidate_key(row.manufacturer_id, row.model, asserted_part_number({"part_number": row.part_number}))
