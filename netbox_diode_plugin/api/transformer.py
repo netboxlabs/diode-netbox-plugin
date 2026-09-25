@@ -44,6 +44,7 @@ from .matcher import (
     fingerprints,
     get_model_matchers,
     has_fallback,
+    matched_custom_fields,
     part_number_key,
     partition_vc_identities,
     vc_unique_master_fingerprint,
@@ -1835,6 +1836,24 @@ def _may_change_candidates(node: dict) -> bool:
     return node.get('_netbox_id') is not None or bool(node.get('slug')) or bool(node.get('custom_fields'))
 
 
+class _GraphUnreadable(Exception):
+    """A row the guard needs cannot be looked up until the graph's references resolve."""
+
+
+def _find_ahead(data: dict, object_type: str):
+    """
+    Look a node's row up before resolution, as the guard must.
+
+    A unique custom-field matcher would query an object reference that has not
+    been resolved to its id yet, so a node sending one in such a field raises
+    _GraphUnreadable instead of failing the plan.
+    """
+    custom_fields = data.get('custom_fields') or {}
+    if any(isinstance(custom_fields.get(name), UnresolvedReference) for name in matched_custom_fields(object_type)):
+        raise _GraphUnreadable
+    return find_existing_object(data, object_type)
+
+
 def _canonical_manufacturers(entities: list[dict]) -> dict:
     """Each manufacturer node's identity: the row it resolves to, else the node itself."""
     canonical = {}
@@ -1843,7 +1862,7 @@ def _canonical_manufacturers(entities: list[dict]) -> dict:
             continue
         pk = node.get('_netbox_id')
         if pk is None:
-            existing = find_existing_object(node, 'dcim.manufacturer')
+            existing = _find_ahead(node, 'dcim.manufacturer')
             pk = existing.pk if existing is not None else None
         canonical[node['_uuid']] = ("pk", pk) if pk is not None else ("node", node['_uuid'])
     return canonical
@@ -1862,7 +1881,7 @@ def _row_before(node: dict, manufacturer):
     if node.get('_netbox_id') is not None:
         return model_class.objects.filter(pk=node['_netbox_id']).first()
     if manufacturer is not None and manufacturer[0] == "pk":
-        return find_existing_object({**node, "manufacturer": manufacturer[1]}, node['_object_type'])
+        return _find_ahead({**node, "manufacturer": manufacturer[1]}, node['_object_type'])
     return None
 
 
@@ -1908,16 +1927,25 @@ def _candidacy_changes(node: dict, canonical: dict) -> set:
     return {key for key in (before, after) if key is not None}
 
 
-def _asserted_part_numbers(entities: list[dict]) -> tuple[dict, dict]:
-    """(manufacturer, part number) keys whose fallback candidates this graph changes, with the nodes changing them."""
+def _asserted_part_numbers(entities: list[dict]) -> tuple[dict | None, dict]:
+    """
+    (manufacturer, part number) keys whose fallback candidates this graph changes, with the nodes changing them.
+
+    None instead when a row the guard needs cannot be looked up before the
+    graph's references resolve: nothing is then known to be settled, so no
+    node of the graph is bound by part number.
+    """
     nodes = [n for n in entities if has_fallback(n.get('_object_type')) and _may_change_candidates(n)]
     if not nodes:
         return {}, {}
-    canonical = _canonical_manufacturers(entities)
-    asserted = {}
-    for node in nodes:
-        for key in _candidacy_changes(node, canonical):
-            asserted.setdefault(key, set()).add(node.get('_uuid'))
+    try:
+        canonical = _canonical_manufacturers(entities)
+        asserted = {}
+        for node in nodes:
+            for key in _candidacy_changes(node, canonical):
+                asserted.setdefault(key, set()).add(node.get('_uuid'))
+    except _GraphUnreadable:
+        return None, {}
     return asserted, canonical
 
 
@@ -1946,7 +1974,9 @@ def _resolve_existing_references(entities: list[dict], warnings: dict | None = N
         # ambiguous once the changeset applies. Neither the fallback nor a bind
         # without writing through any other matcher may then rely on it.
         key = part_number_key(data) if has_fallback(object_type) else None
-        part_number_settled = key is None or not (asserted.get((manufacturer, key), set()) - {data['_uuid']})
+        part_number_settled = key is None or (
+            asserted is not None and not (asserted.get((manufacturer, key), set()) - {data['_uuid']})
+        )
         existing = find_existing_object(data, object_type, fallback=part_number_settled)
         if existing is not None:
             new_refs[data['_uuid']] = existing.id

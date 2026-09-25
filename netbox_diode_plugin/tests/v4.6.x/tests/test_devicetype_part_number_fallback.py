@@ -906,3 +906,98 @@ class PartNumberFallbackCustomFieldTestCase(TestCase):
             self.assertEqual(find_existing_object(keyed, "dcim.devicetype", fallback=True), self.keyed)
         finally:
             exit_request_obj_cache(token)
+
+
+class PartNumberGuardObjectReferenceTestCase(TestCase):
+    """A graph whose rows cannot be looked up before its references resolve still plans."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """A catalog-style type, and unique object-reference custom fields on device types and manufacturers."""
+        cls.mfr = Manufacturer.objects.create(name="pnf-vendor", slug="pnf-vendor")
+        cls.catalog = DeviceType.objects.create(
+            manufacturer=cls.mfr, model=CATALOG_MODEL, slug="pnf-vendor-sw-9200-48p", part_number=PART,
+        )
+        cls.site = Site.objects.create(name="pnf-site", slug="pnf-site")
+        cls.role = DeviceRole.objects.create(name="pnf-role", slug="pnf-role")
+        site_type = ObjectType.objects.get_for_model(Site)
+        for name, model, kind, unique in (
+            ("pnf_type_site", DeviceType, CustomFieldTypeChoices.TYPE_OBJECT, True),
+            ("pnf_type_note_site", DeviceType, CustomFieldTypeChoices.TYPE_OBJECT, False),
+            ("pnf_type_key", DeviceType, CustomFieldTypeChoices.TYPE_TEXT, True),
+            ("pnf_vendor_site", Manufacturer, CustomFieldTypeChoices.TYPE_OBJECT, True),
+        ):
+            field = CustomField.objects.create(
+                name=name, type=kind, required=False, unique=unique,
+                related_object_type=site_type if kind == CustomFieldTypeChoices.TYPE_OBJECT else None,
+            )
+            field.object_types.set([ObjectType.objects.get_for_model(model)])
+            field.save()
+
+    @classmethod
+    def tearDownClass(cls):
+        """The rolled-back custom fields fire no delete signal, so drop their cached matchers here."""
+        super().tearDownClass()
+        _get_custom_field_matchers.cache_clear()
+
+    def setUp(self):
+        """Each test answers from the database, not from a lookup an earlier test cached."""
+        django_cache.clear()
+
+    def tearDown(self):
+        """Leave no cached lookups behind for other test modules."""
+        django_cache.clear()
+
+    def _site_ref(self, field):
+        return {field: {"object": {"site": {"name": "pnf-site"}}}}
+
+    def _cable(self, a_type, b_type):
+        def end(name, device_type):
+            device = {"name": name, "site": {"name": "pnf-site"}, "role": {"name": "pnf-role"},
+                      "device_type": device_type}
+            return [{"object_interface": {"device": device, "name": "eth0", "type": "1000base-t"}}]
+        return {"a_terminations": end("pnf-dev-a", a_type), "b_terminations": end("pnf-dev-b", b_type),
+                "status": "connected", "type": "cat6"}
+
+    def test_a_type_keyed_by_an_object_reference_plans(self):
+        """A device type sending a part number and an object-reference custom field is planned, not an error."""
+        payload = {"model": "pnf-new-model", "part_number": "PN-NEW", "manufacturer": {"name": "pnf-vendor"},
+                   "custom_fields": self._site_ref("pnf_type_site")}
+        cs = generate_changeset(payload, "dcim.devicetype").change_set
+        creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
+
+    def test_a_manufacturer_keyed_by_an_object_reference_plans(self):
+        """A manufacturer carrying an object-reference custom field does not stop the graph from planning."""
+        payload = {"model": "pnf-new-model", "part_number": "PN-NEW",
+                   "manufacturer": {"name": "pnf-new-vendor", "custom_fields": self._site_ref("pnf_vendor_site")}}
+        cs = generate_changeset(payload, "dcim.devicetype").change_set
+        creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
+
+    def test_references_no_matcher_reads_leave_the_bind(self):
+        """An object reference in a custom field that is not unique is never queried, so the graph stays readable."""
+        noted = {"model": "pnf-new-model", "part_number": "PN-NEW", "manufacturer": {"name": "pnf-vendor"},
+                 "custom_fields": self._site_ref("pnf_type_note_site")}
+        plain = {"model": PART, "manufacturer": {"name": "pnf-vendor"}}
+        cs = generate_changeset(self._cable(plain, noted), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, ["pnf-new-model"], [c.to_dict() for c in cs.changes])
+
+    def test_a_unique_plain_value_leaves_the_bind(self):
+        """A unique custom field holding a plain value is looked up ahead as it is, so the graph stays readable."""
+        keyed = {"model": "pnf-new-model", "part_number": "PN-NEW", "manufacturer": {"name": "pnf-vendor"},
+                 "custom_fields": {"pnf_type_key": {"text": "KEY-9"}}}
+        plain = {"model": PART, "manufacturer": {"name": "pnf-vendor"}}
+        cs = generate_changeset(self._cable(plain, keyed), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, ["pnf-new-model"], [c.to_dict() for c in cs.changes])
+
+    def test_a_graph_it_cannot_read_ahead_binds_nothing_by_part_number(self):
+        """Beside a node whose row is unknown until references resolve, a discovery node is not bound."""
+        keyed = {"model": "pnf-new-model", "part_number": "PN-NEW", "manufacturer": {"name": "pnf-vendor"},
+                 "custom_fields": self._site_ref("pnf_type_site")}
+        plain = {"model": PART, "manufacturer": {"name": "pnf-vendor"}}
+        cs = generate_changeset(self._cable(plain, keyed), "dcim.cable").change_set
+        created = sorted(c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE)
+        self.assertEqual(created, sorted([PART, "pnf-new-model"]), [c.to_dict() for c in cs.changes])

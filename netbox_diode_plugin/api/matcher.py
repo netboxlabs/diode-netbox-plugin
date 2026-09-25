@@ -2592,6 +2592,11 @@ def _get_custom_field_matchers(model_class) -> tuple:
     )
 
 
+def matched_custom_fields(object_type: str) -> frozenset[str]:
+    """Names of the unique custom fields whose values the matchers of object_type query."""
+    return frozenset(m.custom_field for m in _get_custom_field_matchers(get_object_type_model(object_type)))
+
+
 def _on_custom_field_change(**kwargs):
     _get_custom_field_matchers.cache_clear()
 
