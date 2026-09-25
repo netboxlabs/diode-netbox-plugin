@@ -27,6 +27,7 @@ from .matcher import (
     annotate_vc_member_counts,
     contradicting_vc_discriminator,
     find_existing_object,
+    forget_fallback_answers,
     invalidate_find_obj_entry,
     narrow_vc_candidates,
     pre_save_match_binds_only,
@@ -62,6 +63,7 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
             data = _pre_apply(model_class, change, created)
             _apply_change(data, model_class, change, created, request, change_set, warnings,
                           bound_only)
+            forget_fallback_answers(object_type)
         except ValidationError as e:
             raise error_from_validation_error(e, object_type)
         except ObjectDoesNotExist:

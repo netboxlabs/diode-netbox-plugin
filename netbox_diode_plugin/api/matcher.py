@@ -1267,6 +1267,29 @@ def part_number_key(data: dict) -> str | None:
     return _usable_part_value(data.get("model"))
 
 
+def forget_fallback_answers(object_type: str) -> None:
+    """
+    Drop the request-cached fallback answers for object_type, after a row of it was written.
+
+    One bulk request plans and applies many entities under a single request
+    cache. A row written by an earlier entity, another type carrying the same
+    part number or a type named after it, changes what the fallback would
+    answer, so a later lookup must run the matchers again.
+    """
+    if object_type not in _FALLBACK_MATCHERS:
+        return
+    req_cache = _request_obj_cache.get(None)
+    if not req_cache:
+        return
+    model_class = get_object_type_model(object_type)
+    stale = [
+        key for key, value in req_cache.items()
+        if isinstance(value, model_class) and getattr(value, _FALLBACK_MATCH_ATTR, False)
+    ]
+    for key in stale:
+        del req_cache[key]
+
+
 def binds_without_writing(object_type: str, data: dict, existing) -> bool:
     """
     Whether a matched row is the part the payload names rather than the row it names.

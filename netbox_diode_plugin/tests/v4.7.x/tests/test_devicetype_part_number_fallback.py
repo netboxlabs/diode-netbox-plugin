@@ -23,6 +23,7 @@ from netbox_diode_plugin.api.matcher import (
     enter_request_obj_cache,
     exit_request_obj_cache,
     find_existing_object,
+    forget_fallback_answers,
     get_model_matchers,
     part_number_key,
 )
@@ -254,6 +255,36 @@ class PartNumberBindWritesNothingTestCase(TestCase):
             self.assertTrue(getattr(cached, _FALLBACK_MATCH_ATTR, False))
             cs = generate_changeset(payload, "dcim.devicetype").change_set
             self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        finally:
+            exit_request_obj_cache(token)
+
+    def test_a_batch_write_drops_cached_fallback_answers(self):
+        """In one bulk request, a type another entity creates is seen by the next lookup."""
+        token = enter_request_obj_cache()
+        try:
+            generate_changeset(self._device_type(), "dcim.devicetype")
+            key = _find_obj_cache_key({"manufacturer": self.mfr.pk, "model": PART}, "dcim.devicetype")
+            self.assertIn(key, _request_obj_cache.get())
+            second = self._device_type(model="Series 9200 48-port rev B", part_number=PART)
+            apply_changeset(generate_changeset(second, "dcim.devicetype").change_set, request=None)
+            self.assertNotIn(key, _request_obj_cache.get())
+            with self.assertLogs("netbox_diode_plugin.api.matcher", level="WARNING"):
+                cs = generate_changeset(self._device_type(), "dcim.devicetype").change_set
+            creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+            self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
+        finally:
+            exit_request_obj_cache(token)
+
+    def test_forgetting_fallback_answers_spares_everything_else(self):
+        """Only tagged answers for the written type leave the request cache."""
+        token = enter_request_obj_cache()
+        try:
+            cache_map = _request_obj_cache.get()
+            cache_map["identity"] = self.catalog
+            cache_map["other-type"] = self.site
+            forget_fallback_answers("dcim.site")
+            forget_fallback_answers("dcim.devicetype")
+            self.assertEqual(set(cache_map), {"identity", "other-type"})
         finally:
             exit_request_obj_cache(token)
 
