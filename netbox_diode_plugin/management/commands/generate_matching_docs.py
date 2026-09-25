@@ -8,6 +8,7 @@ from django.core.management.base import BaseCommand
 
 from netbox_diode_plugin.api.differ import extract_supported_models
 from netbox_diode_plugin.api.matcher import (
+    _FALLBACK_MATCHERS,
     _LOGICAL_MATCHERS,
     ObjectMatchCriteria,
     get_model_matchers,
@@ -24,7 +25,7 @@ class MatcherInfo:
     description: str | None = None
     matcher_type: str = "ObjectMatchCriteria"
     version_constraints: str | None = None
-    matcher_source: str = "logical"  # "logical" or "builtin"
+    matcher_source: str = "logical"  # "logical", "builtin" or "fallback"
 
 
 class Command(BaseCommand):
@@ -131,6 +132,7 @@ class Command(BaseCommand):
 
         class_field_map = {
             "RackReservationUnitOverlapMatcher": ["rack", "units"],
+            "PartNumberFallbackMatcher": ["manufacturer", "part_number"],
             "RackSiteNameMatcher": ["site", "name"],
             "VirtualChassisNameMatcher": ["name"],
         }
@@ -184,8 +186,8 @@ class Command(BaseCommand):
             matcher_infos = []
 
             for matcher in matchers:
-                # Skip logical matchers as they're already handled
-                if matcher.name.startswith('logical_'):
+                # Skip logical and fallback matchers as they're handled separately
+                if matcher.name.startswith(('logical_', 'fallback_')):
                     continue
 
                 # Extract fields for builtin matchers
@@ -213,16 +215,38 @@ class Command(BaseCommand):
 
         return documentation
 
+    def analyze_fallback_matchers(self) -> dict[str, list[MatcherInfo]]:
+        """Analyze the fallback matchers, consulted after every other matcher."""
+        documentation = {}
+
+        for object_type, matcher_factory in _FALLBACK_MATCHERS.items():
+            documentation[object_type] = [
+                MatcherInfo(
+                    name=matcher.name,
+                    fields=self.get_matcher_fields(matcher),
+                    condition=None,
+                    description=self.get_matcher_description(matcher),
+                    matcher_type=matcher.__class__.__name__,
+                    version_constraints=self.get_version_constraints(matcher),
+                    matcher_source="fallback",
+                )
+                for matcher in matcher_factory()
+            ]
+
+        return documentation
+
     def combine_matchers(
         self,
         logical_docs: dict[str, list[MatcherInfo]],
         builtin_docs: dict[str, list[MatcherInfo]],
+        fallback_docs: dict[str, list[MatcherInfo]] | None = None,
     ) -> dict[str, list[MatcherInfo]]:
-        """Combine logical and builtin matchers into a single documentation structure."""
+        """Combine logical, builtin and fallback matchers, in that order of precedence."""
         combined = {}
+        fallback_docs = fallback_docs or {}
 
         # Get all object types
-        all_object_types = set(logical_docs.keys()) | set(builtin_docs.keys())
+        all_object_types = set(logical_docs.keys()) | set(builtin_docs.keys()) | set(fallback_docs.keys())
 
         for object_type in all_object_types:
             matchers = []
@@ -234,6 +258,10 @@ class Command(BaseCommand):
             # Add builtin matchers
             if object_type in builtin_docs:
                 matchers.extend(builtin_docs[object_type])
+
+            # Fallback matchers run only after every other matcher missed
+            if object_type in fallback_docs:
+                matchers.extend(fallback_docs[object_type])
 
             if matchers:
                 combined[object_type] = matchers
@@ -256,6 +284,10 @@ class Command(BaseCommand):
         markdown.append(
             "- **Builtin Matchers**: Automatically generated from NetBox model constraints "
             "(unique fields, unique constraints, custom fields, auto-slugs)"
+        )
+        markdown.append(
+            "- **Fallback Matchers**: Consulted only after every other matcher misses; "
+            "they bind an existing object without writing to it"
         )
         markdown.append("")
 
@@ -302,8 +334,11 @@ class Command(BaseCommand):
         self.stdout.write("Analyzing builtin matching criteria...")
         builtin_docs = self.analyze_builtin_matchers()
 
+        self.stdout.write("Analyzing fallback matching criteria...")
+        fallback_docs = self.analyze_fallback_matchers()
+
         self.stdout.write("Combining matchers...")
-        combined_docs = self.combine_matchers(logical_docs, builtin_docs)
+        combined_docs = self.combine_matchers(logical_docs, builtin_docs, fallback_docs)
 
         self.stdout.write("Generating markdown documentation...")
         markdown_content = self.generate_markdown_table(combined_docs)

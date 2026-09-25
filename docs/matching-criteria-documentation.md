@@ -6,6 +6,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 - **Logical Matchers**: Custom matching criteria that represent likely user intent
 - **Builtin Matchers**: Automatically generated from NetBox model constraints (unique fields, unique constraints, custom fields, auto-slugs)
+- **Fallback Matchers**: Consulted only after every other matcher misses; they bind an existing object without writing to it
 
 ## circuits.circuit
 
@@ -153,6 +154,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | dcim_devicetype_unique_manufacturer_model | 1 | builtin | manufacturer, model | N/A | Matches on unique constraint fields: manufacturer, model | All versions |
 | dcim_devicetype_unique_manufacturer_slug | 2 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
 | unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| fallback_devicetype_part_number | 4 | fallback | manufacturer, part_number | N/A | Match the type whose part number is the payload's part identifier. | All versions |
 
 ## dcim.frontport
 

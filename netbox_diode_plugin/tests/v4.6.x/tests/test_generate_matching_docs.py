@@ -709,3 +709,35 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
 
         # Check that empty fields list is handled
         self.assertIn("| test_matcher | 1 | logical |  | N/A | Test description | All versions |", result)
+
+    def _combined(self):
+        return self.command.combine_matchers(
+            self.command.analyze_logical_matchers(),
+            self.command.analyze_builtin_matchers(),
+            self.command.analyze_fallback_matchers(),
+        )
+
+    def test_fallback_matchers_are_documented_last_for_device_types(self):
+        """The fallback tier is its own source and comes after every builtin matcher."""
+        rows = self._combined()["dcim.devicetype"]
+        self.assertEqual(rows[-1].name, "fallback_devicetype_part_number")
+        self.assertEqual(rows[-1].matcher_source, "fallback")
+        self.assertEqual(rows[-1].fields, ["manufacturer", "part_number"])
+        self.assertNotIn("fallback_devicetype_part_number", [r.name for r in rows[:-1]])
+
+    def test_builtin_analysis_leaves_fallback_matchers_out(self):
+        """A fallback matcher is not listed as builtin, even though get_model_matchers returns it."""
+        builtin = self.command.analyze_builtin_matchers()["dcim.devicetype"]
+        self.assertEqual([r.name for r in builtin if r.name.startswith("fallback_")], [])
+
+    def test_markdown_explains_fallback_matchers(self):
+        """The Matcher Types list names the fallback tier and the table types its row."""
+        markdown = self.command.generate_markdown_table(self._combined())
+        self.assertIn("- **Fallback Matchers**:", markdown)
+        self.assertIn("| fallback_devicetype_part_number | 4 | fallback | manufacturer, part_number |", markdown)
+
+    def test_command_output_includes_the_fallback_row(self):
+        """The command itself passes the fallback analysis through to the table."""
+        out = io.StringIO()
+        call_command("generate_matching_docs", stdout=out)
+        self.assertIn("| fallback_devicetype_part_number | 4 | fallback |", out.getvalue())
