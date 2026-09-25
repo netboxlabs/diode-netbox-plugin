@@ -1780,14 +1780,20 @@ def _log_bound_without_writing(object_type: str, data: dict, existing) -> None:
     )
 
 
-def _asserted_part_numbers(entities: list[dict]) -> dict[str, set]:
-    """Part numbers the graph's own fallback-typed nodes assert, each with the nodes asserting it."""
+def _ref_identity(value):
+    """A reference's identity before resolution: the referenced node's uuid, or the pk it already names."""
+    return value.uuid if isinstance(value, UnresolvedReference) else value
+
+
+def _asserted_part_numbers(entities: list[dict]) -> dict[tuple, set]:
+    """(manufacturer, part number) pairs the graph's fallback-typed nodes assert, each with the nodes asserting it."""
     asserted = {}
     for node in entities:
         if has_fallback(node.get('_object_type')):
             value = asserted_part_number(node)
             if value is not None:
-                asserted.setdefault(value, set()).add(node.get('_uuid'))
+                key = (_ref_identity(node.get('manufacturer')), value)
+                asserted.setdefault(key, set()).add(node.get('_uuid'))
     return asserted
 
 
@@ -1799,6 +1805,8 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
 
     for data in entities:
         object_type = data['_object_type']
+        # Compared with the graph's assertions, which predate resolution.
+        manufacturer = _ref_identity(data.get('manufacturer'))
         data = copy.deepcopy(data)
         _update_resolved_refs(data, new_refs)
 
@@ -1809,10 +1817,11 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
         if _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved):
             continue
 
-        # A part number another node of this graph asserts is written with the
-        # same changeset, so a bind made now could be ambiguous once it applies.
+        # A part number another node of this graph asserts for the same
+        # manufacturer is written with the same changeset, so a bind made now
+        # could be ambiguous once it applies.
         key = part_number_key(data) if has_fallback(object_type) else None
-        fallback = key is None or not (asserted.get(key, set()) - {data['_uuid']})
+        fallback = key is None or not (asserted.get((manufacturer, key), set()) - {data['_uuid']})
         existing = find_existing_object(data, object_type, fallback=fallback)
         if existing is not None:
             new_refs[data['_uuid']] = existing.id

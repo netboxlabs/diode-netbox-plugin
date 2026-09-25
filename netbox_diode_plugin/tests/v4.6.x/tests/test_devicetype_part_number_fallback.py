@@ -308,6 +308,13 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         self.assertEqual(created, sorted([PART, "Series 9200 48-port rev B"]), [c.to_dict() for c in cs.changes])
         self._assert_catalog_untouched()
 
+    def test_another_manufacturer_asserting_the_part_number_leaves_the_bind(self):
+        """Part numbers are scoped to the manufacturer, in the graph as in the database."""
+        other = {"model": "Other vendor 48-port", "part_number": PART, "manufacturer": {"name": "pnf-other-vendor"}}
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, ["Other vendor 48-port"], [c.to_dict() for c in cs.changes])
+
     def test_an_agreeing_part_number_still_binds(self):
         """A node asserting its own model as its part number does not count against itself."""
         cs = generate_changeset(self._device_type(part_number=PART), "dcim.devicetype").change_set
