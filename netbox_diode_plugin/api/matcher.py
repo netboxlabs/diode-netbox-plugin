@@ -1245,14 +1245,40 @@ _PART_NUMBER_PLACEHOLDERS = frozenset({"unknown", "n/a", "none", "-"})
 _FALLBACK_MATCH_ATTR = "_diode_matched_by_fallback"
 
 
+def _as_stored_text(value) -> str | None:
+    """
+    The text a device type field stores for value, or None for a value NetBox rejects.
+
+    Its serializer stores a string or a number as its stripped text and rejects
+    anything else, booleans included, so a part number sent as 123 is "123".
+    """
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return None
+    return str(value).strip()
+
+
 def _usable_part_value(value) -> str | None:
-    """A stripped value that can identify a part, or None for blanks and placeholders."""
-    if not isinstance(value, str):
+    """The stored text of a value that can identify a part, or None for blanks, placeholders and rejected values."""
+    text = _as_stored_text(value)
+    if not text or text.lower() in _PART_NUMBER_PLACEHOLDERS:
         return None
-    value = value.strip()
-    if not value or value.lower() in _PART_NUMBER_PLACEHOLDERS:
-        return None
-    return value
+    return text
+
+
+def _part_number_agrees(data: dict, key: str) -> bool:
+    """
+    Whether the payload's part number leaves key as the part it names.
+
+    A missing, null, blank or placeholder part number says nothing and agrees,
+    and a usable one agrees when it is key. One NetBox would reject never does,
+    so that payload is written, and fails validation, as it always has.
+    """
+    value = data.get("part_number")
+    if value is None:
+        return True
+    if _as_stored_text(value) is None:
+        return False
+    return _usable_part_value(value) in (None, key)
 
 
 def part_number_key(data: dict) -> str | None:
@@ -1272,9 +1298,19 @@ def has_fallback(object_type: str) -> bool:
     return object_type in _FALLBACK_MATCHERS
 
 
-def asserted_part_number(data: dict) -> str | None:
-    """The usable part number a payload asserts, or None."""
-    return _usable_part_value(data.get("part_number"))
+def fallback_candidate_part(model, part_number) -> str | None:
+    """
+    The part number a device type with this model and part number is a fallback candidate for, or None.
+
+    Both are read as NetBox stores them. A type named "Unknown" and the like
+    stands for unidentified hardware, not for the part, and a type named after
+    its part is the model matcher's; neither is ever a candidate.
+    """
+    part = _usable_part_value(part_number)
+    name = _usable_part_value(model)
+    if part is None or name is None or name == part:
+        return None
+    return part
 
 
 def forget_fallback_answers(object_type: str) -> None:
@@ -1308,11 +1344,12 @@ def binds_without_writing(object_type: str, data: dict, existing) -> bool:
     curated model is never renamed to a part number. That holds when a fallback
     matcher found the row, and for a row of the payload's manufacturer, found by
     any matcher (by slug, say), whose part number is the payload's model while its
-    own model is not: discovery reports the part ID as the model. Any other match,
-    a slug naming the row with its own model for instance, is diffed and written
-    as before; so is a row addressed by netbox_id, which never reaches this check,
-    and a payload asserting a part number other than its model, which names
-    another part just as it does for the fallback matcher.
+    own model is not, both read stripped as the fallback reads them: discovery
+    reports the part ID as the model. Any other match, a slug naming the row with
+    its own model for instance, is diffed and written as before; so is a row
+    addressed by netbox_id, which never reaches this check, and a payload whose
+    part number names another part, as it does for the fallback matcher, or is a
+    value NetBox rejects.
     """
     if object_type not in _FALLBACK_MATCHERS:
         return False
@@ -1321,10 +1358,10 @@ def binds_without_writing(object_type: str, data: dict, existing) -> bool:
     model_key = part_number_key(data)
     return (
         model_key is not None
-        and _usable_part_value(data.get("part_number")) in (None, model_key)
+        and _part_number_agrees(data, model_key)
         and getattr(existing, "manufacturer_id", None) == data.get("manufacturer")
-        and getattr(existing, "part_number", None) == model_key
-        and getattr(existing, "model", None) != model_key
+        and _usable_part_value(getattr(existing, "part_number", None)) == model_key
+        and _as_stored_text(getattr(existing, "model", None)) != model_key
     )
 
 
@@ -2455,31 +2492,32 @@ class PartNumberFallbackMatcher:
         airflow or licence variant for instance, so it is left to create its type.
         """
         key = part_number_key(data)
-        asserted = _usable_part_value(data.get("part_number"))
-        return "manufacturer" in data and key is not None and asserted in (None, key)
+        return "manufacturer" in data and key is not None and _part_number_agrees(data, key)
 
     def fingerprint(self, data: dict) -> None:
         """Abstain: a part number is not identity, so in-batch nodes never merge on it."""
 
     def build_queryset(self, data: dict) -> models.QuerySet | None:
-        """Types of this manufacturer carrying the key as their part number, placeholder-named types aside."""
+        """Types of this manufacturer whose part number contains the key; resolve keeps the candidates."""
         if not self.has_required_fields(data):
             return None
         manufacturer = data.get("manufacturer")
         if not isinstance(manufacturer, int) or isinstance(manufacturer, bool):
             return None
-        # A type named "Unknown" and the like stands for unidentified hardware,
-        # not for the part; counting it would make the real match ambiguous.
-        placeholder_named = Q()
-        for placeholder in _PART_NUMBER_PLACEHOLDERS:
-            placeholder_named |= Q(model__iexact=placeholder)
-        return self.model_class.objects.filter(
-            manufacturer_id=manufacturer, part_number=part_number_key(data),
-        ).exclude(placeholder_named)
+        # A stored part number that is the key once stripped contains it. Which
+        # rows are candidates is decided in resolve, by the rule the transformer
+        # applies to the rows a changeset writes, so the two never disagree.
+        return self.model_class.objects.filter(manufacturer_id=manufacturer, part_number__contains=part_number_key(data))
 
     def resolve(self, queryset: models.QuerySet, data: dict):
-        """One row binds; several bind nothing, since part_number is not unique."""
-        rows = list(queryset.order_by("pk")[:10])
+        """One candidate binds; several bind nothing, since part_number is not unique."""
+        key = part_number_key(data)
+        rows = []
+        for row in queryset.order_by("pk"):
+            if fallback_candidate_part(row.model, row.part_number) == key:
+                rows.append(row)
+                if len(rows) == 10:
+                    break
         if len(rows) == 1:
             return rows[0]
         if rows:

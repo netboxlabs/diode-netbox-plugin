@@ -73,6 +73,12 @@ class PartNumberKeyTestCase(SimpleTestCase):
         ):
             self.assertIsNone(part_number_key(data), data)
 
+    def test_the_key_is_the_text_netbox_stores(self):
+        """A numeric model is keyed on its text; a value NetBox rejects gives no key."""
+        self.assertEqual(part_number_key({"model": 9200}), "9200")
+        for data in ({"model": True}, {"model": ["SW-1"]}, {"model": {"name": "SW-1"}}):
+            self.assertIsNone(part_number_key(data), data)
+
 
 class PartNumberFallbackMatcherTestCase(TestCase):
     """The fallback binds a type by part number, and only after everything else missed."""
@@ -115,6 +121,59 @@ class PartNumberFallbackMatcherTestCase(TestCase):
         """A payload asserting another part number names another part; an agreeing one still binds."""
         self.assertIsNone(self._find(model=PART, part_number=PART + "-AFI"))
         self.assertEqual(self._find(model=PART, part_number=PART), self.catalog)
+
+    def test_a_part_number_netbox_rejects_binds_nothing(self):
+        """A part number of a type NetBox rejects is present, not absent; a null one is absent."""
+        for value in (True, ["x"], {"x": 1}):
+            self.assertIsNone(self._find(model=PART, part_number=value), value)
+        self.assertEqual(self._find(model=PART, part_number=None), self.catalog)
+
+    def test_a_numeric_part_number_is_read_as_its_text(self):
+        """A part number sent as a number agrees with the model it spells, and contradicts any other."""
+        numeric = DeviceType.objects.create(
+            manufacturer=self.mfr, model="Series 7", slug="pnf-series-7", part_number="7000",
+        )
+        self.assertEqual(self._find(model="7000", part_number=7000), numeric)
+        self.assertIsNone(self._find(model="7000", part_number=7001))
+
+    def test_a_padded_placeholder_name_is_never_a_candidate(self):
+        """A sole type named Unknown, padded with spaces, is still unidentified hardware."""
+        DeviceType.objects.create(
+            manufacturer=self.other_mfr, model=" Unknown ", slug="pnf-other-unknown", part_number=PART,
+        )
+        found = find_existing_object(
+            {"manufacturer": self.other_mfr.pk, "model": PART}, "dcim.devicetype", fallback=True,
+        )
+        self.assertIsNone(found)
+
+    def test_a_blank_named_type_is_never_a_candidate(self):
+        """A sole type with a blank model, which only a direct database write leaves, names no hardware."""
+        blank_mfr = Manufacturer.objects.create(name="pnf-blank", slug="pnf-blank")
+        DeviceType.objects.create(manufacturer=blank_mfr, model="\t ", slug="pnf-blank-type", part_number=PART)
+        found = find_existing_object({"manufacturer": blank_mfr.pk, "model": PART}, "dcim.devicetype", fallback=True)
+        self.assertIsNone(found)
+
+    def test_a_padded_part_number_is_the_part(self):
+        """A part number stored with whitespace around it, a tab included, still names the part."""
+        padded = DeviceType.objects.create(
+            manufacturer=self.other_mfr, model="Other 9200", slug="pnf-other-9200", part_number=f"\t{PART} ",
+        )
+        found = find_existing_object(
+            {"manufacturer": self.other_mfr.pk, "model": PART}, "dcim.devicetype", fallback=True,
+        )
+        self.assertEqual(found, padded)
+
+    def test_a_part_number_containing_the_key_is_not_the_part(self):
+        """A variant whose part number only starts with the key is no second candidate."""
+        DeviceType.objects.create(
+            manufacturer=self.mfr, model="Series 9200 48-port AFI", slug="pnf-afi", part_number=PART + "-AFI",
+        )
+        self.assertEqual(self._find(model=PART), self.catalog)
+
+    def test_a_type_named_after_the_part_is_never_a_candidate(self):
+        """A type whose stripped model is the part is the model matcher's, so the catalog type still binds."""
+        DeviceType.objects.create(manufacturer=self.mfr, model=f" {PART} ", slug="pnf-padded-dup", part_number=PART)
+        self.assertEqual(self._find(model=PART), self.catalog)
 
     def test_a_model_of_its_own_is_never_bound_by_a_shared_part_number(self):
         """A payload naming its own model is keyed on it, so the shared part number binds nothing."""
@@ -385,6 +444,17 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
 
+    def test_a_row_moved_here_with_a_padded_part_number_counts(self):
+        """The guard reads a stored part number as the fallback does, whitespace stripped."""
+        elsewhere = Manufacturer.objects.create(name="pnf-elsewhere3", slug="pnf-elsewhere3")
+        moved = DeviceType.objects.create(
+            manufacturer=elsewhere, model="pnf-moved3", slug="pnf-moved3", part_number=f"\t{PART} ",
+        )
+        other = self._device_type(model="pnf-moved3", metadata={"source_match": {"netbox_id": moved.pk}})
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
+
     def test_a_bound_types_new_tag_is_not_created(self):
         """A bound type is not written, so a new object only it referenced is not created either."""
         cs = generate_changeset(self._device_type(tags=[{"name": "pnf-new-tag"}]), "dcim.devicetype").change_set
@@ -528,6 +598,24 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         setattr(tagged, _FALLBACK_MATCH_ATTR, True)
         self.assertTrue(binds_without_writing("dcim.devicetype", data, tagged), "whatever the fallback found binds")
 
+    def test_binds_without_writing_reads_part_numbers_as_netbox_stores_them(self):
+        """A rejected part number is present and never binds; a null one is absent; a number is its text."""
+        data = {"manufacturer": self.mfr.pk, "model": PART}
+        self.assertFalse(binds_without_writing("dcim.devicetype", {**data, "part_number": True}, self.catalog))
+        self.assertTrue(binds_without_writing("dcim.devicetype", {**data, "part_number": None}, self.catalog))
+        numeric = SimpleNamespace(manufacturer_id=self.mfr.pk, part_number="7000", model="Series 7")
+        numeric_data = {"manufacturer": self.mfr.pk, "model": "7000"}
+        self.assertTrue(binds_without_writing("dcim.devicetype", {**numeric_data, "part_number": 7000}, numeric))
+        self.assertFalse(binds_without_writing("dcim.devicetype", {**numeric_data, "part_number": 7001}, numeric))
+
+    def test_binds_without_writing_reads_the_row_stripped(self):
+        """A padded part number on the row is still the payload's model, and a padded model still its own."""
+        data = {"manufacturer": self.mfr.pk, "model": PART}
+        padded_part = SimpleNamespace(manufacturer_id=self.mfr.pk, part_number=f" {PART} ", model=CATALOG_MODEL)
+        self.assertTrue(binds_without_writing("dcim.devicetype", data, padded_part))
+        padded_model = SimpleNamespace(manufacturer_id=self.mfr.pk, part_number=PART, model=f" {PART} ")
+        self.assertFalse(binds_without_writing("dcim.devicetype", data, padded_model))
+
     def test_binds_without_writing_compares_the_stripped_model(self):
         """A row whose own model is the payload's model, once stripped, is not bound."""
         row = SimpleNamespace(manufacturer_id=self.mfr.pk, part_number="SW-1", model="SW-1")
@@ -602,6 +690,13 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         updates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.UPDATE]
         self.assertEqual([c.object_id for c in updates], [self.catalog.pk], [c.to_dict() for c in cs.changes])
         self.assertEqual(updates[0].data.get("part_number"), PART + "-AFI")
+
+    def test_a_slug_match_with_a_numeric_part_number_is_written(self):
+        """A part number sent as a number is an update like any other, not an absent value."""
+        payload = self._device_type(slug="pnf-vendor-sw-9200-48p", part_number=123)
+        cs = generate_changeset(payload, "dcim.devicetype").change_set
+        updates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.UPDATE]
+        self.assertEqual([c.object_id for c in updates], [self.catalog.pk], [c.to_dict() for c in cs.changes])
 
     def test_apply_time_recovery_never_binds_by_part_number(self):
         """A create that fails for another reason still fails; the fallback answers no conflict."""

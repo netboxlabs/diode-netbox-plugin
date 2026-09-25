@@ -37,9 +37,9 @@ from .field_policy import (
     release_rejected_edges,
 )
 from .matcher import (
-    asserted_part_number,
     asserted_vc_identity,
     binds_without_writing,
+    fallback_candidate_part,
     find_existing_object,
     fingerprints,
     get_model_matchers,
@@ -1831,15 +1831,10 @@ def _row_before(node: dict, manufacturer):
     return None
 
 
-def _candidate_key(manufacturer_pk, model, part) -> tuple | None:
-    """
-    The (manufacturer, part number) a row with these values is a fallback candidate for, or None.
-
-    A row named after a placeholder is never one, and neither is a row whose
-    model is its part number: the model matcher finds that one first.
-    """
-    model = part_number_key({"model": model})
-    if manufacturer_pk is None or part is None or model is None or model == part:
+def _candidate_key(manufacturer_pk, model, part_number) -> tuple | None:
+    """The (manufacturer, part number) a row with these values is a fallback candidate for, or None."""
+    part = fallback_candidate_part(model, part_number)
+    if manufacturer_pk is None or part is None:
         return None
     return (("pk", manufacturer_pk), part)
 
@@ -1863,16 +1858,16 @@ def _candidacy_changes(node: dict, canonical: dict) -> set:
         return set()
     before = None
     if row is not None:
-        before = _candidate_key(row.manufacturer_id, row.model, asserted_part_number({"part_number": row.part_number}))
+        before = _candidate_key(row.manufacturer_id, row.model, row.part_number)
     if manufacturer is None:
         manufacturer = ("pk", row.manufacturer_id) if row is not None else None
     model = node.get('model') if 'model' in node else (row.model if row is not None else None)
-    part = asserted_part_number(node) if 'part_number' in node else (
-        asserted_part_number({"part_number": row.part_number}) if row is not None else None
+    part_number = node.get('part_number') if 'part_number' in node else (
+        row.part_number if row is not None else None
     )
     after = None
     if manufacturer is not None and manufacturer[0] == "pk":
-        after = _candidate_key(manufacturer[1], model, part)
+        after = _candidate_key(manufacturer[1], model, part_number)
     if before == after:
         return set()
     return {key for key in (before, after) if key is not None}
