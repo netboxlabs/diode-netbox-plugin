@@ -1240,6 +1240,10 @@ _FALLBACK_MATCHERS = {
 # Values producers send when they could not identify the part; never a key.
 _PART_NUMBER_PLACEHOLDERS = frozenset({"unknown"})
 
+# Set on a row a fallback matcher returned, so the transformer knows the payload
+# named that row's part rather than the row itself.
+_FALLBACK_MATCH_ATTR = "_diode_matched_by_fallback"
+
 
 def part_number_key(data: dict) -> str | None:
     """The part identifier a payload names: its part_number when asserted, else its model."""
@@ -1255,19 +1259,22 @@ def binds_without_writing(object_type: str, data: dict, existing) -> bool:
     """
     Whether a matched row is the part the payload names rather than the row it names.
 
-    True when the row's own part_number is the payload's part identifier and its
-    model is not the payload's model. The payload is then bound to the row and
-    nothing is written to it, so a curated model is never renamed to a part
-    number. Decided from the payload and the row, not from which matcher
-    answered, so a cached lookup decides the same way.
+    The payload is then bound to the row and nothing is written to it, so a
+    curated model is never renamed to a part number. That holds when a fallback
+    matcher found the row, and when the payload's model is the row's part number
+    however the row was found (by slug, say): discovery reports the part ID as
+    the model. Any other match, a slug naming the row with its own model for
+    instance, is diffed and written as before.
     """
     if object_type not in _FALLBACK_MATCHERS:
         return False
-    key = part_number_key(data)
+    if getattr(existing, _FALLBACK_MATCH_ATTR, False):
+        return True
+    model_key = part_number_key({"model": data.get("model")})
     return (
-        key is not None
+        model_key is not None
         and getattr(existing, "manufacturer_id", None) == data.get("manufacturer")
-        and getattr(existing, "part_number", None) == key
+        and getattr(existing, "part_number", None) == model_key
         and getattr(existing, "model", None) != data.get("model")
     )
 
@@ -2386,10 +2393,10 @@ class PartNumberFallbackMatcher:
     min_version: str | None = None
     max_version: str | None = None
 
-    # Re-checked on every request: a cached answer would outlive an edit to the
-    # row's part number, and the transformer would then plan the payload's model
-    # onto that row. The request-scoped cache still serves repeats within one call.
-    cache_across_requests: ClassVar[bool] = False
+    # Marks the fallback tier for find_existing_object: its answers are tagged,
+    # kept out of the cache shared across requests (a cached answer would outlive
+    # an edit to the row's part number), and skipped by apply-time lookups.
+    is_fallback: ClassVar[bool] = True
 
     def has_required_fields(self, data: dict) -> bool:
         """A manufacturer and a usable part identifier."""
@@ -2732,12 +2739,15 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     return f"diode:fobj:{key_hash}"
 
 
-def find_existing_object(data: dict, object_type: str): # noqa: C901
+def find_existing_object(data: dict, object_type: str, fallback: bool = True): # noqa: C901
     """
     Find an existing object that matches the given data.
 
     Uses all object match criteria to look for an existing
     object. Returns the first match found.
+
+    fallback=False skips the fallback tier, for lookups that ask whether a row
+    with this identity already exists: a row found by part number never is.
 
     Returns the object if found, otherwise None.
     """
@@ -2753,7 +2763,10 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
     cache_key = _find_obj_cache_key(data, object_type) if cache_ttl > 0 else None
 
     req_cache = _request_obj_cache.get(None)
-    if req_cache is not None and cache_key is not None and cache_key in req_cache:
+    if (
+        req_cache is not None and cache_key is not None and cache_key in req_cache
+        and (fallback or not getattr(req_cache[cache_key], _FALLBACK_MATCH_ATTR, False))
+    ):
         cached = req_cache[cache_key]
         if ctx:
             ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
@@ -2775,6 +2788,8 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
     matched_by = None
     if not cache_hit:
         for matcher in get_model_matchers(model_class):
+            if not fallback and getattr(matcher, "is_fallback", False):
+                continue
             if not matcher.has_required_fields(data):
                 continue
             q = matcher.build_queryset(data)
@@ -2795,7 +2810,9 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
                 matched_by = matcher
                 break
 
-        if cache_key and result is not None and getattr(matched_by, "cache_across_requests", True):
+        if getattr(matched_by, "is_fallback", False):
+            setattr(result, _FALLBACK_MATCH_ATTR, True)
+        elif cache_key and result is not None:
             django_cache.set(cache_key, result.id, cache_ttl)
             django_cache.set(_find_obj_rev_key(object_type, result.id), cache_key, cache_ttl)
 

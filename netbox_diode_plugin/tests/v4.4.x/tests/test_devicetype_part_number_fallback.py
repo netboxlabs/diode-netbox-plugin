@@ -5,8 +5,9 @@
 from dcim.models import Device, DeviceRole, DeviceType, Interface, InterfaceTemplate, Manufacturer, Site
 from django.core.cache import cache as django_cache
 from django.test import SimpleTestCase, TestCase
+from rest_framework.exceptions import ValidationError
 
-from netbox_diode_plugin.api.applier import _is_auto_created_component, apply_changeset
+from netbox_diode_plugin.api.applier import _create_or_find_instance, _is_auto_created_component, apply_changeset
 from netbox_diode_plugin.api.common import ChangeType, UnresolvedReference
 from netbox_diode_plugin.api.differ import extract_supported_models, generate_changeset
 from netbox_diode_plugin.api.matcher import (
@@ -22,6 +23,7 @@ from netbox_diode_plugin.api.matcher import (
     get_model_matchers,
     part_number_key,
 )
+from netbox_diode_plugin.api.supported_models import get_serializer_for_model
 
 PART = "SW-9200-48P"
 CATALOG_MODEL = "Series 9200 48-port"
@@ -294,8 +296,8 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         updates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.UPDATE]
         self.assertEqual([c.object_id for c in updates], [by_model.pk], [c.to_dict() for c in cs.changes])
 
-    def test_binds_without_writing_reads_payload_and_row_only(self):
-        """The predicate: part-number identity, a different model, the same manufacturer."""
+    def test_binds_without_writing_predicate(self):
+        """Bound when the fallback found the row, or when the payload's model is the row's part number."""
         data = {"manufacturer": self.mfr.pk, "model": PART}
         self.assertTrue(binds_without_writing("dcim.devicetype", data, self.catalog))
         self.assertFalse(binds_without_writing("dcim.devicetype", {**data, "model": CATALOG_MODEL}, self.catalog))
@@ -303,6 +305,33 @@ class PartNumberBindWritesNothingTestCase(TestCase):
             binds_without_writing("dcim.devicetype", {**data, "manufacturer": self.mfr.pk + 999}, self.catalog)
         )
         self.assertFalse(binds_without_writing("dcim.moduletype", data, self.catalog))
+        asserted = {"manufacturer": self.mfr.pk, "model": "SW 9200 family", "part_number": PART}
+        self.assertFalse(binds_without_writing("dcim.devicetype", asserted, self.catalog), "reached another way")
+        found = find_existing_object(asserted, "dcim.devicetype")
+        self.assertEqual(found, self.catalog)
+        self.assertTrue(binds_without_writing("dcim.devicetype", asserted, found), "found by the fallback")
+
+    def test_asserted_part_number_with_another_model_binds_without_writing(self):
+        """Found only through the asserted part number, the row is bound and never renamed."""
+        cs = generate_changeset(self._device_type(model="SW 9200 family", part_number=PART), "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        self._assert_catalog_untouched()
+
+    def test_deliberate_update_by_slug_still_writes(self):
+        """A producer naming the row by slug, with a model of its own, updates it as before."""
+        payload = self._device_type(model="Series 9200 48-port PoE", slug="pnf-vendor-sw-9200-48p", part_number=PART)
+        cs = generate_changeset(payload, "dcim.devicetype").change_set
+        updates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.UPDATE]
+        self.assertEqual([c.object_id for c in updates], [self.catalog.pk], [c.to_dict() for c in cs.changes])
+        self.assertEqual(updates[0].data.get("model"), "Series 9200 48-port PoE")
+
+    def test_apply_time_recovery_never_binds_by_part_number(self):
+        """A create that fails for another reason still fails; the fallback answers no conflict."""
+        serializer_class = get_serializer_for_model(DeviceType)
+        data = {"manufacturer": self.mfr.pk, "model": PART, "slug": "pnf-new", "airflow": "sideways"}
+        with self.assertRaises(ValidationError):
+            _create_or_find_instance(data, "dcim.devicetype", serializer_class, request=None)
+        self._assert_catalog_untouched()
 
 
 class PartNumberBindConvergesTestCase(TestCase):

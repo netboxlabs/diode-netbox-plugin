@@ -291,7 +291,7 @@ def _warn_bind_discarded_fields(warnings: list, instance, object_type: str, seri
 def _try_find_and_update_existing_instance(data: dict, object_type: str, serializer_class, request):
     """Try to find existing auto-created instance and update it."""
     try:
-        instance = find_existing_object(data, object_type)
+        instance = find_existing_object(data, object_type, fallback=False)
         if instance:
             snapshot_for_apply(instance)
             update_data = _strip_matched_cable_terminations(data, object_type, instance)
@@ -1181,7 +1181,8 @@ def _find_existing_object_or_none(data: dict, object_type: str):
     puts around its lookup, which is why only that path stayed a clean 400.
     """
     try:
-        return find_existing_object(data, object_type)
+        # An identity question: a row found only by part number caused no conflict.
+        return find_existing_object(data, object_type, fallback=False)
     except (ValueError, TypeError) as e:
         logger.debug(f"malformed reference in {object_type} match lookup: {e}")
         return None
