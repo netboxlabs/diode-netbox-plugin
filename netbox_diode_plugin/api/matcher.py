@@ -1267,6 +1267,16 @@ def part_number_key(data: dict) -> str | None:
     return _usable_part_value(data.get("model"))
 
 
+def has_fallback(object_type: str) -> bool:
+    """Whether object_type has a fallback tier."""
+    return object_type in _FALLBACK_MATCHERS
+
+
+def asserted_part_number(data: dict) -> str | None:
+    """The usable part number a payload asserts, or None."""
+    return _usable_part_value(data.get("part_number"))
+
+
 def forget_fallback_answers(object_type: str) -> None:
     """
     Drop the request-cached fallback answers for object_type, after a row of it was written.

@@ -37,11 +37,14 @@ from .field_policy import (
     release_rejected_edges,
 )
 from .matcher import (
+    asserted_part_number,
     asserted_vc_identity,
     binds_without_writing,
     find_existing_object,
     fingerprints,
     get_model_matchers,
+    has_fallback,
+    part_number_key,
     partition_vc_identities,
     vc_unique_master_fingerprint,
 )
@@ -1777,10 +1780,22 @@ def _log_bound_without_writing(object_type: str, data: dict, existing) -> None:
     )
 
 
+def _asserted_part_numbers(entities: list[dict]) -> dict[str, set]:
+    """Part numbers the graph's own fallback-typed nodes assert, each with the nodes asserting it."""
+    asserted = {}
+    for node in entities:
+        if has_fallback(node.get('_object_type')):
+            value = asserted_part_number(node)
+            if value is not None:
+                asserted.setdefault(value, set()).add(node.get('_uuid'))
+    return asserted
+
+
 def _resolve_existing_references(entities: list[dict]) -> list[dict]:
     seen = {}
     new_refs = {}
     resolved = []
+    asserted = _asserted_part_numbers(entities)
 
     for data in entities:
         object_type = data['_object_type']
@@ -1794,7 +1809,11 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
         if _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved):
             continue
 
-        existing = find_existing_object(data, object_type, fallback=True)
+        # A part number another node of this graph asserts is written with the
+        # same changeset, so a bind made now could be ambiguous once it applies.
+        key = part_number_key(data) if has_fallback(object_type) else None
+        fallback = key is None or not (asserted.get(key, set()) - {data['_uuid']})
+        existing = find_existing_object(data, object_type, fallback=fallback)
         if existing is not None:
             new_refs[data['_uuid']] = existing.id
             if object_type in MATCH_ONLY_TYPES:

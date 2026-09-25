@@ -292,6 +292,32 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         finally:
             exit_request_obj_cache(token)
 
+    def _cable(self, a_type, b_type):
+        def end(name, device_type):
+            device = {"name": name, "site": {"name": "pnf-site"}, "role": {"name": "pnf-role"},
+                      "device_type": device_type}
+            return [{"object_interface": {"device": device, "name": "eth0", "type": "1000base-t"}}]
+        return {"a_terminations": end("pnf-dev-a", a_type), "b_terminations": end("pnf-dev-b", b_type),
+                "status": "connected", "type": "cat6"}
+
+    def test_a_part_number_asserted_elsewhere_in_the_graph_binds_nothing(self):
+        """Another device type in the same changeset asserting the part number would leave it ambiguous."""
+        other = self._device_type(model="Series 9200 48-port rev B", part_number=PART)
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = sorted(c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE)
+        self.assertEqual(created, sorted([PART, "Series 9200 48-port rev B"]), [c.to_dict() for c in cs.changes])
+        self._assert_catalog_untouched()
+
+    def test_an_agreeing_part_number_still_binds(self):
+        """A node asserting its own model as its part number does not count against itself."""
+        cs = generate_changeset(self._device_type(part_number=PART), "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+
+    def test_one_graph_naming_the_part_twice_still_binds(self):
+        """Two devices of the same part in one graph are one node, and it binds the catalog type."""
+        cs = generate_changeset(self._cable(self._device_type(), self._device_type()), "dcim.cable").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+
     def test_identity_lookup_skips_a_fallback_answer_in_the_request_cache(self):
         """An apply-time lookup never takes a part-number answer cached earlier in the request."""
         data = {"manufacturer": self.mfr.pk, "model": PART}
