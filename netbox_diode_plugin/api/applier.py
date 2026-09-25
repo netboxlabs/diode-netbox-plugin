@@ -27,6 +27,7 @@ from .matcher import (
     annotate_vc_member_counts,
     contradicting_vc_discriminator,
     find_existing_object,
+    forget_cached_answers,
     invalidate_find_obj_entry,
     narrow_vc_candidates,
     pre_save_match_binds_only,
@@ -62,6 +63,7 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
             data = _pre_apply(model_class, change, created)
             _apply_change(data, model_class, change, created, request, change_set, warnings,
                           bound_only)
+            forget_cached_answers(object_type)
         except ValidationError as e:
             raise error_from_validation_error(e, object_type)
         except ObjectDoesNotExist:
@@ -291,7 +293,7 @@ def _warn_bind_discarded_fields(warnings: list, instance, object_type: str, seri
 def _try_find_and_update_existing_instance(data: dict, object_type: str, serializer_class, request):
     """Try to find existing auto-created instance and update it."""
     try:
-        instance = find_existing_object(data, object_type)
+        instance = find_existing_object(data, object_type, fallback=False)
         if instance:
             snapshot_for_apply(instance)
             update_data = _strip_matched_cable_terminations(data, object_type, instance)
@@ -1181,7 +1183,8 @@ def _find_existing_object_or_none(data: dict, object_type: str):
     puts around its lookup, which is why only that path stayed a clean 400.
     """
     try:
-        return find_existing_object(data, object_type)
+        # An identity question: a row found only by part number caused no conflict.
+        return find_existing_object(data, object_type, fallback=False)
     except (ValueError, TypeError) as e:
         logger.debug(f"malformed reference in {object_type} match lookup: {e}")
         return None
