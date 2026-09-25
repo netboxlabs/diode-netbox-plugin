@@ -37,7 +37,6 @@ from .field_policy import (
     release_rejected_edges,
 )
 from .matcher import (
-    LookupNeedsResolution,
     asserted_vc_identity,
     binds_without_writing,
     fallback_candidate_part,
@@ -1836,32 +1835,38 @@ def _may_change_candidates(node: dict) -> bool:
     return node.get('_netbox_id') is not None or bool(node.get('slug')) or bool(node.get('custom_fields'))
 
 
-def _find_ahead(data: dict, object_type: str):
+def _resolve_ahead(entities: list[dict], targets: set) -> dict:
     """
-    Look a node's row up before resolution, as the guard must.
+    The rows the target nodes resolve to, found ahead of resolution exactly as it will find them.
 
-    Matchers run in their usual order, so a row an earlier one finds is the row
-    resolution will find. A unique custom-field matcher whose value is an object
-    reference not resolved to its id yet would query that reference, so reaching
-    it raises LookupNeedsResolution instead of failing the plan.
+    The targets and every node they reference run in graph order, each with the
+    ids of the nodes resolved before it substituted, so a matcher reads the ids
+    it will read then, a unique custom field's object reference included. The
+    fallback never runs here. A node resolution will create maps to None.
     """
-    custom_fields = data.get('custom_fields') or {}
-    pending = frozenset(name for name, value in custom_fields.items() if isinstance(value, UnresolvedReference))
-    return find_existing_object(data, object_type, pending=pending)
-
-
-def _canonical_manufacturers(entities: list[dict]) -> dict:
-    """Each manufacturer node's identity: the row it resolves to, else the node itself."""
-    canonical = {}
-    for node in entities:
-        if node.get('_object_type') != 'dcim.manufacturer' or node.get('_is_post_create'):
+    by_uuid = {node['_uuid']: node for node in entities}
+    closure, stack = set(), list(targets)
+    while stack:
+        uuid = stack.pop()
+        if uuid in closure or uuid not in by_uuid:
             continue
-        pk = node.get('_netbox_id')
-        if pk is None:
-            existing = _find_ahead(node, 'dcim.manufacturer')
-            pk = existing.pk if existing is not None else None
-        canonical[node['_uuid']] = ("pk", pk) if pk is not None else ("node", node['_uuid'])
-    return canonical
+        closure.add(uuid)
+        stack.extend(by_uuid[uuid].get('_refs') or ())
+    rows, ids = {}, {}
+    for node in entities:
+        if node['_uuid'] not in closure:
+            continue
+        data = copy.deepcopy(node)
+        _update_resolved_refs(data, ids)
+        netbox_id = data.get('_netbox_id')
+        if netbox_id is not None:
+            row = get_object_type_model(data['_object_type']).objects.filter(pk=netbox_id).first()
+        else:
+            row = find_existing_object(data, data['_object_type'])
+        rows[node['_uuid']] = row
+        if row is not None:
+            ids[node['_uuid']] = row.pk
+    return rows
 
 
 def _manufacturer_identity(value, canonical: dict):
@@ -1869,16 +1874,6 @@ def _manufacturer_identity(value, canonical: dict):
     if isinstance(value, UnresolvedReference):
         return canonical.get(value.uuid, ("node", value.uuid))
     return ("pk", value)
-
-
-def _row_before(node: dict, manufacturer):
-    """The existing row a node writes to, or None when it creates one."""
-    model_class = get_object_type_model(node['_object_type'])
-    if node.get('_netbox_id') is not None:
-        return model_class.objects.filter(pk=node['_netbox_id']).first()
-    if manufacturer is not None and manufacturer[0] == "pk":
-        return _find_ahead({**node, "manufacturer": manufacturer[1]}, node['_object_type'])
-    return None
 
 
 def _candidate_key(manufacturer_pk, model, part_number) -> tuple | None:
@@ -1889,18 +1884,18 @@ def _candidate_key(manufacturer_pk, model, part_number) -> tuple | None:
     return (("pk", manufacturer_pk), part)
 
 
-def _candidacy_changes(node: dict, canonical: dict) -> set:
+def _candidacy_changes(node: dict, canonical: dict, row) -> set:
     """
     The (manufacturer, part number) keys whose fallback candidates a node's write changes.
 
-    Worked out from the row before and after the write: an update is partial, so
-    each of manufacturer, model and part number is the payload's where it sends
-    one and the stored row's where it does not. A key changes when the row gains
+    Worked out from the row before the write, which resolution will find (None
+    when it creates one), and the row after it: an update is partial, so each of
+    manufacturer, model and part number is the payload's where it sends one and
+    the stored row's where it does not. A key changes when the row gains
     candidacy for it or loses it, by a new or cleared part number, a rename to or
     from a placeholder, or a move between manufacturers.
     """
     manufacturer = _manufacturer_identity(node['manufacturer'], canonical) if 'manufacturer' in node else None
-    row = _row_before(node, manufacturer)
     if row is not None and manufacturer is not None and manufacturer[0] == "pk" and binds_without_writing(
         node['_object_type'], {**node, "manufacturer": manufacturer[1]}, row,
     ):
@@ -1923,25 +1918,28 @@ def _candidacy_changes(node: dict, canonical: dict) -> set:
     return {key for key in (before, after) if key is not None}
 
 
-def _asserted_part_numbers(entities: list[dict]) -> tuple[dict | None, dict]:
+def _asserted_part_numbers(entities: list[dict]) -> tuple[dict, dict]:
     """
     (manufacturer, part number) keys whose fallback candidates this graph changes, with the nodes changing them.
 
-    None instead when a row the guard needs cannot be looked up before the
-    graph's references resolve: nothing is then known to be settled, so no
-    node of the graph is bound by part number.
+    Also returns each manufacturer node's identity: the row it resolves to, else
+    the node itself, so different selectors of one row compare equal.
     """
     nodes = [n for n in entities if has_fallback(n.get('_object_type')) and _may_change_candidates(n)]
     if not nodes:
         return {}, {}
-    try:
-        canonical = _canonical_manufacturers(entities)
-        asserted = {}
-        for node in nodes:
-            for key in _candidacy_changes(node, canonical):
-                asserted.setdefault(key, set()).add(node.get('_uuid'))
-    except LookupNeedsResolution:
-        return None, {}
+    manufacturers = [
+        n for n in entities if n.get('_object_type') == 'dcim.manufacturer' and not n.get('_is_post_create')
+    ]
+    rows = _resolve_ahead(entities, {n['_uuid'] for n in nodes + manufacturers})
+    canonical = {
+        n['_uuid']: ("pk", rows[n['_uuid']].pk) if rows.get(n['_uuid']) is not None else ("node", n['_uuid'])
+        for n in manufacturers
+    }
+    asserted = {}
+    for node in nodes:
+        for key in _candidacy_changes(node, canonical, rows.get(node['_uuid'])):
+            asserted.setdefault(key, set()).add(node.get('_uuid'))
     return asserted, canonical
 
 
@@ -1970,9 +1968,7 @@ def _resolve_existing_references(entities: list[dict], warnings: dict | None = N
         # ambiguous once the changeset applies. Neither the fallback nor a bind
         # without writing through any other matcher may then rely on it.
         key = part_number_key(data) if has_fallback(object_type) else None
-        part_number_settled = key is None or (
-            asserted is not None and not (asserted.get((manufacturer, key), set()) - {data['_uuid']})
-        )
+        part_number_settled = key is None or not (asserted.get((manufacturer, key), set()) - {data['_uuid']})
         existing = find_existing_object(data, object_type, fallback=part_number_settled)
         if existing is not None:
             new_refs[data['_uuid']] = existing.id

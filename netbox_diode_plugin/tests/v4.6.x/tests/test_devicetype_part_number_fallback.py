@@ -504,6 +504,14 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         models = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.object_id == self.catalog.pk]
         self.assertIn(PART, models, [c.to_dict() for c in cs.changes])
 
+    def test_a_row_renumbered_by_id_under_a_new_name_counts(self):
+        """A node addressing the catalog type by id, under a name no matcher knows, is seen renumbering it."""
+        other = self._device_type(model="Series 9200 48-port renamed", part_number="SW-9200-48P-B",
+                                  metadata={"source_match": {"netbox_id": self.catalog.pk}})
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
+
     def test_the_graph_clearing_the_catalog_part_number_counts(self):
         """An explicit blank part number clears it, so the catalog type stops being a candidate."""
         other = self._device_type(model=CATALOG_MODEL, part_number="")
@@ -909,7 +917,7 @@ class PartNumberFallbackCustomFieldTestCase(TestCase):
 
 
 class PartNumberGuardObjectReferenceTestCase(TestCase):
-    """A graph whose rows cannot be looked up before its references resolve still plans."""
+    """The guard resolves object references ahead of resolution, as resolution will."""
 
     @classmethod
     def setUpTestData(cls):
@@ -967,8 +975,8 @@ class PartNumberGuardObjectReferenceTestCase(TestCase):
         creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
 
-    def test_a_slug_settles_the_row_before_an_unresolved_reference(self):
-        """A row an earlier matcher finds is known ahead, so a catalog type named by slug is still bound."""
+    def test_a_catalog_type_named_by_slug_with_an_object_reference_is_bound(self):
+        """The row the slug finds is known ahead, so the catalog type is still bound, not renamed."""
         payload = {"model": PART, "slug": "pnf-vendor-sw-9200-48p", "manufacturer": {"name": "pnf-vendor"},
                    "custom_fields": self._site_ref("pnf_type_site")}
         cs = generate_changeset(payload, "dcim.devicetype").change_set
@@ -1002,11 +1010,25 @@ class PartNumberGuardObjectReferenceTestCase(TestCase):
         created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(created, ["pnf-new-model"], [c.to_dict() for c in cs.changes])
 
-    def test_a_graph_it_cannot_read_ahead_binds_nothing_by_part_number(self):
-        """Beside a node whose row is unknown until references resolve, a discovery node is not bound."""
+    def test_an_object_reference_elsewhere_leaves_the_bind(self):
+        """A new type keyed by an object reference changes no other part number, so a discovery node still binds."""
         keyed = {"model": "pnf-new-model", "part_number": "PN-NEW", "manufacturer": {"name": "pnf-vendor"},
                  "custom_fields": self._site_ref("pnf_type_site")}
         plain = {"model": PART, "manufacturer": {"name": "pnf-vendor"}}
         cs = generate_changeset(self._cable(plain, keyed), "dcim.cable").change_set
-        created = sorted(c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE)
-        self.assertEqual(created, sorted([PART, "pnf-new-model"]), [c.to_dict() for c in cs.changes])
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, ["pnf-new-model"], [c.to_dict() for c in cs.changes])
+
+    def test_a_row_found_only_by_its_object_reference_counts(self):
+        """A node reaching a candidate only through its object reference, and renumbering it, turns the bind off."""
+        vendor = Manufacturer.objects.create(name="pnf-k-vendor", slug="pnf-k-vendor")
+        DeviceType.objects.create(
+            manufacturer=vendor, model="Series K", slug="pnf-series-k", part_number=PART,
+            custom_field_data={"pnf_type_site": self.site.pk},
+        )
+        renumber = {"model": "Series K2", "part_number": "PN-OTHER", "manufacturer": {"name": "pnf-k-vendor"},
+                    "custom_fields": self._site_ref("pnf_type_site")}
+        plain = {"model": PART, "manufacturer": {"name": "pnf-k-vendor"}}
+        cs = generate_changeset(self._cable(plain, renumber), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])

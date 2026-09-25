@@ -2841,12 +2841,7 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     return f"diode:fobj:{key_hash}"
 
 
-class LookupNeedsResolution(Exception):
-    """A lookup reached a custom-field matcher whose value is a reference not resolved to its id yet."""
-
-
-def find_existing_object(data: dict, object_type: str, fallback: bool = False, # noqa: C901
-                         pending: frozenset = frozenset()):
+def find_existing_object(data: dict, object_type: str, fallback: bool = False): # noqa: C901
     """
     Find an existing object that matches the given data.
 
@@ -2856,11 +2851,6 @@ def find_existing_object(data: dict, object_type: str, fallback: bool = False, #
     The fallback tier is opt-in: only planning asks for it (fallback=True). A
     lookup asking whether a row with this identity already exists must not
     consult it, since a row found by part number never is one.
-
-    pending names custom fields whose values are references not resolved yet.
-    Reaching one of their matchers raises LookupNeedsResolution instead of
-    querying the reference, so a lookup made ahead of resolution still returns
-    a row an earlier matcher finds, as resolution will.
 
     Returns the object if found, otherwise None.
     """
@@ -2906,8 +2896,6 @@ def find_existing_object(data: dict, object_type: str, fallback: bool = False, #
         for matcher in get_model_matchers(model_class):
             if not fallback and getattr(matcher, "is_fallback", False):
                 continue
-            if getattr(matcher, "custom_field", None) in pending:
-                raise LookupNeedsResolution(matcher.custom_field)
             if not matcher.has_required_fields(data):
                 continue
             q = matcher.build_queryset(data)
