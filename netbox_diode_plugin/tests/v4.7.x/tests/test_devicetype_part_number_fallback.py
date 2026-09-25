@@ -335,6 +335,21 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
         self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
 
+    def test_the_catalog_type_named_elsewhere_in_the_graph_is_not_a_candidate(self):
+        """Another end naming the catalog type by its own model resolves to the row the fallback binds."""
+        other = self._device_type(model=CATALOG_MODEL, part_number=PART)
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        self._assert_catalog_untouched()
+
+    def test_giving_another_type_the_part_number_counts(self):
+        """An existing type this changeset gives the part number becomes a second candidate."""
+        DeviceType.objects.create(manufacturer=self.mfr, model="pnf-other-type", slug="pnf-other-type")
+        other = self._device_type(model="pnf-other-type", part_number=PART)
+        cs = generate_changeset(self._cable(self._device_type(), other), "dcim.cable").change_set
+        created = [c.data.get("model") for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(created, [PART], [c.to_dict() for c in cs.changes])
+
     def test_an_agreeing_part_number_still_binds(self):
         """A node asserting its own model as its part number does not count against itself."""
         cs = generate_changeset(self._device_type(part_number=PART), "dcim.devicetype").change_set

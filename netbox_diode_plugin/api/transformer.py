@@ -1814,6 +1814,24 @@ def _manufacturer_identity(value, canonical: dict):
     return ("pk", value)
 
 
+def _already_carries(node: dict, manufacturer: tuple, part: str) -> bool:
+    """
+    Whether the row a node resolves to already carries the part number.
+
+    Writing it there adds no candidate: that row is already one, and the
+    fallback query sees it. A new row, or an existing one given the part
+    number by this changeset, is a candidate the query cannot see yet.
+    """
+    model_class = get_object_type_model(node['_object_type'])
+    if node.get('_netbox_id') is not None:
+        row = model_class.objects.filter(pk=node['_netbox_id']).first()
+    elif manufacturer[0] == "pk":
+        row = find_existing_object({**node, "manufacturer": manufacturer[1]}, node['_object_type'])
+    else:
+        return False
+    return row is not None and row.part_number == part
+
+
 def _asserted_part_numbers(entities: list[dict]) -> tuple[dict, dict]:
     """(manufacturer, part number) pairs this graph writes onto a second row, with the nodes writing them."""
     nodes = [n for n in entities if has_fallback(n.get('_object_type')) and _adds_a_candidate(n)]
@@ -1822,8 +1840,10 @@ def _asserted_part_numbers(entities: list[dict]) -> tuple[dict, dict]:
     canonical = _canonical_manufacturers(entities)
     asserted = {}
     for node in nodes:
-        key = (_manufacturer_identity(node.get('manufacturer'), canonical), asserted_part_number(node))
-        asserted.setdefault(key, set()).add(node.get('_uuid'))
+        manufacturer, part = _manufacturer_identity(node.get('manufacturer'), canonical), asserted_part_number(node)
+        if _already_carries(node, manufacturer, part):
+            continue
+        asserted.setdefault((manufacturer, part), set()).add(node.get('_uuid'))
     return asserted, canonical
 
 
