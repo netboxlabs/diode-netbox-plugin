@@ -2412,8 +2412,15 @@ class PartNumberFallbackMatcher:
     is_fallback: ClassVar[bool] = True
 
     def has_required_fields(self, data: dict) -> bool:
-        """A manufacturer and a usable model."""
-        return "manufacturer" in data and part_number_key(data) is not None
+        """
+        A manufacturer and a usable model, not contradicted by an asserted part number.
+
+        A payload asserting a different part number names another part, an
+        airflow or licence variant for instance, so it is left to create its type.
+        """
+        key = part_number_key(data)
+        asserted = _usable_part_value(data.get("part_number"))
+        return "manufacturer" in data and key is not None and asserted in (None, key)
 
     def fingerprint(self, data: dict) -> None:
         """Abstain: a part number is not identity, so in-batch nodes never merge on it."""

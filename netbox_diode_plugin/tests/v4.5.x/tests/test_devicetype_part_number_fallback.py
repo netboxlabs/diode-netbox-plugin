@@ -106,6 +106,11 @@ class PartNumberFallbackMatcherTestCase(TestCase):
         DeviceType.objects.create(manufacturer=self.mfr, model="Unknown", slug="pnf-unknown", part_number=PART)
         self.assertEqual(self._find(model=PART), self.catalog)
 
+    def test_a_contradicting_part_number_binds_nothing(self):
+        """A payload asserting another part number names another part; an agreeing one still binds."""
+        self.assertIsNone(self._find(model=PART, part_number=PART + "-AFI"))
+        self.assertEqual(self._find(model=PART, part_number=PART), self.catalog)
+
     def test_a_model_of_its_own_is_never_bound_by_a_shared_part_number(self):
         """A payload naming its own model is keyed on it, so the shared part number binds nothing."""
         self.assertIsNone(self._find(model="Series 9200 48-port rev C", part_number=PART))
@@ -358,6 +363,13 @@ class PartNumberBindWritesNothingTestCase(TestCase):
     def test_an_asserted_part_number_alone_creates_the_type_as_before(self):
         """A placeholder model with a part number binds nothing; the plan is today's create."""
         cs = generate_changeset(self._device_type(model="Unknown", part_number=PART), "dcim.devicetype").change_set
+        creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
+        self._assert_catalog_untouched()
+
+    def test_a_contradicting_part_number_creates_its_type(self):
+        """A variant part number is not folded into the base part's type; the plan is today's create."""
+        cs = generate_changeset(self._device_type(part_number=PART + "-AFI"), "dcim.devicetype").change_set
         creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
         self._assert_catalog_untouched()
