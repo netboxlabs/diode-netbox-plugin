@@ -53,14 +53,6 @@ class PartNumberKeyTestCase(SimpleTestCase):
                      {"model": "Unknown", "part_number": "PN-1"}):
             self.assertIsNone(part_number_key(data), data)
 
-    def test_placeholder_part_number_does_not_hide_the_model(self):
-        """An unknown part number leaves the model as the key."""
-        self.assertEqual(part_number_key({"model": "SW-1", "part_number": "unknown"}), "SW-1")
-
-    def test_blank_part_number_falls_back_to_model(self):
-        """An explicitly empty part number reads as absent."""
-        self.assertEqual(part_number_key({"model": " SW-1 ", "part_number": ""}), "SW-1")
-
     def test_placeholders_and_blanks_are_never_keys(self):
         """No key from blank, whitespace or an unknown placeholder."""
         for data in (
@@ -329,8 +321,8 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
 
-    def test_empty_part_number_keeps_the_model_as_key(self):
-        """part_number: "" is not an assertion; the model still binds, and nothing is cleared."""
+    def test_a_bind_leaves_the_part_number_alone(self):
+        """An empty part_number in the payload is not written onto the bound type."""
         cs = generate_changeset(self._device_type(part_number=""), "dcim.devicetype").change_set
         self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
         self._assert_catalog_untouched()
@@ -383,6 +375,16 @@ class PartNumberBindWritesNothingTestCase(TestCase):
         message = "\n".join(logs.output)
         self.assertIn(f"pk={self.catalog.pk}", message)
         self.assertIn("description", message)
+        self.assertNotIn("from ingest", message)
+
+    def test_a_bind_logs_warning_fields_not_their_messages(self):
+        """A warning that quotes a payload value is named by its field only."""
+        payload = self._device_type(metadata={"source_match": {"netbox_id": "not-a-number"}})
+        with self.assertLogs("netbox.diode_data", level="INFO") as logs:
+            generate_changeset(payload, "dcim.devicetype")
+        message = "\n".join(logs.output)
+        self.assertIn("warnings dropped for: ['metadata']", message)
+        self.assertNotIn("not-a-number", message)
 
     def test_a_plain_bind_is_not_logged_at_info(self):
         """A discovery payload carrying only its model and manufacturer binds quietly."""

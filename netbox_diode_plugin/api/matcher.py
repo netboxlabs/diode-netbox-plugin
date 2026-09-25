@@ -1257,11 +1257,12 @@ def _usable_part_value(value) -> str | None:
 
 def part_number_key(data: dict) -> str | None:
     """
-    The value a payload is matched against existing part numbers by: its usable model.
+    The value a payload is matched against existing part numbers by: its usable model, or None.
 
-    An asserted part_number is never a key. A payload with a model of its own is
-    naming that model, so a type it means to create is never bound to a
-    different model that happens to share the part number.
+    Blank and placeholder models give no key. An asserted part_number is never a
+    key either: a payload with a model of its own is naming that model, so a type
+    it means to create is never bound to a different model that happens to share
+    the part number.
     """
     return _usable_part_value(data.get("model"))
 
@@ -1272,11 +1273,11 @@ def binds_without_writing(object_type: str, data: dict, existing) -> bool:
 
     The payload is then bound to the row and nothing is written to it, so a
     curated model is never renamed to a part number. That holds when a fallback
-    matcher found the row, and for a row of the payload's manufacturer, however
-    it was found (by slug, say), whose part number is the payload's model while
-    its own model is not: discovery reports the part ID as the model. Any other
-    match, a slug naming the row with its own model for instance, is diffed and
-    written as before.
+    matcher found the row, and for a row of the payload's manufacturer, found by
+    any matcher (by slug, say), whose part number is the payload's model while its
+    own model is not: discovery reports the part ID as the model. Any other match,
+    a slug naming the row with its own model for instance, is diffed and written
+    as before; so is a row addressed by netbox_id, which never reaches this check.
     """
     if object_type not in _FALLBACK_MATCHERS:
         return False

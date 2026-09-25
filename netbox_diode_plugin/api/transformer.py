@@ -1766,13 +1766,14 @@ _BOUND_IDENTITY_FIELDS = frozenset({"id", "manufacturer", "model"})
 
 def _log_bound_without_writing(object_type: str, data: dict, existing) -> None:
     """Say what a bind discarded: at INFO when it dropped fields or warnings, else at DEBUG."""
+    # Field names only: values, and warning messages that can quote them, stay out of the log.
     dropped = sorted(k for k in data if not k.startswith("_") and k not in _BOUND_IDENTITY_FIELDS)
-    warnings = data.get("_warnings")
-    level = logging.INFO if dropped or warnings else logging.DEBUG
+    warned = sorted(data.get("_warnings") or {})
+    level = logging.INFO if dropped or warned else logging.DEBUG
     logger.log(
         level,
-        "%s bound to pk=%s by part number without writing; fields not applied: %s; warnings dropped: %s",
-        object_type, existing.pk, dropped or "none", warnings or "none",
+        "%s bound to pk=%s by part number without writing; fields not applied: %s; warnings dropped for: %s",
+        object_type, existing.pk, dropped or "none", warned or "none",
     )
 
 
