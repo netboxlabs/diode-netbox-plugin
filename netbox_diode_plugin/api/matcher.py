@@ -1223,6 +1223,33 @@ _LOGICAL_MATCHERS = {
     ],
 }
 
+# Matchers consulted only after every other matcher for a type has missed. They
+# rescue a payload that names an existing row by a field that is not its
+# identity, so the transformer binds what they find without writing to it (see
+# binds_without_writing).
+_FALLBACK_MATCHERS = {
+    "dcim.devicetype": lambda: [
+        PartNumberFallbackMatcher(
+            model_class=get_object_type_model("dcim.devicetype"),
+            name="fallback_devicetype_part_number",
+        ),
+    ],
+}
+
+# Values producers send when they could not identify the part; never a key.
+_PART_NUMBER_PLACEHOLDERS = frozenset({"unknown"})
+
+
+def part_number_key(data: dict) -> str | None:
+    """The part identifier a payload names: its part_number when asserted, else its model."""
+    for field_name in ("part_number", "model"):
+        value = data.get(field_name)
+        if isinstance(value, str) and value.strip():
+            value = value.strip()
+            return None if value.lower() in _PART_NUMBER_PLACEHOLDERS else value
+    return None
+
+
 @dataclass
 class ObjectMatchCriteria:
     """
@@ -2328,6 +2355,47 @@ def _ip_only(value: str) -> str|None:
     return value
 
 @dataclass
+class PartNumberFallbackMatcher:
+    """Match the type whose part number is the payload's part identifier."""
+
+    model_class: type[models.Model]
+    name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
+
+    def has_required_fields(self, data: dict) -> bool:
+        """A manufacturer and a usable part identifier."""
+        return "manufacturer" in data and part_number_key(data) is not None
+
+    def fingerprint(self, data: dict) -> None:
+        """Abstain: a part number is not identity, so in-batch nodes never merge on it."""
+
+    def build_queryset(self, data: dict) -> models.QuerySet | None:
+        """Types of this manufacturer carrying the key as their part number."""
+        if not self.has_required_fields(data):
+            return None
+        manufacturer = data.get("manufacturer")
+        if not isinstance(manufacturer, int) or isinstance(manufacturer, bool):
+            return None
+        return self.model_class.objects.filter(manufacturer_id=manufacturer, part_number=part_number_key(data))
+
+    def resolve(self, queryset: models.QuerySet, data: dict):
+        """One row binds; several bind nothing, since part_number is not unique."""
+        rows = list(queryset.order_by("pk")[:10])
+        if len(rows) == 1:
+            return rows[0]
+        if rows:
+            # Left unmatched, the ingest creates the type exactly as it did
+            # before this matcher existed.
+            logger.warning(
+                "dcim.devicetype part number %r matches %d device types, binding none: %s",
+                part_number_key(data), len(rows), "; ".join(f"pk={r.pk} model={r.model!r}" for r in rows),
+            )
+        return None
+
+
+@dataclass
 class AutoSlugMatcher:
     """A special matcher that tries to match on auto generated slugs."""
 
@@ -2402,7 +2470,16 @@ def get_model_matchers(model_class) -> list:
     matchers += _get_model_matchers(model_class)
     matchers += _get_custom_field_matchers(model_class)
     matchers += _get_autoslug_matchers(model_class)
+    matchers += _get_fallback_matchers(model_class)
     return matchers
+
+@lru_cache(maxsize=256)
+def _get_fallback_matchers(model_class) -> list:
+    object_type = get_object_type(model_class)
+    return [
+        x for x in _FALLBACK_MATCHERS.get(object_type, lambda: [])()
+        if in_version_range(x.min_version, x.max_version)
+    ]
 
 @lru_cache(maxsize=256)
 def _get_autoslug_matchers(model_class) -> list:
