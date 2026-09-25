@@ -38,6 +38,7 @@ from .field_policy import (
 )
 from .matcher import (
     asserted_vc_identity,
+    binds_without_writing,
     find_existing_object,
     fingerprints,
     get_model_matchers,
@@ -1784,6 +1785,10 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
                 # (users.user) are never created or updated via ingest, and a
                 # change for them would fail validation anyway (e.g. NetBox's
                 # User requires a password we never carry).
+                continue
+            if binds_without_writing(object_type, data, existing):
+                # The payload names this row's part, not the row itself: bind
+                # the reference and emit no change, so the row is never renamed.
                 continue
             _mark_seen(data, object_type, existing, seen)
             data['id'] = existing.id

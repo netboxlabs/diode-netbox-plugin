@@ -2,13 +2,17 @@
 # Copyright 2026 NetBox Labs, Inc.
 """Tests for binding a device type by its part number when its model matches nothing."""
 
-from dcim.models import DeviceType, Manufacturer, ModuleType
+from dcim.models import Device, DeviceRole, DeviceType, Interface, InterfaceTemplate, Manufacturer, ModuleType, Site
 from django.core.cache import cache as django_cache
 from django.test import SimpleTestCase, TestCase
 
-from netbox_diode_plugin.api.common import UnresolvedReference
+from netbox_diode_plugin.api.applier import apply_changeset
+from netbox_diode_plugin.api.common import ChangeType, UnresolvedReference
+from netbox_diode_plugin.api.differ import generate_changeset
 from netbox_diode_plugin.api.matcher import (
     PartNumberFallbackMatcher,
+    _find_obj_cache_key,
+    binds_without_writing,
     find_existing_object,
     get_model_matchers,
     part_number_key,
@@ -16,6 +20,14 @@ from netbox_diode_plugin.api.matcher import (
 
 PART = "SW-9200-48P"
 CATALOG_MODEL = "Series 9200 48-port"
+
+
+def _writes(cs, object_type=None):
+    """Planned changes other than NOOPs, optionally for one object type."""
+    return [
+        c for c in cs.changes
+        if c.change_type != ChangeType.NOOP and (object_type is None or c.object_type == object_type)
+    ]
 
 
 class PartNumberKeyTestCase(SimpleTestCase):
@@ -121,3 +133,163 @@ class PartNumberFallbackMatcherTestCase(TestCase):
         """In-batch dedupe is not widened by part number."""
         matcher = PartNumberFallbackMatcher(model_class=DeviceType, name="t")
         self.assertIsNone(matcher.fingerprint({"manufacturer": 1, "model": PART}))
+
+
+class PartNumberBindWritesNothingTestCase(TestCase):
+    """A type bound by part number is referenced, never written."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """A catalog-style type and the scaffolding a device needs."""
+        cls.mfr = Manufacturer.objects.create(name="pnf-vendor", slug="pnf-vendor")
+        cls.catalog = DeviceType.objects.create(
+            manufacturer=cls.mfr, model=CATALOG_MODEL, slug="pnf-vendor-sw-9200-48p", part_number=PART,
+        )
+        cls.site = Site.objects.create(name="pnf-site", slug="pnf-site")
+        cls.role = DeviceRole.objects.create(name="pnf-role", slug="pnf-role")
+
+    def setUp(self):
+        """Each test answers from the database, not from a lookup an earlier test cached."""
+        django_cache.clear()
+
+    def tearDown(self):
+        """Leave no cached lookups behind for other test modules."""
+        django_cache.clear()
+
+    def _device_type(self, **extra):
+        return {"model": PART, "manufacturer": {"name": "pnf-vendor"}, **extra}
+
+    def _device(self, name, **extra):
+        return {
+            "name": name, "site": {"name": "pnf-site"}, "role": {"name": "pnf-role"},
+            "device_type": self._device_type(), **extra,
+        }
+
+    def _assert_catalog_untouched(self):
+        self.catalog.refresh_from_db()
+        self.assertEqual((self.catalog.model, self.catalog.part_number), (CATALOG_MODEL, PART))
+
+    def test_device_type_entity_plans_no_write(self):
+        """The root type binds: no create, and no rename to the part ID."""
+        cs = generate_changeset(self._device_type(), "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        self._assert_catalog_untouched()
+
+    def test_device_create_points_at_the_catalog_type(self):
+        """A new device lands on the catalog type, which is not written."""
+        cs = generate_changeset(self._device("pnf-dev1"), "dcim.device").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        creates = [c for c in _writes(cs, "dcim.device") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
+        self.assertEqual(creates[0].data["device_type"], self.catalog.pk)
+
+    def test_interface_nesting_the_device_plans_no_device_or_type_write(self):
+        """The nested copy every interface carries binds the same way."""
+        Device.objects.create(name="pnf-dev2", site=self.site, role=self.role, device_type=self.catalog)
+        entity = {"name": "eth9", "type": "1000base-t", "device": self._device("pnf-dev2")}
+        cs = generate_changeset(entity, "dcim.interface").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        self.assertEqual(_writes(cs, "dcim.device"), [], [c.to_dict() for c in cs.changes])
+
+    def test_second_plan_inside_the_cache_window_still_writes_nothing(self):
+        """The bind reads the payload and the row, so a cached lookup decides the same."""
+        generate_changeset(self._device_type(), "dcim.devicetype")
+        key = _find_obj_cache_key({"manufacturer": self.mfr.pk, "model": PART}, "dcim.devicetype")
+        self.assertEqual(django_cache.get(key), self.catalog.pk, "the second plan must be served from the cache")
+        cs = generate_changeset(self._device_type(), "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+
+    def test_slug_match_on_a_row_identified_by_part_number_is_not_renamed(self):
+        """Reached through (manufacturer, slug), the catalog row keeps its model."""
+        cs = generate_changeset(self._device_type(slug="pnf-vendor-sw-9200-48p"), "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        self._assert_catalog_untouched()
+
+    def test_new_manufacturer_still_creates_the_type(self):
+        """No existing row can match; the payload creates its type as before."""
+        cs = generate_changeset({"model": PART, "manufacturer": {"name": "pnf-new-vendor"}}, "dcim.devicetype").change_set
+        creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
+
+    def test_shared_part_number_still_creates_the_type(self):
+        """Two candidates bind nothing, so the plan is exactly today's create."""
+        DeviceType.objects.create(
+            manufacturer=self.mfr, model="Series 9200 48-port rev B", slug="pnf-rev-b", part_number=PART,
+        )
+        with self.assertLogs("netbox_diode_plugin.api.matcher", level="WARNING"):
+            cs = generate_changeset(self._device_type(), "dcim.devicetype").change_set
+        creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
+        self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
+
+    def test_empty_part_number_keeps_the_model_as_key(self):
+        """part_number: "" is not an assertion; the model still binds, and nothing is cleared."""
+        cs = generate_changeset(self._device_type(part_number=""), "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        self._assert_catalog_untouched()
+
+    def test_model_match_still_writes_even_when_model_is_the_part_number(self):
+        """A type found by its own model is updated normally, even one whose model is its part number."""
+        by_model = DeviceType.objects.create(manufacturer=self.mfr, model=PART, slug="pnf-dup2", part_number=PART)
+        cs = generate_changeset(self._device_type(description="from ingest"), "dcim.devicetype").change_set
+        updates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.UPDATE]
+        self.assertEqual([c.object_id for c in updates], [by_model.pk], [c.to_dict() for c in cs.changes])
+
+    def test_binds_without_writing_reads_payload_and_row_only(self):
+        """The predicate: part-number identity, a different model, the same manufacturer."""
+        data = {"manufacturer": self.mfr.pk, "model": PART}
+        self.assertTrue(binds_without_writing("dcim.devicetype", data, self.catalog))
+        self.assertFalse(binds_without_writing("dcim.devicetype", {**data, "model": CATALOG_MODEL}, self.catalog))
+        self.assertFalse(
+            binds_without_writing("dcim.devicetype", {**data, "manufacturer": self.mfr.pk + 999}, self.catalog)
+        )
+        self.assertFalse(binds_without_writing("dcim.moduletype", data, self.catalog))
+
+
+class PartNumberBindConvergesTestCase(TestCase):
+    """Plan and apply: a device created on a catalog type converges with its template interfaces."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """A catalog-style type carrying an interface template, and device scaffolding."""
+        cls.mfr = Manufacturer.objects.create(name="pnf-vendor", slug="pnf-vendor")
+        cls.catalog = DeviceType.objects.create(
+            manufacturer=cls.mfr, model=CATALOG_MODEL, slug="pnf-vendor-sw-9200-48p", part_number=PART,
+        )
+        InterfaceTemplate.objects.create(device_type=cls.catalog, name="eth0", type="1000base-t")
+        Site.objects.create(name="pnf-site", slug="pnf-site")
+        DeviceRole.objects.create(name="pnf-role", slug="pnf-role")
+
+    def setUp(self):
+        """Each test answers from the database, not from a lookup an earlier test cached."""
+        django_cache.clear()
+
+    def tearDown(self):
+        """Leave no cached lookups behind for other test modules."""
+        django_cache.clear()
+
+    @staticmethod
+    def _ingest(entity, object_type):
+        apply_changeset(generate_changeset(entity, object_type).change_set, request=None)
+
+    def test_device_and_its_template_interface_converge(self):
+        """One interface, updated in place, and an empty plan on the next pass."""
+        device = {
+            "name": "pnf-dev3", "site": {"name": "pnf-site"}, "role": {"name": "pnf-role"},
+            "device_type": {"model": PART, "manufacturer": {"name": "pnf-vendor"}},
+        }
+        interface = {"name": "eth0", "type": "1000base-t", "description": "from ingest", "device": device}
+        self._ingest(device, "dcim.device")
+        self._ingest(interface, "dcim.interface")
+
+        created = Device.objects.get(name="pnf-dev3")
+        self.assertEqual(created.device_type_id, self.catalog.pk)
+        interfaces = Interface.objects.filter(device=created, name="eth0")
+        self.assertEqual(interfaces.count(), 1)
+        self.assertEqual(interfaces.get().description, "from ingest")
+        self.assertEqual(DeviceType.objects.filter(manufacturer=self.mfr).count(), 1)
+        self.catalog.refresh_from_db()
+        self.assertEqual((self.catalog.model, self.catalog.part_number), (CATALOG_MODEL, PART))
+
+        for entity, object_type in ((device, "dcim.device"), (interface, "dcim.interface")):
+            cs = generate_changeset(entity, object_type).change_set
+            self.assertEqual(_writes(cs), [], [c.to_dict() for c in cs.changes])

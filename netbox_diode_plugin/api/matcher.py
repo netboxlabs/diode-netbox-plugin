@@ -1250,6 +1250,27 @@ def part_number_key(data: dict) -> str | None:
     return None
 
 
+def binds_without_writing(object_type: str, data: dict, existing) -> bool:
+    """
+    Whether a matched row is the part the payload names rather than the row it names.
+
+    True when the row's own part_number is the payload's part identifier and its
+    model is not the payload's model. The payload is then bound to the row and
+    nothing is written to it, so a curated model is never renamed to a part
+    number. Decided from the payload and the row, not from which matcher
+    answered, so a cached lookup decides the same way.
+    """
+    if object_type not in _FALLBACK_MATCHERS:
+        return False
+    key = part_number_key(data)
+    return (
+        key is not None
+        and getattr(existing, "manufacturer_id", None) == data.get("manufacturer")
+        and getattr(existing, "part_number", None) == key
+        and getattr(existing, "model", None) != data.get("model")
+    )
+
+
 @dataclass
 class ObjectMatchCriteria:
     """
