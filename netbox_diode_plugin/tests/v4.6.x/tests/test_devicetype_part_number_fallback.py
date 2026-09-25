@@ -967,6 +967,15 @@ class PartNumberGuardObjectReferenceTestCase(TestCase):
         creates = [c for c in _writes(cs, "dcim.devicetype") if c.change_type == ChangeType.CREATE]
         self.assertEqual(len(creates), 1, [c.to_dict() for c in cs.changes])
 
+    def test_a_slug_settles_the_row_before_an_unresolved_reference(self):
+        """A row an earlier matcher finds is known ahead, so a catalog type named by slug is still bound."""
+        payload = {"model": PART, "slug": "pnf-vendor-sw-9200-48p", "manufacturer": {"name": "pnf-vendor"},
+                   "custom_fields": self._site_ref("pnf_type_site")}
+        cs = generate_changeset(payload, "dcim.devicetype").change_set
+        self.assertEqual(_writes(cs, "dcim.devicetype"), [], [c.to_dict() for c in cs.changes])
+        self.catalog.refresh_from_db()
+        self.assertEqual(self.catalog.model, CATALOG_MODEL)
+
     def test_a_manufacturer_keyed_by_an_object_reference_plans(self):
         """A manufacturer carrying an object-reference custom field does not stop the graph from planning."""
         payload = {"model": "pnf-new-model", "part_number": "PN-NEW",

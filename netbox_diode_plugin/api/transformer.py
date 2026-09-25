@@ -37,6 +37,7 @@ from .field_policy import (
     release_rejected_edges,
 )
 from .matcher import (
+    LookupNeedsResolution,
     asserted_vc_identity,
     binds_without_writing,
     fallback_candidate_part,
@@ -44,7 +45,6 @@ from .matcher import (
     fingerprints,
     get_model_matchers,
     has_fallback,
-    matched_custom_fields,
     part_number_key,
     partition_vc_identities,
     vc_unique_master_fingerprint,
@@ -1836,22 +1836,18 @@ def _may_change_candidates(node: dict) -> bool:
     return node.get('_netbox_id') is not None or bool(node.get('slug')) or bool(node.get('custom_fields'))
 
 
-class _GraphUnreadable(Exception):
-    """A row the guard needs cannot be looked up until the graph's references resolve."""
-
-
 def _find_ahead(data: dict, object_type: str):
     """
     Look a node's row up before resolution, as the guard must.
 
-    A unique custom-field matcher would query an object reference that has not
-    been resolved to its id yet, so a node sending one in such a field raises
-    _GraphUnreadable instead of failing the plan.
+    Matchers run in their usual order, so a row an earlier one finds is the row
+    resolution will find. A unique custom-field matcher whose value is an object
+    reference not resolved to its id yet would query that reference, so reaching
+    it raises LookupNeedsResolution instead of failing the plan.
     """
     custom_fields = data.get('custom_fields') or {}
-    if any(isinstance(custom_fields.get(name), UnresolvedReference) for name in matched_custom_fields(object_type)):
-        raise _GraphUnreadable
-    return find_existing_object(data, object_type)
+    pending = frozenset(name for name, value in custom_fields.items() if isinstance(value, UnresolvedReference))
+    return find_existing_object(data, object_type, pending=pending)
 
 
 def _canonical_manufacturers(entities: list[dict]) -> dict:
@@ -1944,7 +1940,7 @@ def _asserted_part_numbers(entities: list[dict]) -> tuple[dict | None, dict]:
         for node in nodes:
             for key in _candidacy_changes(node, canonical):
                 asserted.setdefault(key, set()).add(node.get('_uuid'))
-    except _GraphUnreadable:
+    except LookupNeedsResolution:
         return None, {}
     return asserted, canonical
 
