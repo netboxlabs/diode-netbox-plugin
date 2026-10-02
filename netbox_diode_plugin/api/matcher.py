@@ -8,6 +8,7 @@ import logging
 import time
 from dataclasses import dataclass
 from functools import cache, lru_cache
+from typing import ClassVar
 
 import netaddr
 from django.contrib.contenttypes.fields import ContentType
@@ -1223,6 +1224,147 @@ _LOGICAL_MATCHERS = {
     ],
 }
 
+# Matchers consulted only after every other matcher for a type has missed. They
+# rescue a payload that names an existing row by a field that is not its
+# identity, so the transformer binds what they find without writing to it (see
+# binds_without_writing).
+_FALLBACK_MATCHERS = {
+    "dcim.devicetype": lambda: [
+        PartNumberFallbackMatcher(
+            model_class=get_object_type_model("dcim.devicetype"),
+            name="fallback_devicetype_part_number",
+        ),
+    ],
+}
+
+# Values producers send when they could not identify the part; never a key.
+_PART_NUMBER_PLACEHOLDERS = frozenset({"unknown", "n/a", "none", "-"})
+
+# Set on a row a fallback matcher returned, so the transformer knows the payload
+# named that row's part rather than the row itself.
+_FALLBACK_MATCH_ATTR = "_diode_matched_by_fallback"
+
+
+def _as_stored_text(value) -> str | None:
+    """
+    The text a device type field stores for value, or None for a value NetBox rejects.
+
+    Its serializer stores a string or a number as its stripped text and rejects
+    anything else, booleans included, so a part number sent as 123 is "123".
+    """
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return None
+    return str(value).strip()
+
+
+def _usable_part_value(value) -> str | None:
+    """The stored text of a value that can identify a part, or None for blanks, placeholders and rejected values."""
+    text = _as_stored_text(value)
+    if not text or text.lower() in _PART_NUMBER_PLACEHOLDERS:
+        return None
+    return text
+
+
+def _part_number_agrees(data: dict, key: str) -> bool:
+    """
+    Whether the payload's part number leaves key as the part it names.
+
+    A missing, null, blank or placeholder part number says nothing and agrees,
+    and a usable one agrees when it is key. One NetBox would reject never does,
+    so that payload is written, and fails validation, as it always has.
+    """
+    value = data.get("part_number")
+    if value is None:
+        return True
+    if _as_stored_text(value) is None:
+        return False
+    return _usable_part_value(value) in (None, key)
+
+
+def part_number_key(data: dict) -> str | None:
+    """
+    The value a payload is matched against existing part numbers by: its usable model, or None.
+
+    Blank and placeholder models give no key. An asserted part_number is never a
+    key either: a payload with a model of its own is naming that model, so a type
+    it means to create is never bound to a different model that happens to share
+    the part number.
+    """
+    return _usable_part_value(data.get("model"))
+
+
+def has_fallback(object_type: str) -> bool:
+    """Whether object_type has a fallback tier."""
+    return object_type in _FALLBACK_MATCHERS
+
+
+def fallback_candidate_part(model, part_number) -> str | None:
+    """
+    The part number a device type with this model and part number is a fallback candidate for, or None.
+
+    Both are read as NetBox stores them. A type named "Unknown" and the like
+    stands for unidentified hardware, not for the part, and a type named after
+    its part is the model matcher's; neither is ever a candidate.
+    """
+    part = _usable_part_value(part_number)
+    name = _usable_part_value(model)
+    if part is None or name is None or name == part:
+        return None
+    return part
+
+
+def forget_cached_answers(object_type: str) -> None:
+    """
+    Drop the request-cached answers for object_type, after a row of it was written.
+
+    One bulk request plans and applies many entities under a single request
+    cache, which holds rows as they were read. For a type with a fallback, what
+    a later lookup binds depends on the rows as they are now: another type
+    carrying the same part number or named after it changes the fallback's
+    answer, and a row whose own part number changed may no longer be bound
+    without writing. Every answer for the type is looked up again; other types
+    keep theirs.
+    """
+    if object_type not in _FALLBACK_MATCHERS:
+        return
+    req_cache = _request_obj_cache.get(None)
+    if not req_cache:
+        return
+    model_class = get_object_type_model(object_type)
+    stale = [key for key, value in req_cache.items() if isinstance(value, model_class)]
+    for key in stale:
+        del req_cache[key]
+
+
+def binds_without_writing(object_type: str, data: dict, existing) -> bool:
+    """
+    Whether a matched row is the part the payload names rather than the row it names.
+
+    The payload is then bound to the row and nothing is written to it, so a
+    curated model is never renamed to a part number. That holds when a fallback
+    matcher found the row, and when another matcher (by slug, say) found a row
+    of the payload's manufacturer that the fallback would take for the payload's
+    model: discovery reports the part ID as the model. Any other match is diffed
+    and written as before: a slug naming the row with its own model, a type named
+    after a placeholder, which the payload now identifies, a row addressed by
+    netbox_id, which never reaches this check, and a payload whose part number
+    names another part, as it does for the fallback matcher, or is a value NetBox
+    rejects.
+    """
+    if object_type not in _FALLBACK_MATCHERS:
+        return False
+    if getattr(existing, _FALLBACK_MATCH_ATTR, False):
+        return True
+    model_key = part_number_key(data)
+    return (
+        model_key is not None
+        and _part_number_agrees(data, model_key)
+        and getattr(existing, "manufacturer_id", None) == data.get("manufacturer")
+        and fallback_candidate_part(getattr(existing, "model", None), getattr(existing, "part_number", None))
+        == model_key
+    )
+
+
 @dataclass
 class ObjectMatchCriteria:
     """
@@ -2328,6 +2470,68 @@ def _ip_only(value: str) -> str|None:
     return value
 
 @dataclass
+class PartNumberFallbackMatcher:
+    """Match the type whose part number is the payload's model."""
+
+    model_class: type[models.Model]
+    name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
+
+    # Marks the fallback tier for find_existing_object: its answers are tagged,
+    # kept out of the cache shared across requests (a cached answer would outlive
+    # an edit to the row's part number), and skipped by apply-time lookups.
+    is_fallback: ClassVar[bool] = True
+
+    def has_required_fields(self, data: dict) -> bool:
+        """
+        A manufacturer and a usable model, not contradicted by an asserted part number.
+
+        A payload asserting a different part number names another part, an
+        airflow or licence variant for instance, so it is left to create its type.
+        """
+        key = part_number_key(data)
+        return "manufacturer" in data and key is not None and _part_number_agrees(data, key)
+
+    def fingerprint(self, data: dict) -> None:
+        """Abstain: a part number is not identity, so in-batch nodes never merge on it."""
+
+    def build_queryset(self, data: dict) -> models.QuerySet | None:
+        """Types of this manufacturer whose part number contains the key; resolve keeps the candidates."""
+        if not self.has_required_fields(data):
+            return None
+        manufacturer = data.get("manufacturer")
+        if not isinstance(manufacturer, int) or isinstance(manufacturer, bool):
+            return None
+        # A stored part number that is the key once stripped contains it. Which
+        # rows are candidates is decided in resolve, by the rule the transformer
+        # applies to the rows a changeset writes, so the two never disagree.
+        return self.model_class.objects.filter(manufacturer_id=manufacturer, part_number__contains=part_number_key(data))
+
+    def resolve(self, queryset: models.QuerySet, data: dict):
+        """One candidate binds; several bind nothing, since part_number is not unique."""
+        key = part_number_key(data)
+        rows = []
+        for row in queryset.order_by("pk"):
+            if fallback_candidate_part(row.model, row.part_number) == key:
+                rows.append(row)
+                if len(rows) == 10:
+                    break
+        if len(rows) == 1:
+            return rows[0]
+        if rows:
+            # Left unmatched, the ingest creates the type exactly as it did
+            # before this matcher existed.
+            logger.warning(
+                "dcim.devicetype part number %r matches %s device types, binding none: %s",
+                part_number_key(data), f"{len(rows)} or more" if len(rows) == 10 else len(rows),
+                "; ".join(f"pk={r.pk} model={r.model!r}" for r in rows),
+            )
+        return None
+
+
+@dataclass
 class AutoSlugMatcher:
     """A special matcher that tries to match on auto generated slugs."""
 
@@ -2402,7 +2606,16 @@ def get_model_matchers(model_class) -> list:
     matchers += _get_model_matchers(model_class)
     matchers += _get_custom_field_matchers(model_class)
     matchers += _get_autoslug_matchers(model_class)
+    matchers += _get_fallback_matchers(model_class)
     return matchers
+
+@lru_cache(maxsize=256)
+def _get_fallback_matchers(model_class) -> list:
+    object_type = get_object_type(model_class)
+    return [
+        x for x in _FALLBACK_MATCHERS.get(object_type, lambda: [])()
+        if in_version_range(x.min_version, x.max_version)
+    ]
 
 @lru_cache(maxsize=256)
 def _get_autoslug_matchers(model_class) -> list:
@@ -2628,12 +2841,16 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     return f"diode:fobj:{key_hash}"
 
 
-def find_existing_object(data: dict, object_type: str): # noqa: C901
+def find_existing_object(data: dict, object_type: str, fallback: bool = False): # noqa: C901
     """
     Find an existing object that matches the given data.
 
     Uses all object match criteria to look for an existing
     object. Returns the first match found.
+
+    The fallback tier is opt-in: only planning asks for it (fallback=True). A
+    lookup asking whether a row with this identity already exists must not
+    consult it, since a row found by part number never is one.
 
     Returns the object if found, otherwise None.
     """
@@ -2649,8 +2866,14 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
     cache_key = _find_obj_cache_key(data, object_type) if cache_ttl > 0 else None
 
     req_cache = _request_obj_cache.get(None)
-    if req_cache is not None and cache_key is not None and cache_key in req_cache:
-        cached = req_cache[cache_key]
+    cached = req_cache.get(cache_key) if req_cache is not None and cache_key is not None else None
+    if cached is not None and getattr(cached, _FALLBACK_MATCH_ATTR, False) and (
+        not fallback or data.get("custom_fields")
+    ):
+        # A fallback answer is not an identity match, and the key leaves out
+        # custom fields, which unique custom-field matchers read before it.
+        cached = None
+    if cached is not None:
         if ctx:
             ctx.record_timing("find_obj", (time.monotonic() - start) * 1000)
             ctx.increment("find_obj_found")
@@ -2668,8 +2891,11 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
                 django_cache.delete(cache_key)
                 django_cache.delete(_find_obj_rev_key(object_type, cached_id))
 
+    matched_by = None
     if not cache_hit:
         for matcher in get_model_matchers(model_class):
+            if not fallback and getattr(matcher, "is_fallback", False):
+                continue
             if not matcher.has_required_fields(data):
                 continue
             q = matcher.build_queryset(data)
@@ -2687,9 +2913,12 @@ def find_existing_object(data: dict, object_type: str): # noqa: C901
                 existing = q.order_by('pk').first()
             if existing is not None:
                 result = existing
+                matched_by = matcher
                 break
 
-        if cache_key and result is not None:
+        if getattr(matched_by, "is_fallback", False):
+            setattr(result, _FALLBACK_MATCH_ATTR, True)
+        elif cache_key and result is not None:
             django_cache.set(cache_key, result.id, cache_ttl)
             django_cache.set(_find_obj_rev_key(object_type, result.id), cache_key, cache_ttl)
 

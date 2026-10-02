@@ -267,7 +267,10 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
 
     warnings = {}
     supported_models = extract_supported_models()
-    entities = transform_proto_json(entity, object_type, supported_models)
+    bound = {}
+    entities = transform_proto_json(entity, object_type, supported_models, warnings=bound)
+    for bound_type, bound_warnings in bound.items():
+        _merge_warnings(warnings, bound_type, bound_warnings)
     by_uuid = {x['_uuid']: x for x in entities}
     for entity in entities:
         prechange_data = {}

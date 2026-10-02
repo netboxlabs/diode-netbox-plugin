@@ -38,9 +38,13 @@ from .field_policy import (
 )
 from .matcher import (
     asserted_vc_identity,
+    binds_without_writing,
+    fallback_candidate_part,
     find_existing_object,
     fingerprints,
     get_model_matchers,
+    has_fallback,
+    part_number_key,
     partition_vc_identities,
     vc_unique_master_fingerprint,
 )
@@ -830,12 +834,16 @@ def _move_deferred_companions(object_type, node, post_create):
                 post_create[scalar_field] = node.pop(scalar_field)
 
 @profiled("transform")
-def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict) -> list[dict]: # noqa: C901
+def transform_proto_json(proto_json: dict, object_type: str, supported_models: dict, # noqa: C901
+                         warnings: dict | None = None) -> list[dict]:
     """
     Transform keys of proto json dict to flattened dictionaries with model field keys.
 
     This also handles placing `_type` fields for generic references,
     a certain form of deduplication and resolution of existing objects.
+
+    A node bound without writing leaves the output, so what the caller must hear
+    about it, by object type and field, goes into warnings when one is passed.
     """
     entities = _transform_proto_json_1(proto_json, object_type, supported_models)
 
@@ -858,7 +866,12 @@ def transform_proto_json(proto_json: dict, object_type: str, supported_models: d
         deduplicated = prune_orphaned_nodes(deduplicated, referenced_before)
     _set_auto_slugs(deduplicated, supported_models)
     _handle_cached_scope(deduplicated, supported_models)
-    resolved = _resolve_existing_references(deduplicated)
+    resolved = _resolve_existing_references(deduplicated, warnings)
+    # A device type bound without writing is dropped, and the nodes only it
+    # referenced (a new tag, a custom field's object) would be created orphaned.
+    kept = {node['_uuid'] for node in resolved}
+    if any(has_fallback(node['_object_type']) and node['_uuid'] not in kept for node in deduplicated):
+        resolved = prune_orphaned_nodes(resolved, referenced_uuids(deduplicated))
     _strip_cached_scope(resolved)
     defaulted = _set_defaults(resolved, supported_models)
 
@@ -1758,13 +1771,188 @@ def _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved) -> bool:
     return True
 
 
-def _resolve_existing_references(entities: list[dict]) -> list[dict]:
+# Fields a device type bound by its part number is identified by; anything else
+# the payload carried is discarded with the node.
+_BOUND_IDENTITY_FIELDS = frozenset({"id", "manufacturer", "model"})
+
+# What the caller is told for each field a bind by part number did not apply.
+_BOUND_NOT_APPLIED = (
+    "Not applied: this {object_type} was bound to the existing one with id {pk}, whose part number is the "
+    "submitted model, and a row bound that way is never written to. To change that row, address it by its id."
+)
+
+_NOT_HELD = object()
+
+
+def _fields_not_applied(data: dict, existing) -> list[str]:
+    """The submitted fields a bind discards: all but identity and scalar values the row already holds."""
+    names = []
+    for name, value in data.items():
+        if name.startswith("_") or name in _BOUND_IDENTITY_FIELDS:
+            continue
+        if isinstance(value, str | int | float | bool) and getattr(existing, name, _NOT_HELD) == value:
+            continue
+        names.append(name)
+    return sorted(names)
+
+
+def _report_bound_without_writing(object_type: str, data: dict, existing, warnings: dict | None) -> None:
+    """
+    Tell the caller what a bind discarded, and log it: at INFO when it discarded anything, else at DEBUG.
+
+    The node leaves the changeset, so the warnings it carried would leave with it,
+    and the caller would read a clean plan with its fields quietly gone. Both go
+    into warnings instead, named by field. The log keeps to field names, since
+    values, and warning messages that can quote them, stay out of it.
+    """
+    dropped = _fields_not_applied(data, existing)
+    carried = data.get("_warnings") or {}
+    if warnings is not None:
+        for field, messages in carried.items():
+            warnings.setdefault(object_type, {}).setdefault(field, []).extend(messages)
+        for field in dropped:
+            message = _BOUND_NOT_APPLIED.format(object_type=object_type, pk=existing.pk)
+            warnings.setdefault(object_type, {}).setdefault(field, []).append(message)
+    logger.log(
+        logging.INFO if dropped or carried else logging.DEBUG,
+        "%s bound to pk=%s by part number without writing; fields not applied: %s; warnings passed on for: %s",
+        object_type, existing.pk, dropped or "none", sorted(carried) or "none",
+    )
+
+
+def _may_change_candidates(node: dict) -> bool:
+    """
+    Whether a fallback-typed node could change which rows carry a part number the fallback considers.
+
+    Only one that sends a part number, blank included since that clears it, or
+    that names its row by something other than its model (netbox_id, slug, a
+    custom field) and so can rename or move a row keeping its stored part number.
+    A plain (manufacturer, model) payload resolves to its own model's row or
+    creates one without a part number, so it is skipped without a lookup.
+    """
+    if 'part_number' in node:
+        return True
+    return node.get('_netbox_id') is not None or bool(node.get('slug')) or bool(node.get('custom_fields'))
+
+
+def _resolve_ahead(entities: list[dict], targets: set) -> dict:
+    """
+    The rows the target nodes resolve to, found ahead of resolution exactly as it will find them.
+
+    The targets and every node they reference run in graph order, each with the
+    ids of the nodes resolved before it substituted, so a matcher reads the ids
+    it will read then, a unique custom field's object reference included. The
+    fallback never runs here. A node resolution will create maps to None.
+    """
+    by_uuid = {node['_uuid']: node for node in entities}
+    closure, stack = set(), list(targets)
+    while stack:
+        uuid = stack.pop()
+        if uuid in closure or uuid not in by_uuid:
+            continue
+        closure.add(uuid)
+        stack.extend(by_uuid[uuid].get('_refs') or ())
+    rows, ids = {}, {}
+    for node in entities:
+        if node['_uuid'] not in closure:
+            continue
+        data = copy.deepcopy(node)
+        _update_resolved_refs(data, ids)
+        netbox_id = data.get('_netbox_id')
+        if netbox_id is not None:
+            row = get_object_type_model(data['_object_type']).objects.filter(pk=netbox_id).first()
+        else:
+            row = find_existing_object(data, data['_object_type'])
+        rows[node['_uuid']] = row
+        if row is not None:
+            ids[node['_uuid']] = row.pk
+    return rows
+
+
+def _manufacturer_identity(value, canonical: dict):
+    """The manufacturer a reference names, so different selectors of one row compare equal."""
+    if isinstance(value, UnresolvedReference):
+        return canonical.get(value.uuid, ("node", value.uuid))
+    return ("pk", value)
+
+
+def _candidate_key(manufacturer_pk, model, part_number) -> tuple | None:
+    """The (manufacturer, part number) a row with these values is a fallback candidate for, or None."""
+    part = fallback_candidate_part(model, part_number)
+    if manufacturer_pk is None or part is None:
+        return None
+    return (("pk", manufacturer_pk), part)
+
+
+def _candidacy_changes(node: dict, canonical: dict, row) -> set:
+    """
+    The (manufacturer, part number) keys whose fallback candidates a node's write changes.
+
+    Worked out from the row before the write, which resolution will find (None
+    when it creates one), and the row after it: an update is partial, so each of
+    manufacturer, model and part number is the payload's where it sends one and
+    the stored row's where it does not. A key changes when the row gains
+    candidacy for it or loses it, by a new or cleared part number, a rename to or
+    from a placeholder, or a move between manufacturers.
+    """
+    manufacturer = _manufacturer_identity(node['manufacturer'], canonical) if 'manufacturer' in node else None
+    if row is not None and manufacturer is not None and manufacturer[0] == "pk" and binds_without_writing(
+        node['_object_type'], {**node, "manufacturer": manufacturer[1]}, row,
+    ):
+        # This node will be bound to its row without writing, so it changes nothing.
+        return set()
+    before = None
+    if row is not None:
+        before = _candidate_key(row.manufacturer_id, row.model, row.part_number)
+    if manufacturer is None:
+        manufacturer = ("pk", row.manufacturer_id) if row is not None else None
+    model = node.get('model') if 'model' in node else (row.model if row is not None else None)
+    part_number = node.get('part_number') if 'part_number' in node else (
+        row.part_number if row is not None else None
+    )
+    after = None
+    if manufacturer is not None and manufacturer[0] == "pk":
+        after = _candidate_key(manufacturer[1], model, part_number)
+    if before == after:
+        return set()
+    return {key for key in (before, after) if key is not None}
+
+
+def _asserted_part_numbers(entities: list[dict]) -> tuple[dict, dict]:
+    """
+    (manufacturer, part number) keys whose fallback candidates this graph changes, with the nodes changing them.
+
+    Also returns each manufacturer node's identity: the row it resolves to, else
+    the node itself, so different selectors of one row compare equal.
+    """
+    nodes = [n for n in entities if has_fallback(n.get('_object_type')) and _may_change_candidates(n)]
+    if not nodes:
+        return {}, {}
+    manufacturers = [
+        n for n in entities if n.get('_object_type') == 'dcim.manufacturer' and not n.get('_is_post_create')
+    ]
+    rows = _resolve_ahead(entities, {n['_uuid'] for n in nodes + manufacturers})
+    canonical = {
+        n['_uuid']: ("pk", rows[n['_uuid']].pk) if rows.get(n['_uuid']) is not None else ("node", n['_uuid'])
+        for n in manufacturers
+    }
+    asserted = {}
+    for node in nodes:
+        for key in _candidacy_changes(node, canonical, rows.get(node['_uuid'])):
+            asserted.setdefault(key, set()).add(node.get('_uuid'))
+    return asserted, canonical
+
+
+def _resolve_existing_references(entities: list[dict], warnings: dict | None = None) -> list[dict]:
     seen = {}
     new_refs = {}
     resolved = []
+    asserted, canonical = _asserted_part_numbers(entities)
 
     for data in entities:
         object_type = data['_object_type']
+        # Compared with the graph's assertions, which predate resolution.
+        manufacturer = _manufacturer_identity(data.get('manufacturer'), canonical)
         data = copy.deepcopy(data)
         _update_resolved_refs(data, new_refs)
 
@@ -1775,7 +1963,13 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
         if _resolve_by_netbox_id(data, object_type, seen, new_refs, resolved):
             continue
 
-        existing = find_existing_object(data, object_type)
+        # Another node of this graph changes which rows carry this part number
+        # for the same manufacturer, so a bind made now could be wrong or
+        # ambiguous once the changeset applies. Neither the fallback nor a bind
+        # without writing through any other matcher may then rely on it.
+        key = part_number_key(data) if has_fallback(object_type) else None
+        part_number_settled = key is None or not (asserted.get((manufacturer, key), set()) - {data['_uuid']})
+        existing = find_existing_object(data, object_type, fallback=part_number_settled)
         if existing is not None:
             new_refs[data['_uuid']] = existing.id
             if object_type in MATCH_ONLY_TYPES:
@@ -1784,6 +1978,11 @@ def _resolve_existing_references(entities: list[dict]) -> list[dict]:
                 # (users.user) are never created or updated via ingest, and a
                 # change for them would fail validation anyway (e.g. NetBox's
                 # User requires a password we never carry).
+                continue
+            if part_number_settled and binds_without_writing(object_type, data, existing):
+                # The payload names this row's part, not the row itself: bind
+                # the reference and emit no change, so the row is never renamed.
+                _report_bound_without_writing(object_type, data, existing, warnings)
                 continue
             _mark_seen(data, object_type, existing, seen)
             data['id'] = existing.id
