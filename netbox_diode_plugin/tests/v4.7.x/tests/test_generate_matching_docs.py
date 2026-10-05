@@ -12,7 +12,15 @@ from django.core.management.base import CommandError
 from django.db.models import Q
 from django.test import TestCase
 
-from netbox_diode_plugin.api.matcher import AutoSlugMatcher, ObjectMatchCriteria
+from netbox_diode_plugin.api.matcher import (
+    AutoSlugMatcher,
+    CableTerminationSetMatcher,
+    GlobalIPNetworkIPMatcher,
+    ObjectMatchCriteria,
+    RackReservationUnitOverlapMatcher,
+    RackSiteNameMatcher,
+    VirtualChassisNameMatcher,
+)
 from netbox_diode_plugin.management.commands.generate_matching_docs import (
     Command,
     MatcherInfo,
@@ -128,6 +136,80 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
 
         result = self.command.get_matcher_description(mock_matcher)
         self.assertEqual(result, "Matches IP range start_address, end_address within VRF context")
+
+    def test_get_matcher_description_ip_range_global_no_vrf(self):
+        """Test getting matcher description for IP range global-no-VRF matcher."""
+        mock_matcher = mock.MagicMock()
+        mock_matcher.name = "logical_ip_range_start_end_global_no_vrf"
+        mock_matcher.ip_fields = ["start_address", "end_address"]
+        mock_matcher.vrf_field = "vrf"
+
+        result = self.command.get_matcher_description(mock_matcher)
+        self.assertIn("no VRF", result)
+        self.assertEqual(
+            result, "Matches IP range start_address, end_address in global namespace (no VRF)"
+        )
+
+    def test_get_matcher_fields_cable_termination_set(self):
+        """Test deriving Fields for a real CableTerminationSetMatcher via a/b field names."""
+        matcher = CableTerminationSetMatcher(model_class=None, name="x")
+
+        result = self.command.get_matcher_fields(matcher)
+        self.assertEqual(result, ["a_terminations", "b_terminations"])
+
+    def test_get_matcher_fields_virtual_chassis_name(self):
+        """Test deriving Fields for a real VirtualChassisNameMatcher via the class-name map."""
+        matcher = VirtualChassisNameMatcher(model_class=None, name="x")
+
+        result = self.command.get_matcher_fields(matcher)
+        self.assertEqual(result, ["name"])
+
+    def test_get_matcher_fields_rackreservation_unit_overlap(self):
+        """Test deriving Fields for a real RackReservationUnitOverlapMatcher via the class-name map."""
+        matcher = RackReservationUnitOverlapMatcher(model_class=None, name="x")
+
+        result = self.command.get_matcher_fields(matcher)
+        self.assertEqual(result, ["rack", "units"])
+
+    def test_get_matcher_fields_rack_site_name(self):
+        """Test deriving Fields for a real RackSiteNameMatcher via the class-name map."""
+        matcher = RackSiteNameMatcher(model_class=None, name="x")
+
+        result = self.command.get_matcher_fields(matcher)
+        self.assertEqual(result, ["site", "name"])
+
+    def test_get_matcher_fields_global_ip_network(self):
+        """Test deriving Fields for a real GlobalIPNetworkIPMatcher via ip_fields."""
+        matcher = GlobalIPNetworkIPMatcher(
+            ip_fields=["address"], vrf_field="vrf", model_class=None, name="x"
+        )
+
+        result = self.command.get_matcher_fields(matcher)
+        self.assertEqual(result, ["address"])
+
+    def test_get_matcher_description_cable_termination_set_docstring(self):
+        """Test that CableTerminationSetMatcher's description derives from its docstring."""
+        matcher = CableTerminationSetMatcher(model_class=None, name="x")
+
+        result = self.command.get_matcher_description(matcher)
+        expected = CableTerminationSetMatcher.__doc__.strip().splitlines()[0].strip()
+        self.assertEqual(result, expected)
+
+    def test_get_matcher_description_virtual_chassis_name_docstring(self):
+        """Test that VirtualChassisNameMatcher's description derives from its docstring."""
+        matcher = VirtualChassisNameMatcher(model_class=None, name="x")
+
+        result = self.command.get_matcher_description(matcher)
+        expected = VirtualChassisNameMatcher.__doc__.strip().splitlines()[0].strip()
+        self.assertEqual(result, expected)
+
+    def test_get_matcher_description_rackreservation_unit_overlap_docstring(self):
+        """Test that RackReservationUnitOverlapMatcher's description derives from its docstring."""
+        matcher = RackReservationUnitOverlapMatcher(model_class=None, name="x")
+
+        result = self.command.get_matcher_description(matcher)
+        expected = RackReservationUnitOverlapMatcher.__doc__.strip().splitlines()[0].strip()
+        self.assertEqual(result, expected)
 
     def test_get_matcher_description_standard_fields(self):
         """Test getting matcher description for standard field-based matcher."""
@@ -627,3 +709,35 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
 
         # Check that empty fields list is handled
         self.assertIn("| test_matcher | 1 | logical |  | N/A | Test description | All versions |", result)
+
+    def _combined(self):
+        return self.command.combine_matchers(
+            self.command.analyze_logical_matchers(),
+            self.command.analyze_builtin_matchers(),
+            self.command.analyze_fallback_matchers(),
+        )
+
+    def test_fallback_matchers_are_documented_last_for_device_types(self):
+        """The fallback tier is its own source and comes after every builtin matcher."""
+        rows = self._combined()["dcim.devicetype"]
+        self.assertEqual(rows[-1].name, "fallback_devicetype_part_number")
+        self.assertEqual(rows[-1].matcher_source, "fallback")
+        self.assertEqual(rows[-1].fields, ["manufacturer", "model"])
+        self.assertNotIn("fallback_devicetype_part_number", [r.name for r in rows[:-1]])
+
+    def test_builtin_analysis_leaves_fallback_matchers_out(self):
+        """A fallback matcher is not listed as builtin, even though get_model_matchers returns it."""
+        builtin = self.command.analyze_builtin_matchers()["dcim.devicetype"]
+        self.assertEqual([r.name for r in builtin if r.name.startswith("fallback_")], [])
+
+    def test_markdown_explains_fallback_matchers(self):
+        """The Matcher Types list names the fallback tier and the table types its row."""
+        markdown = self.command.generate_markdown_table(self._combined())
+        self.assertIn("- **Fallback Matchers**:", markdown)
+        self.assertIn("| fallback_devicetype_part_number | 4 | fallback | manufacturer, model |", markdown)
+
+    def test_command_output_includes_the_fallback_row(self):
+        """The command itself passes the fallback analysis through to the table."""
+        out = io.StringIO()
+        call_command("generate_matching_docs", stdout=out)
+        self.assertIn("| fallback_devicetype_part_number | 4 | fallback |", out.getvalue())

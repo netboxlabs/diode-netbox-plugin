@@ -6,6 +6,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 - **Logical Matchers**: Custom matching criteria that represent likely user intent
 - **Builtin Matchers**: Automatically generated from NetBox model constraints (unique fields, unique constraints, custom fields, auto-slugs)
+- **Fallback Matchers**: Consulted only when planning, after every other matcher misses. What they find is bound without being written to, and so is a device type of the payload's manufacturer, found by any matcher, whose part number is the payload's model while its own model is neither that model nor a placeholder
 
 ## circuits.circuit
 
@@ -153,6 +154,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | dcim_devicetype_unique_manufacturer_model | 1 | builtin | manufacturer, model | N/A | Matches on unique constraint fields: manufacturer, model | All versions |
 | dcim_devicetype_unique_manufacturer_slug | 2 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
 | unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| fallback_devicetype_part_number | 4 | fallback | manufacturer, model | N/A | Match the type whose part number is the payload's model. | All versions |
 
 ## dcim.frontport
 
@@ -272,9 +274,10 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
-| unique_asset_tag | 1 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | All versions |
-| dcim_rack_unique_location_name | 2 | builtin | location, name | N/A | Matches on unique constraint fields: location, name | All versions |
-| dcim_rack_unique_location_facility_id | 3 | builtin | location, facility_id | N/A | Matches on unique constraint fields: location, facility_id | All versions |
+| logical_rack_site_name_no_location | 1 | logical | site, name | N/A | Match a location-less rack payload by (site, name), any location. | All versions |
+| unique_asset_tag | 2 | builtin | asset_tag | N/A | Matches on unique field(s): asset_tag | All versions |
+| dcim_rack_unique_location_name | 3 | builtin | location, name | N/A | Matches on unique constraint fields: location, name | All versions |
+| dcim_rack_unique_location_facility_id | 4 | builtin | location, facility_id | N/A | Matches on unique constraint fields: location, facility_id | All versions |
 
 ## dcim.rackgroup
 

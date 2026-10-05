@@ -1,0 +1,13 @@
+# CI-only overlay, included by the Makefile when CI is set. The test database is
+# thrown away with the runner, so Postgres durability guarantees buy nothing and
+# cost real time during NetBox's migrations and the test run itself.
+services:
+  netbox-postgres:
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off

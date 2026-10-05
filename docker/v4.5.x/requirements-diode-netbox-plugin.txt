@@ -1,6 +1,6 @@
 Brotli==1.2.0
 certifi==2024.7.4
-coverage==7.6.0
+coverage==7.16.0
 grpcio==1.62.1
 protobuf==5.29.6
 pytest==9.0.3

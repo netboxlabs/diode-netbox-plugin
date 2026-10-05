@@ -2,7 +2,7 @@
 # Copyright 2026 NetBox Labs, Inc.
 """Diode NetBox Plugin - User (match-only) + RackReservation ingest tests."""
 
-from dcim.models import RackReservation
+from dcim.models import Rack, RackReservation
 from django.test import TestCase
 from users.models import User
 
@@ -110,20 +110,26 @@ class RackReservationApplyTestCase(TestCase):
 
     def test_existing_user_resolution_is_idempotent(self):
         """
-        Re-ingesting resolves the same existing user each time; never mints one.
+        Re-ingesting the same entity converges: the second diff is all-NOOP.
 
-        Scoped to the USER guarantee: the match-only user is resolved (never
-        duplicated or created) and the reservation's user never changes across
-        re-ingests. NOTE: a full-changeset NOOP is NOT asserted here because
-        dcim.rackreservation is keyless AND its nested dcim.rack has no reliable
-        natural-key match when location is null (a re-diff re-creates the rack
-        and re-points the reservation) — both pre-existing behaviors unrelated
-        to this feature. The user, correctly, is the one node that stays matched.
+        The first ingest creates the rack and the reservation, resolving the
+        match-only user without minting it. The rack now matches on (site,
+        name) via the site-name matcher and the reservation matches via the
+        overlap matcher, so the second generate_changeset's diff carries no
+        non-NOOP changes at all -- there is nothing left to apply. The user,
+        as always, is a pure reference and never a change node.
         """
-        for _ in range(2):
-            r = generate_changeset(self._entity("rr-owner"), "dcim.rackreservation")
-            # user is always a pure reference — never a change node
-            self.assertFalse(any(c.object_type == "users.user" for c in r.change_set.changes))
-            apply_changeset(r.change_set, request=None)
+        first = generate_changeset(self._entity("rr-owner"), "dcim.rackreservation")
+        self.assertFalse(
+            any(c.object_type == "users.user" for c in first.change_set.changes))
+        apply_changeset(first.change_set, request=None)
+
+        second = generate_changeset(self._entity("rr-owner"), "dcim.rackreservation")
+        self.assertFalse(
+            any(c.change_type != ChangeType.NOOP for c in second.change_set.changes))
+
+        self.assertEqual(Rack.objects.count(), 1)
+        self.assertEqual(RackReservation.objects.count(), 1)
         self.assertEqual(User.objects.filter(username="rr-owner").count(), 1)
-        self.assertTrue(all(rr.user_id == self.user.pk for rr in RackReservation.objects.all()))
+        rr = RackReservation.objects.first()
+        self.assertEqual(rr.user_id, self.user.pk)
