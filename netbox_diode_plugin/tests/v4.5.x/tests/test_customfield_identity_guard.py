@@ -26,7 +26,10 @@ from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.api.common import ChangeSetException
 from netbox_diode_plugin.api.matcher import (
     ConflictingObjectMatch,
+    _find_obj_cache_key,
     _optional_unique_value_fields,
+    enter_request_obj_cache,
+    exit_request_obj_cache,
     find_existing_object,
 )
 from netbox_diode_plugin.plugin_config import get_diode_user
@@ -230,3 +233,52 @@ class BulkPlanGuardTests(APITestCase):
         self.assertEqual(change["change_type"], "update")
         self.assertEqual(change["object_id"], self.device.pk)
         self.assertFalse([c for c in changes if c["change_type"] == "create"])
+
+
+class CacheKeyTests(TestCase):
+    """A cached answer never stands in for a lookup that differs in a unique custom field."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Two devices keyed by stack_id: one without a tag, one with TAG-2."""
+        cls.site, dt, role = _device_fixtures()
+        _unique_field("stack_id", Device)
+        cls.untagged = Device.objects.create(
+            name="member-x", site=cls.site, device_type=dt, role=role, custom_field_data={"stack_id": "STACK-X"}
+        )
+        cls.tagged = Device.objects.create(
+            name="member-y", site=cls.site, device_type=dt, role=role, asset_tag="TAG-2", custom_field_data={"stack_id": "STACK-Y"}
+        )
+
+    def setUp(self):
+        """Keep lookup answers from an earlier test out of this one."""
+        django_cache.clear()
+
+    def test_custom_field_values_are_part_of_the_key(self):
+        """Same scalars with different values give different keys; equal values give one key."""
+        base = {"name": "n", "site": self.site.pk, "asset_tag": "TAG-P"}
+        with_x = _find_obj_cache_key({**base, "custom_fields": {"stack_id": "STACK-X"}}, "dcim.device")
+        with_y = _find_obj_cache_key({**base, "custom_fields": {"stack_id": "STACK-Y"}}, "dcim.device")
+        again = _find_obj_cache_key({**base, "custom_fields": {"stack_id": "STACK-X"}}, "dcim.device")
+        self.assertNotEqual(with_x, with_y)
+        self.assertEqual(with_x, again)
+        self.assertNotEqual(with_x, _find_obj_cache_key(base, "dcim.device"))
+
+    def test_non_scalar_custom_field_values_hash_the_same_way(self):
+        """JSON and list values take part, and key order inside them does not matter."""
+        base = {"name": "n", "site": self.site.pk}
+        one = _find_obj_cache_key({**base, "custom_fields": {"meta": {"b": 1, "a": [1, 2]}}}, "dcim.device")
+        two = _find_obj_cache_key({**base, "custom_fields": {"meta": {"a": [1, 2], "b": 1}}}, "dcim.device")
+        self.assertEqual(one, two)
+
+    def test_a_cached_answer_does_not_bypass_the_guard(self):
+        """The first lookup binds and is cached. The second differs only in stack_id and must raise."""
+        scalars = {"name": "member-n", "site": self.site.pk, "asset_tag": "TAG-P"}
+        token = enter_request_obj_cache()
+        try:
+            first = find_existing_object({**scalars, "custom_fields": {"stack_id": "STACK-X"}}, "dcim.device")
+            self.assertEqual(first, self.untagged)
+            with self.assertRaises(ConflictingObjectMatch):
+                find_existing_object({**scalars, "custom_fields": {"stack_id": "STACK-Y"}}, "dcim.device")
+        finally:
+            exit_request_obj_cache(token)

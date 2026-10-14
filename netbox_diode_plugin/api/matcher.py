@@ -4,6 +4,7 @@
 
 import contextvars
 import hashlib
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -2877,9 +2878,9 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     """
     Build a deterministic cache key from entity lookup data.
 
-    Includes only simple scalar fields. Entities whose identity depends
-    solely on unresolved references (no scalar fields at all) are not
-    cacheable. Some object types are never cached due to identity logic
+    Includes simple scalar fields and custom field values. Entities whose
+    identity depends solely on unresolved references (no scalar fields at
+    all) are not cacheable. Some object types are never cached due to identity logic
     that depends on factors the scalar-only key cannot express.
     """
     # Types whose lookup must never be served from the scalar-only key:
@@ -2916,6 +2917,11 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
             continue
         if isinstance(v, UnresolvedReference):
             items.append((k, f"__unresolved__:{v.object_type}"))
+        elif k == "custom_fields" and isinstance(v, dict):
+            # Unique custom field matchers read these, so two payloads that
+            # differ only here must not share an answer.
+            for name, value in sorted(v.items()):
+                items.append((f"custom_fields.{name}", json.dumps(value, sort_keys=True, default=str)))
         elif isinstance(v, (dict, list)):
             continue  # skip complex nested data, not used by matchers
         else:
@@ -2959,11 +2965,8 @@ def find_existing_object(data: dict, object_type: str, fallback: bool = False): 
 
     req_cache = _request_obj_cache.get(None)
     cached = req_cache.get(cache_key) if req_cache is not None and cache_key is not None else None
-    if cached is not None and getattr(cached, _FALLBACK_MATCH_ATTR, False) and (
-        not fallback or data.get("custom_fields")
-    ):
-        # A fallback answer is not an identity match, and the key leaves out
-        # custom fields, which unique custom-field matchers read before it.
+    if cached is not None and getattr(cached, _FALLBACK_MATCH_ATTR, False) and not fallback:
+        # A fallback answer is not an identity match.
         cached = None
     if cached is not None:
         if ctx:
