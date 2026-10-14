@@ -429,6 +429,32 @@ class AmbiguousObjectMatch(ChangeSetException):
         self.field = field
 
 
+class ConflictingObjectMatch(ChangeSetException):
+    """
+    The row a unique custom field names holds a different identifier than the payload.
+
+    NetBox allows one row per value of a unique custom field. A payload that
+    carries the value means that row, unless the payload also carries a
+    different value for an optional unique identifier the row holds, such as
+    an asset tag. Then two unique keys disagree. The custom field matcher
+    runs after the model's own unique fields, so it is the lower ranked key
+    and it must not win in silence. To bind would rewrite the row's
+    identifier with the payload's value. To abstain would plan a CREATE that
+    NetBox rejects at apply with its generic unique-value error.
+
+    So the lookup raises at plan time. The error carries the per-entity shape
+    the API speaks ({object_type: {field: [message]}}), on the field that
+    disagrees. As with AmbiguousObjectMatch, this is not a ValueError or
+    TypeError: three call sites swallow those into "no match".
+    """
+
+    def __init__(self, message, object_type, field=NON_FIELD_ERRORS):
+        """Build the per-entity error for one contradicted lookup."""
+        super().__init__(message, errors={object_type: {field: [message]}})
+        self.object_type = object_type
+        self.field = field
+
+
 # Fields a payload may carry that DISCRIMINATE between same-named
 # VirtualChassis rows. A value here is matched against the candidate rows; it
 # is never used to guess, and a value no candidate carries means "not one of
@@ -1629,9 +1655,35 @@ class ObjectMatchCriteria:
 
 
 
+@lru_cache(maxsize=256)
+def _optional_unique_value_fields(model_class) -> tuple[str, ...]:
+    """
+    Single-field unique value fields the model lets an operator leave empty.
+
+    These identify the real thing behind a row: asset_tag on Device, Rack,
+    Module and InventoryItem, rd on VRF. A required unique field such as name
+    or slug is a label; a rename changes it and the row stays the same row. A
+    unique relation such as a primary IP changes in routine updates. Neither
+    counts here. The rule derives from the model, so a future field of this
+    shape is covered without a code change.
+    """
+    return tuple(
+        f.name
+        for f in model_class._meta.fields
+        if f.unique and not f.primary_key and not f.is_relation and (f.null or f.blank)
+    )
+
+
 @dataclass
 class CustomFieldMatcher:
-    """A matcher for a unique custom field."""
+    """
+    A matcher for a unique custom field.
+
+    NetBox allows one row per value, so the value names one row. The matcher
+    runs after the model's own unique fields and constraints. resolve()
+    refuses the row when the payload carries a different value for an
+    optional unique identifier the row holds; see ConflictingObjectMatch.
+    """
 
     name: str
     custom_field: str
@@ -1665,6 +1717,46 @@ class CustomFieldMatcher:
     def has_required_fields(self, data: dict) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
         return self.custom_field in data.get("custom_fields", {})
+
+    def resolve(self, queryset: models.QuerySet, data: dict):
+        """
+        The row that holds the value, unless the payload contradicts one of its identifiers.
+
+        For each optional unique value field of the model (asset_tag, rd):
+
+        - A payload without the key asserts nothing and binds.
+        - A row without a value accepts the payload, which may add one.
+        - A payload whose value equals the row's value binds.
+        - Any other pair raises ConflictingObjectMatch. This includes a
+          payload that asserts an empty value against a row that holds one,
+          the rule the rack matcher already applies to racks.
+        """
+        row = queryset.order_by("pk").first()
+        if row is None:
+            return None
+        for field in _optional_unique_value_fields(self.model_class):
+            if field not in data:
+                continue
+            held = getattr(row, field, None)
+            if held in (None, ""):
+                continue
+            offered = data.get(field)
+            if offered not in (None, "") and str(offered) == str(held):
+                continue
+            object_type = get_object_type(self.model_class)
+            value = data.get("custom_fields", {}).get(self.custom_field)
+            carries = f"{field} {offered!r}" if offered not in (None, "") else f"no {field}"
+            label = getattr(row, "name", None) or str(row)
+            raise ConflictingObjectMatch(
+                f"{object_type} with {self.custom_field} {value!r} already exists: "
+                f"{label} (id {row.pk}) with {field} {held!r}. This payload carries {carries}. "
+                f"One value of a unique custom field is one object, and a different {field} "
+                f"is a different object. Send the {field} of the existing object, or do not "
+                f"mark {self.custom_field} as unique if several objects share one value.",
+                object_type,
+                field,
+            )
+        return row
 
 
 @dataclass
