@@ -19,10 +19,10 @@ from django.db.models import Count, F, Value
 from django.db.models.fields import SlugField
 from django.db.models.lookups import Exact
 from django.db.models.query_utils import Q
-from django.db.models.signals import post_delete, post_save
 from extras.models.customfields import CustomField
 from netbox.plugins import get_plugin_config
 
+from . import customfield_version
 from .common import NON_FIELD_ERRORS, VC_MEMBER_HINT, ChangeSetException, UnresolvedReference
 from .compat import in_version_range
 from .plugin_utils import content_type_id, get_object_type, get_object_type_model
@@ -2592,12 +2592,7 @@ def _get_custom_field_matchers(model_class) -> tuple:
     )
 
 
-def _on_custom_field_change(**kwargs):
-    _get_custom_field_matchers.cache_clear()
-
-
-post_save.connect(_on_custom_field_change, sender=CustomField)
-post_delete.connect(_on_custom_field_change, sender=CustomField)
+customfield_version.register(_get_custom_field_matchers.cache_clear)
 
 
 def get_model_matchers(model_class) -> list:

@@ -12,11 +12,11 @@ from collections import defaultdict
 from functools import lru_cache
 from uuid import uuid4
 
-from django.db.models.signals import post_delete, post_save
 from django.utils.text import slugify
 from extras.models.customfields import CustomField
 from rest_framework import serializers
 
+from . import customfield_version
 from .canonical import canonicalize_entity
 from .common import (
     MATCH_ONLY_TYPES,
@@ -1283,12 +1283,7 @@ def _get_custom_fields_for_model(model):
     return tuple(CustomField.objects.get_for_model(model))
 
 
-def _on_custom_field_change(**kwargs):
-    _get_custom_fields_for_model.cache_clear()
-
-
-post_save.connect(_on_custom_field_change, sender=CustomField)
-post_delete.connect(_on_custom_field_change, sender=CustomField)
+customfield_version.register(_get_custom_fields_for_model.cache_clear)
 
 
 def set_custom_field_defaults(entity: dict, model):

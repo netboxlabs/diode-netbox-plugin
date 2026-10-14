@@ -19,6 +19,7 @@ class NetBoxDiodePluginConfig(PluginConfig):
     max_version = "4.7.99"
     middleware = [
         "netbox_diode_plugin.api.profile.DiodeProfileMiddleware",
+        "netbox_diode_plugin.api.customfield_version.CustomFieldVersionMiddleware",
     ]
     default_settings = {
         # Default Diode gRPC target for communication with Diode server
@@ -74,10 +75,13 @@ class NetBoxDiodePluginConfig(PluginConfig):
         #
         # apply_bypass_customfield_query_cache: install a process-level
         # cache for CustomField.objects.get_for_model. NetBox's built-in
-        # cache is request-scoped and misses for models with no custom
-        # fields (empty-QuerySet truthiness bug), so under load every
-        # instance.clean()/save() re-queries extras_customfield. Cache
-        # is invalidated on CustomField post_save/post_delete signals.
+        # cache is request-scoped, and before NetBox 4.6.8 (#22877) it
+        # also missed for models with no custom fields, so under load
+        # every instance.clean()/save() re-queried extras_customfield.
+        # Invalidated with the plugin's other custom field caches: at
+        # once in the process that saved a CustomField, and in every
+        # other worker on its next plugin API request
+        # (api/customfield_version.py).
         #
         # apply_buffer_change_logging: keep the audit trail intact but
         # cut the per-save change-logging cost. During apply,
