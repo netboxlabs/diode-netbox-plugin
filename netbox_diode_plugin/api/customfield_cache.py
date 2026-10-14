@@ -4,19 +4,21 @@
 Process-level cache for ``CustomField.objects.get_for_model()``.
 
 NetBox ships a request-scoped cache for ``CustomFieldManager.get_for_model``
-in ``extras.models.customfields``, but the hit check uses Python's walrus
-operator with truthiness:
+in ``extras.models.customfields``. Before NetBox 4.6.8 its hit check used
+the walrus operator with truthiness:
 
     if custom_fields := cache['custom_fields'].get(model._meta.model):
         return custom_fields
 
 An empty QuerySet (model with no custom fields defined) is **falsy**, so
-the cache hit branch is skipped and the DB query runs every time. For
+the cache hit branch was skipped and the DB query ran every time. For
 Diode bulk-apply workloads against NetBox deployments where most models
-have no custom fields, this re-queries ``extras_customfield`` on every
+have no custom fields, this re-queried ``extras_customfield`` on every
 ``instance.clean()`` and ``instance.save()`` - observed at ~558 calls/sec
 returning ~0 rows/sec during sustained ``/bulk-plan-apply`` load on
-RDS Performance Insights.
+RDS Performance Insights. NetBox 4.6.8 fixed that check (netbox #22877);
+on those versions this wrapper's remaining gain is caching across
+requests rather than within one.
 
 This module installs a process-level wrapper around
 ``CustomFieldManager.get_for_model`` that:
@@ -32,9 +34,10 @@ This module installs a process-level wrapper around
     ``.filter()`` / ``.exclude()`` (e.g. ``matcher.py``) continue to work
     unchanged - those chains create new QuerySets that hit the DB on
     iteration, same as before.
-  - Invalidates the entire cache on ``post_save`` / ``post_delete`` of
-    CustomField, matching the per-call-site lru_cache pattern already
-    used by ``transformer.py``, ``matcher.py``, and ``common.py``.
+  - Invalidates the entire cache through ``customfield_version``, like the
+    per-call-site lru_caches in ``transformer.py``, ``matcher.py`` and
+    ``common.py``: at once in the process that saved a CustomField, and in
+    every other worker on its next plugin API request.
 
 Opt-in via the plugin setting ``apply_bypass_customfield_query_cache``
 (default False). When False the module performs no method-table mutation.
@@ -46,9 +49,10 @@ multiple worker threads within a single process.
 
 from threading import Lock
 
-from django.db.models.signals import post_delete, post_save
 from extras.models import CustomField
 from netbox.plugins import get_plugin_config
+
+from . import customfield_version
 
 _enabled = bool(get_plugin_config("netbox_diode_plugin", "apply_bypass_customfield_query_cache"))
 
@@ -90,8 +94,6 @@ def _invalidate(**kwargs):
 
 if _enabled:
     # One-time swap at import - done in each worker process before any
-    # request is served. The signal handlers stay connected for the
-    # process lifetime.
+    # request is served.
     CustomField.objects.__class__.get_for_model = _cached_get_for_model
-    post_save.connect(_invalidate, sender=CustomField)
-    post_delete.connect(_invalidate, sender=CustomField)
+    customfield_version.register(_invalidate)
