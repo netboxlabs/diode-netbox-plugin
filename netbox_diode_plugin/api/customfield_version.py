@@ -30,7 +30,8 @@ evicted) reads as a change, which costs one re-read of definitions from the
 DB and nothing else.
 
 Cache trouble never fails a request or a custom field save: both paths log a
-warning and keep the per-process behaviour.
+warning and keep the per-process behaviour. A clearer that raises is logged
+and skipped, and the other registered caches are still cleared.
 """
 
 import logging
@@ -59,8 +60,16 @@ def register(clear: Callable[[], None]) -> None:
 
 
 def _clear_local() -> None:
+    """Run every registered clearer. One that raises is logged and does not stop the rest."""
     for clear in _clearers:
-        clear()
+        try:
+            clear()
+        except Exception:
+            logger.warning(
+                "custom field cache clearer %r failed; that cache keeps its definitions until the next change",
+                clear,
+                exc_info=True,
+            )
 
 
 def bump(**kwargs) -> None:

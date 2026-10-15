@@ -185,6 +185,38 @@ class CacheOutageTests(_VersionTestCase):
         self.assertNotIn(MATCHER, _device_matcher_names())
 
 
+class BrokenClearerTests(_VersionTestCase):
+    """A clearer that raises is logged and skipped; the rest still clear, and nothing fails."""
+
+    def _clearers(self, *clearers):
+        return mock.patch.object(customfield_version, "_clearers", list(clearers))
+
+    def test_sync_runs_the_remaining_clearers_and_moves_on(self):
+        """The other caches are cleared, and the token counts as seen, so the failure is not retried."""
+        good = mock.Mock()
+        broken = mock.Mock(side_effect=RuntimeError("bad clearer"))
+        django_cache.set(CACHE_KEY, f"elsewhere-{uuid.uuid4().hex}", timeout=None)
+        with (
+            self._clearers(broken, good),
+            self.assertLogs("netbox.diode.customfield_version", level="WARNING"),
+        ):
+            sync()
+            sync()
+        good.assert_called_once()
+
+    def test_a_save_completes_and_runs_the_remaining_clearers(self):
+        """The signal path is isolated the same way, so the CustomField write goes through."""
+        good = mock.Mock()
+        broken = mock.Mock(side_effect=RuntimeError("bad clearer"))
+        with (
+            self._clearers(broken, good),
+            self.assertLogs("netbox.diode.customfield_version", level="WARNING"),
+        ):
+            cf = CustomField.objects.create(name="cf_ver", type=CustomFieldTypeChoices.TYPE_TEXT, required=False)
+        self.assertTrue(CustomField.objects.filter(pk=cf.pk).exists())
+        good.assert_called_once()
+
+
 class MiddlewareTests(TestCase):
     """One sync per plugin API request, none for the rest of NetBox."""
 
