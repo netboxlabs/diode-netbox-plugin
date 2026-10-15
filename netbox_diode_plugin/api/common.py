@@ -19,11 +19,11 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.backends.postgresql.psycopg_any import NumericRange
-from django.db.models.signals import post_delete, post_save
 from extras.models import CustomField
 from netaddr.eui import EUI
 from rest_framework import status
 
+from . import customfield_version
 from .supported_models import extract_supported_models
 
 logger = logging.getLogger("netbox.diode_data")
@@ -62,12 +62,7 @@ def _get_custom_fields_for_model(model) -> tuple:
     return tuple(CustomField.objects.get_for_model(model))
 
 
-def _on_custom_field_change(**kwargs):
-    _get_custom_fields_for_model.cache_clear()
-
-
-post_save.connect(_on_custom_field_change, sender=CustomField)
-post_delete.connect(_on_custom_field_change, sender=CustomField)
+customfield_version.register(_get_custom_fields_for_model.cache_clear)
 
 @dataclass
 class UnresolvedReference:
