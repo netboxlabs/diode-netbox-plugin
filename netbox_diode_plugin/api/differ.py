@@ -10,6 +10,7 @@ from collections import defaultdict
 
 from django.contrib.contenttypes.models import ContentType
 from extras.choices import CustomFieldTypeChoices
+from extras.models import Tag
 from rest_framework import serializers
 from utilities.data import shallow_compare_dict
 
@@ -318,6 +319,7 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
 
     if not has_any_changes:
         change_set.changes = []
+    _resolve_tags(change_set.changes, supported_models)
     if errors := change_set.validate():
         raise ChangeSetException("Invalid change set", errors)
 
@@ -329,6 +331,45 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
         change_set=change_set,
     )
     return cs
+
+def _resolve_tags(changes: list[Change], supported_models: dict) -> None:
+    """
+    Set tags_resolved on every change to a model with tags.
+
+    Tags in before and data are primary keys or new_object refs, which a
+    consumer of the plan cannot name without querying NetBox. Tags the
+    plan itself names (extras.tag changes) resolve from those changes; the
+    rest are tags set only in NetBox and resolve with one query per change
+    set. A change keeps tags_resolved None when a ref does not resolve, so a
+    consumer never mistakes a partial list for the object's tags.
+    """
+    names = {}
+    for change in changes:
+        if change.object_type != "extras.tag":
+            continue
+        state = (change.before or {}) | (change.data or {})
+        key = change.object_id if change.object_id is not None else change.ref_id
+        names[key] = (state.get("name"), state.get("slug"))
+
+    refs_by_change = {}
+    for change in changes:
+        if "tags" not in supported_models.get(change.object_type, {}).get("fields", {}):
+            continue
+        refs = set((change.before or {}).get("tags") or [])
+        refs.update((change.data or {}).get("tags") or [])
+        refs_by_change[change.id] = sort_ints_first(refs)
+
+    missing = {ref for refs in refs_by_change.values() for ref in refs if isinstance(ref, int) and ref not in names}
+    if missing:
+        for pk, name, slug in Tag.objects.filter(pk__in=missing).values_list("pk", "name", "slug"):
+            names[pk] = (name, slug)
+
+    for change in changes:
+        refs = refs_by_change.get(change.id)
+        if refs is None or any(ref not in names for ref in refs):
+            continue
+        change.tags_resolved = [{"ref": ref, "name": names[ref][0], "slug": names[ref][1]} for ref in refs]
+
 
 def _partially_merge(prechange_data: dict, postchange_data: dict, instance) -> dict:
     """Merge lists and custom_fields rather than replacing the full value..."""
