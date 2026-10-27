@@ -113,10 +113,16 @@ class Change:
     before: dict | None = field(default=None)
     data: dict | None = field(default=None)
     new_refs: list[str] = field(default_factory=list)
+    # Names of every tag the object holds once the change applies (the tags
+    # in before and data), as {"ref", "name", "slug"} where ref is the value
+    # as it appears in those lists: a tag primary key or a new_object ref.
+    # Informational: None on models without tags, or when a ref does not
+    # resolve. Not read back by the applier.
+    tags_resolved: list[dict] | None = field(default=None)
 
     def to_dict(self) -> dict:
         """Convert the change to a dictionary."""
-        return {
+        d = {
             "id": self.id,
             "change_type": self.change_type.value,
             "object_type": self.object_type,
@@ -127,6 +133,9 @@ class Change:
             "data": self.data,
             "new_refs": self.new_refs,
         }
+        if self.tags_resolved is not None:
+            d["tags_resolved"] = self.tags_resolved
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "Change":
