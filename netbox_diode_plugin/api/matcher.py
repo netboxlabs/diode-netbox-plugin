@@ -1065,6 +1065,10 @@ _LOGICAL_MATCHERS = {
         ),
     ],
     "ipam.vlan": lambda: [
+        VLANVidFallbackMatcher(
+            model_class=get_object_type_model("ipam.vlan"),
+            name="logical_vlan_vid_fallback_when_group_omitted",
+        ),
         ObjectMatchCriteria(
             fields=("vid",),
             name="logical_vlan_vid_no_group_or_svlan_or_site",
@@ -1729,6 +1733,73 @@ class GlobalIPNetworkIPMatcher:
             filter[f'{field}__net_host'] = value
 
         return self.model_class.objects.filter(**filter)
+
+
+@dataclass
+class VLANVidFallbackMatcher:
+    """
+    Conservative VID fallback when the producer omits VLAN group.
+
+    Only match VLANs in the requested site scope when the group field
+    is absent. Preserve the existing group, exclude QinQ rows, and
+    refuse ambiguous same-VID matches.
+
+    This matcher deliberately has no _get_refs() and contributes no
+    fingerprint: database lookup identity must not imply batch identity.
+    """
+
+    model_class: type[models.Model]
+    name: str
+
+    min_version: str | None = None
+    max_version: str | None = None
+
+    def has_required_fields(self, data: dict) -> bool:
+        if "group" in data:
+            return False
+        vid = data.get("vid")
+        if isinstance(vid, bool) or not isinstance(vid, int):
+            return False
+        if not 1 <= vid <= 4094:
+            return False
+        if data.get("qinq_role") not in (None, ""):
+            return False
+        if data.get("qinq_svlan") is not None:
+            return False
+        site = data.get("site")
+        if isinstance(site, bool):
+            return False
+        if site is not None and (
+            not isinstance(site, int) or site <= 0
+        ):
+            return False
+        return True
+
+    def fingerprint(self, data: dict):
+        return None
+
+    def build_queryset(self, data: dict):
+        if not self.has_required_fields(data):
+            return None
+
+        return self.model_class.objects.filter(
+            vid=data["vid"],
+            site_id=data.get("site"),
+            qinq_svlan__isnull=True,
+        ).filter(
+            Q(qinq_role__isnull=True) | Q(qinq_role=""),
+        )
+
+    def resolve(self, queryset: models.QuerySet, data: dict):
+        candidates = list(queryset.order_by("pk")[:2])
+        if len(candidates) > 1:
+            raise AmbiguousObjectMatch(
+                f"VLAN VID {data['vid']} matches multiple eligible "
+                f"VLANs in the requested site scope; specify a group "
+                f"or resolve the ambiguity in NetBox.",
+                object_type="ipam.vlan",
+            )
+        return candidates[0] if candidates else None
 
 
 @dataclass
@@ -2813,6 +2884,12 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     if object_type in non_cacheable_types:
         return None
 
+    if object_type == "ipam.vlan" and "group" not in data:
+        # An omitted group permits matching grouped VLANs by VID.
+        # Cache hits bypass resolve(), including ambiguity detection.
+        # Disable both Django and request-scoped lookup caches here.
+        return None
+
     items = []
     for k, v in sorted(data.items()):
         if k.startswith("_"):
@@ -2897,10 +2974,9 @@ def find_existing_object(data: dict, object_type: str, fallback: bool = False): 
             if q is None:
                 continue
             matchers_checked += 1
-            # A matcher may own the choice among the rows its queryset returned
-            # (VirtualChassisNameMatcher.resolve). The default remains the
-            # oldest row, which is right wherever the criteria carry real
-            # uniqueness -- there is only ever one row to pick.
+            # Matchers with resolve() can enforce additional identity rules,
+            # including rejecting ambiguous results. Otherwise, use the
+            # oldest matching row for criteria that imply uniqueness.
             resolve = getattr(matcher, "resolve", None)
             if resolve is not None:
                 existing = resolve(q, data)
