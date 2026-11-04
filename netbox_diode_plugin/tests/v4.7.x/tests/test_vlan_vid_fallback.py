@@ -20,10 +20,10 @@ class VLANVidFallbackMatcherTests(TestCase):
     def test_omitted_group_matches_existing_grouped_vlan(self):
         group = VLANGroup.objects.create(name="Fallback Test Group", slug="fallback-test")
         existing = VLAN.objects.create(
-            vid=609, name="Original VLAN Name", group=group
+            vid=123, name="Original VLAN Name", group=group
         )
 
-        matched = find_existing_object({"vid": 609}, "ipam.vlan")
+        matched = find_existing_object({"vid": 123}, "ipam.vlan")
 
         self.assertIsNotNone(matched)
         self.assertEqual(matched.pk, existing.pk)
@@ -35,25 +35,25 @@ class VLANVidFallbackMatcherTests(TestCase):
         second_group = VLANGroup.objects.create(
             name="Fallback Group B", slug="fallback-group-b"
         )
-        VLAN.objects.create(vid=609, name="First VLAN", group=first_group)
-        VLAN.objects.create(vid=609, name="Second VLAN", group=second_group)
+        VLAN.objects.create(vid=123, name="First VLAN", group=first_group)
+        VLAN.objects.create(vid=123, name="Second VLAN", group=second_group)
 
         with self.assertRaises(AmbiguousObjectMatch):
-            find_existing_object({"vid": 609}, "ipam.vlan")
+            find_existing_object({"vid": 123}, "ipam.vlan")
 
     def test_omitted_group_rejects_grouped_and_ungrouped_ambiguity(self):
         group = VLANGroup.objects.create(
             name="Mixed Ambiguity Group", slug="mixed-ambiguity-group"
         )
         VLAN.objects.create(
-            vid=609, name="Grouped VLAN", group=group
+            vid=123, name="Grouped VLAN", group=group
         )
         VLAN.objects.create(
-            vid=609, name="Ungrouped VLAN"
+            vid=123, name="Ungrouped VLAN"
         )
 
         with self.assertRaises(AmbiguousObjectMatch):
-            find_existing_object({"vid": 609}, "ipam.vlan")
+            find_existing_object({"vid": 123}, "ipam.vlan")
 
 
     def test_explicit_null_group_does_not_adopt_grouped_vlan(self):
@@ -61,11 +61,11 @@ class VLANVidFallbackMatcherTests(TestCase):
             name="Explicit Null Group", slug="explicit-null-group"
         )
         grouped = VLAN.objects.create(
-            vid=609, name="Grouped VLAN", group=group
+            vid=123, name="Grouped VLAN", group=group
         )
 
         matched = find_existing_object(
-            {"vid": 609, "group": None}, "ipam.vlan"
+            {"vid": 123, "group": None}, "ipam.vlan"
         )
 
         self.assertTrue(matched is None or matched.pk != grouped.pk)
@@ -78,14 +78,14 @@ class VLANVidFallbackMatcherTests(TestCase):
             name="Explicit Group B", slug="explicit-group-b"
         )
         expected = VLAN.objects.create(
-            vid=609, name="Expected VLAN", group=first_group
+            vid=123, name="Expected VLAN", group=first_group
         )
         VLAN.objects.create(
-            vid=609, name="Other VLAN", group=second_group
+            vid=123, name="Other VLAN", group=second_group
         )
 
         matched = find_existing_object(
-            {"vid": 609, "group": first_group.pk}, "ipam.vlan"
+            {"vid": 123, "group": first_group.pk}, "ipam.vlan"
         )
 
         self.assertIsNotNone(matched)
@@ -96,10 +96,10 @@ class VLANVidFallbackMatcherTests(TestCase):
             name="Fallback Site A", slug="fallback-site-a"
         )
         VLAN.objects.create(
-            vid=609, name="Site-specific VLAN", site=site
+            vid=123, name="Site-specific VLAN", site=site
         )
 
-        matched = find_existing_object({"vid": 609}, "ipam.vlan")
+        matched = find_existing_object({"vid": 123}, "ipam.vlan")
 
         self.assertIsNone(matched)
 
@@ -111,11 +111,11 @@ class VLANVidFallbackMatcherTests(TestCase):
             name="Fallback Site B", slug="fallback-site-b"
         )
         VLAN.objects.create(
-            vid=609, name="Other Site VLAN", site=site_b
+            vid=123, name="Other Site VLAN", site=site_b
         )
 
         matched = find_existing_object(
-            {"vid": 609, "site": site_a.pk}, "ipam.vlan"
+            {"vid": 123, "site": site_a.pk}, "ipam.vlan"
         )
 
         self.assertIsNone(matched)
@@ -125,13 +125,13 @@ class VLANVidFallbackMatcherTests(TestCase):
             name="QinQ Test Group", slug="qinq-test-group"
         )
         VLAN.objects.create(
-            vid=609,
+            vid=123,
             name="QinQ Service VLAN",
             group=group,
             qinq_role="svlan",
         )
 
-        matched = find_existing_object({"vid": 609}, "ipam.vlan")
+        matched = find_existing_object({"vid": 123}, "ipam.vlan")
 
         self.assertIsNone(matched)
 
@@ -146,14 +146,14 @@ class VLANVidFallbackMatcherTests(TestCase):
             qinq_role="svlan",
         )
         VLAN.objects.create(
-            vid=609,
+            vid=123,
             name="QinQ Customer VLAN",
             group=group,
             qinq_role="cvlan",
             qinq_svlan=service_vlan,
         )
 
-        matched = find_existing_object({"vid": 609}, "ipam.vlan")
+        matched = find_existing_object({"vid": 123}, "ipam.vlan")
 
         self.assertIsNone(matched)
 
@@ -162,13 +162,13 @@ class VLANVidFallbackMatcherTests(TestCase):
             name="Incoming QinQ Group", slug="incoming-qinq-group"
         )
         existing = VLAN.objects.create(
-            vid=609,
+            vid=123,
             name="Ordinary Grouped VLAN",
             group=group,
         )
 
         matched = find_existing_object(
-            {"vid": 609, "qinq_role": "svlan"}, "ipam.vlan"
+            {"vid": 123, "qinq_role": "svlan"}, "ipam.vlan"
         )
 
         self.assertTrue(matched is None or matched.pk != existing.pk)
@@ -178,13 +178,13 @@ class VLANVidFallbackMatcherTests(TestCase):
             name="Incoming CVLAN Group", slug="incoming-cvlan-group"
         )
         existing = VLAN.objects.create(
-            vid=609,
+            vid=123,
             name="Ordinary Grouped VLAN",
             group=group,
         )
 
         matched = find_existing_object(
-            {"vid": 609, "qinq_role": "cvlan"}, "ipam.vlan"
+            {"vid": 123, "qinq_role": "cvlan"}, "ipam.vlan"
         )
 
         self.assertTrue(matched is None or matched.pk != existing.pk)
@@ -236,15 +236,15 @@ class VLANVidFallbackAPITests(APITestCase):
     def test_omitted_group_updates_existing_grouped_vlan(self):
         group = VLANGroup.objects.create(name="Fallback API Group", slug="fallback-api")
         existing = VLAN.objects.create(
-            vid=609, name="Original VLAN Name", group=group
+            vid=123, name="Original VLAN Name", group=group
         )
 
-        change_set = self._plan(609, "Lamont-K20")
+        change_set = self._plan(123, "Updated VLAN Name")
         self._apply(change_set)
 
         existing.refresh_from_db()
-        self.assertEqual(existing.name, "Lamont-K20")
+        self.assertEqual(existing.name, "Updated VLAN Name")
         self.assertEqual(existing.group_id, group.pk)
-        self.assertEqual(VLAN.objects.filter(vid=609).count(), 1)
+        self.assertEqual(VLAN.objects.filter(vid=123).count(), 1)
 
-        self.assertEqual(self._plan(609, "Lamont-K20").get("changes", []), [])
+        self.assertEqual(self._plan(123, "Updated VLAN Name").get("changes", []), [])
