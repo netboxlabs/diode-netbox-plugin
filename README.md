@@ -99,6 +99,12 @@ cd /opt/netbox/netbox
 ./manage.py migrate netbox_diode_plugin
 ```
 
+## Matching on unique custom fields
+
+The plugin derives object identity from uniqueness. A custom field that is marked "must be unique" becomes an identity key, like an asset tag or a unique name. A payload that carries the value of such a field matches the one object that holds it, even when the payload carries a different name. This lets a producer key objects by an external id and rename them at the source.
+
+The custom field key ranks below the model's own unique fields. When the matched object holds a different value for an optional unique identifier that the payload also carries, such as `asset_tag` on a device or `rd` on a VRF, the plugin refuses the match. The plan then reports an error that names the object and both values instead of an update that rewrites it. Do not mark a custom field as unique when several objects share one value, such as a stack id shared by stack members.
+
 ## Running Tests
 
 ```shell

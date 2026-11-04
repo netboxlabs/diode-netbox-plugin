@@ -4,6 +4,7 @@
 
 import contextvars
 import hashlib
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -424,6 +425,32 @@ class AmbiguousObjectMatch(ChangeSetException):
 
     def __init__(self, message, object_type, field=NON_FIELD_ERRORS):
         """Build the per-entity error for one ambiguous lookup."""
+        super().__init__(message, errors={object_type: {field: [message]}})
+        self.object_type = object_type
+        self.field = field
+
+
+class ConflictingObjectMatch(ChangeSetException):
+    """
+    The row a unique custom field names holds a different identifier than the payload.
+
+    NetBox allows one row per value of a unique custom field. A payload that
+    carries the value means that row, unless the payload also carries a
+    different value for an optional unique identifier the row holds, such as
+    an asset tag. Then two unique keys disagree. The custom field matcher
+    runs after the model's own unique fields, so it is the lower ranked key
+    and it must not win in silence. To bind would rewrite the row's
+    identifier with the payload's value. To abstain would plan a CREATE that
+    NetBox rejects at apply with its generic unique-value error.
+
+    So the lookup raises at plan time. The error carries the per-entity shape
+    the API speaks ({object_type: {field: [message]}}), on the field that
+    disagrees. As with AmbiguousObjectMatch, this is not a ValueError or
+    TypeError: three call sites swallow those into "no match".
+    """
+
+    def __init__(self, message, object_type, field=NON_FIELD_ERRORS):
+        """Build the per-entity error for one contradicted lookup."""
         super().__init__(message, errors={object_type: {field: [message]}})
         self.object_type = object_type
         self.field = field
@@ -1629,9 +1656,35 @@ class ObjectMatchCriteria:
 
 
 
+@lru_cache(maxsize=256)
+def _optional_unique_value_fields(model_class) -> tuple[str, ...]:
+    """
+    Single-field unique value fields the model lets an operator leave empty.
+
+    These identify the real thing behind a row: asset_tag on Device, Rack,
+    Module and InventoryItem, rd on VRF. A required unique field such as name
+    or slug is a label; a rename changes it and the row stays the same row. A
+    unique relation such as a primary IP changes in routine updates. Neither
+    counts here. The rule derives from the model, so a future field of this
+    shape is covered without a code change.
+    """
+    return tuple(
+        f.name
+        for f in model_class._meta.fields
+        if f.unique and not f.primary_key and not f.is_relation and (f.null or f.blank)
+    )
+
+
 @dataclass
 class CustomFieldMatcher:
-    """A matcher for a unique custom field."""
+    """
+    A matcher for a unique custom field.
+
+    NetBox allows one row per value, so the value names one row. The matcher
+    runs after the model's own unique fields and constraints. resolve()
+    refuses the row when the payload carries a different value for an
+    optional unique identifier the row holds; see ConflictingObjectMatch.
+    """
 
     name: str
     custom_field: str
@@ -1665,6 +1718,46 @@ class CustomFieldMatcher:
     def has_required_fields(self, data: dict) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
         return self.custom_field in data.get("custom_fields", {})
+
+    def resolve(self, queryset: models.QuerySet, data: dict):
+        """
+        The row that holds the value, unless the payload contradicts one of its identifiers.
+
+        For each optional unique value field of the model (asset_tag, rd):
+
+        - A payload without the key asserts nothing and binds.
+        - A row without a value accepts the payload, which may add one.
+        - A payload whose value equals the row's value binds.
+        - Any other pair raises ConflictingObjectMatch. This includes a
+          payload that asserts an empty value against a row that holds one,
+          the rule the rack matcher already applies to racks.
+        """
+        row = queryset.order_by("pk").first()
+        if row is None:
+            return None
+        for field in _optional_unique_value_fields(self.model_class):
+            if field not in data:
+                continue
+            held = getattr(row, field, None)
+            if held in (None, ""):
+                continue
+            offered = data.get(field)
+            if offered not in (None, "") and str(offered) == str(held):
+                continue
+            object_type = get_object_type(self.model_class)
+            value = data.get("custom_fields", {}).get(self.custom_field)
+            carries = f"{field} {offered!r}" if offered not in (None, "") else f"no {field}"
+            label = getattr(row, "name", None) or str(row)
+            raise ConflictingObjectMatch(
+                f"{object_type} with {self.custom_field} {value!r} already exists: "
+                f"{label} (id {row.pk}) with {field} {held!r}. This payload carries {carries}. "
+                f"One value of a unique custom field is one object, and a different {field} "
+                f"is a different object. Send the {field} of the existing object, or do not "
+                f"mark {self.custom_field} as unique if several objects share one value.",
+                object_type,
+                field,
+            )
+        return row
 
 
 @dataclass
@@ -2780,9 +2873,9 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
     """
     Build a deterministic cache key from entity lookup data.
 
-    Includes only simple scalar fields. Entities whose identity depends
-    solely on unresolved references (no scalar fields at all) are not
-    cacheable. Some object types are never cached due to identity logic
+    Includes simple scalar fields and custom field values. Entities whose
+    identity depends solely on unresolved references (no scalar fields at
+    all) are not cacheable. Some object types are never cached due to identity logic
     that depends on factors the scalar-only key cannot express.
     """
     # Types whose lookup must never be served from the scalar-only key:
@@ -2819,6 +2912,11 @@ def _find_obj_cache_key(data: dict, object_type: str) -> str | None:
             continue
         if isinstance(v, UnresolvedReference):
             items.append((k, f"__unresolved__:{v.object_type}"))
+        elif k == "custom_fields" and isinstance(v, dict):
+            # Unique custom field matchers read these, so two payloads that
+            # differ only here must not share an answer.
+            for name, value in sorted(v.items()):
+                items.append((f"custom_fields.{name}", json.dumps(value, sort_keys=True, default=str)))
         elif isinstance(v, (dict, list)):
             continue  # skip complex nested data, not used by matchers
         else:
@@ -2862,11 +2960,8 @@ def find_existing_object(data: dict, object_type: str, fallback: bool = False): 
 
     req_cache = _request_obj_cache.get(None)
     cached = req_cache.get(cache_key) if req_cache is not None and cache_key is not None else None
-    if cached is not None and getattr(cached, _FALLBACK_MATCH_ATTR, False) and (
-        not fallback or data.get("custom_fields")
-    ):
-        # A fallback answer is not an identity match, and the key leaves out
-        # custom fields, which unique custom-field matchers read before it.
+    if cached is not None and getattr(cached, _FALLBACK_MATCH_ATTR, False) and not fallback:
+        # A fallback answer is not an identity match.
         cached = None
     if cached is not None:
         if ctx:
