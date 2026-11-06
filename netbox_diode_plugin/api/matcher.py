@@ -2469,6 +2469,56 @@ def _ip_only(value: str) -> str|None:
 
     return value
 
+def find_device_by_serial(data: dict):
+    """Find one existing device by site, manufacturer, and usable serial."""
+    serial = data.get("serial")
+    site_id = data.get("site")
+    device_type_id = data.get("device_type")
+
+    if not isinstance(serial, str):
+        return None
+    serial = serial.strip()
+    if not serial or serial.casefold() in {
+        "unknown", "none", "null", "n/a", "na", "not specified",
+        "not available", "to be filled by o.e.m.",
+    }:
+        return None
+
+    if any(
+        not isinstance(value, int) or isinstance(value, bool)
+        for value in (site_id, device_type_id)
+    ):
+        return None
+
+    device_type_model = get_object_type_model("dcim.devicetype")
+    manufacturer_id = (
+        device_type_model.objects.filter(pk=device_type_id)
+        .values_list("manufacturer_id", flat=True)
+        .first()
+    )
+    if manufacturer_id is None:
+        return None
+
+    device_model = get_object_type_model("dcim.device")
+    matches = list(
+        device_model.objects.filter(
+            serial=serial,
+            site_id=site_id,
+            device_type__manufacturer_id=manufacturer_id,
+        ).order_by("pk")[:2]
+    )
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        logger.warning(
+            "dcim.device serial %r at site %s, manufacturer %s "
+            "matches multiple devices; creating instead",
+            serial, site_id, manufacturer_id,
+        )
+    return None
+
+
 @dataclass
 class PartNumberFallbackMatcher:
     """Match the type whose part number is the payload's model."""
