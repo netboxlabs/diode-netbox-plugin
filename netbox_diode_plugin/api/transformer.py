@@ -40,6 +40,7 @@ from .matcher import (
     asserted_vc_identity,
     binds_without_writing,
     fallback_candidate_part,
+    find_device_by_serial,
     find_existing_object,
     fingerprints,
     get_model_matchers,
@@ -1965,6 +1966,8 @@ def _resolve_existing_references(entities: list[dict], warnings: dict | None = N
         key = part_number_key(data) if has_fallback(object_type) else None
         part_number_settled = key is None or not (asserted.get((manufacturer, key), set()) - {data['_uuid']})
         existing = find_existing_object(data, object_type, fallback=part_number_settled)
+        if existing is None and object_type == "dcim.device":
+            existing = find_device_by_serial(data)
         if existing is not None:
             new_refs[data['_uuid']] = existing.id
             if object_type in MATCH_ONLY_TYPES:
