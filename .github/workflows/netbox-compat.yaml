@@ -1,0 +1,35 @@
+name: NetBox Compat
+# Boots the plugin on the floor and the newest patch of each minor in the
+# netbox-plugin.yaml range. Boot only: the suite needs netbox_branching's
+# local_settings.py and per-minor test directories, so lint-tests.yml runs it.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  netbox-compat:
+    # id-token: write installs the private netbox-plugin-schema tools that resolve the range.
+    permissions:
+      contents: read
+      id-token: write
+    uses: netboxlabs/internal-workflows/.github/workflows/reusable-plugin-netbox-compat.yml@4f78117aa13dd745e6b0d02dc93d46e80670e6a9 # main
+    with:
+      python_version: "3.12"
+
+  # Make this the required check, not a leg: leg names follow NetBox releases.
+  netbox-compat-result:
+    needs: netbox-compat
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULT: ${{ needs.netbox-compat.result }}
+        run: '[[ "$RESULT" =~ ^(success|skipped)$ ]]'
