@@ -1,0 +1,19 @@
+name: Plugin Manifest Modified
+
+# Trigger on every pull request, not only yaml changes: drift starts in
+# __init__.py, pyproject.toml and MANIFEST.in.
+on:
+  pull_request:
+  push:
+    branches: [ develop ]
+
+permissions:
+  contents: read
+
+jobs:
+  manifest:
+    # id-token: write installs the private netbox-plugin-schema tools.
+    permissions:
+      contents: read
+      id-token: write
+    uses: netboxlabs/internal-workflows/.github/workflows/reusable-plugin-manifest-modified.yml@4f78117aa13dd745e6b0d02dc93d46e80670e6a9 # main
