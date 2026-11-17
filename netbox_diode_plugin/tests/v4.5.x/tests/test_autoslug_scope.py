@@ -110,6 +110,21 @@ class AutoSlugScopeTestCase(TestCase):
         changes = _changes({"name": "Group A", "scope_site": {"name": "Site A"}}, "ipam.vlangroup")
         self.assertEqual([c.change_type for c in _effective(changes)], [ChangeType.CREATE])
 
+    def test_vlan_group_binds_same_slug_in_its_own_scope(self):
+        """A VLAN group whose auto slug matches a group in the payload's own scope binds that group."""
+        group_c = VLANGroup.objects.create(name="GROUP C", slug="group-c", scope=self.site_b)
+        changes = _effective(_changes({"name": "Group C", "scope_site": {"name": "Site B"}}, "ipam.vlangroup"))
+        self.assertTrue(changes)
+        self.assertTrue(all(c.object_id == group_c.pk for c in changes))
+
+    def test_in_scope_region_wins_over_top_level_region(self):
+        """The same-slug region under the payload's parent wins over the top-level one."""
+        Region.objects.create(name="North", slug="north")
+        north_eu = Region.objects.create(name="NORTH", slug="north", parent=self.europe)
+        changes = _effective(_changes({"name": "North", "parent": {"name": "Europe"}}, "dcim.region"))
+        self.assertTrue(changes)
+        self.assertTrue(all(c.object_id == north_eu.pk for c in changes))
+
     def test_rack_type_with_unique_slug_stays_unscoped(self):
         """A globally unique slug is not scoped; a scoped slug takes its constraint's other fields."""
         self.assertEqual(_autoslug(RackType).scope_fields, ())
