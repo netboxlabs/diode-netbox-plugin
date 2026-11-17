@@ -465,6 +465,22 @@ class GenerateMatchingDocsCommandTestCase(TestCase):
         result = self.command.get_matcher_description(autoslug_matcher)
         self.assertEqual(result, "Matches on auto-generated slug field: slug")
 
+    def test_get_matcher_description_autoslug_scoped(self):
+        """A scoped AutoSlugMatcher names the payload fields it is scoped by."""
+        autoslug_matcher = AutoSlugMatcher(
+            name="test_autoslug",
+            model_class=None,
+            slug_field="slug",
+            scope_fields=("parent", "site"),
+        )
+
+        result = self.command.get_matcher_description(autoslug_matcher)
+        self.assertEqual(
+            result,
+            "Matches on auto-generated slug field: slug within the payload's parent, site"
+            " (rows with an empty scope also match)",
+        )
+
     def test_get_matcher_description_unique_field(self):
         """Test getting matcher description for unique field matcher."""
         # Test unique field matcher

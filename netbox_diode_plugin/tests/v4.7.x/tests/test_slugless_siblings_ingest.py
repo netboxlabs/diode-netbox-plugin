@@ -134,3 +134,35 @@ class SluglessSiblingApplyTestCase(TestCase):
         terms = {(t.cable_end, t.termination_id) for t in CableTermination.objects.all()}
         self.assertEqual(terms, {("A", self.iface_hall.pk), ("B", self.iface_lab.pk)})
         self.assertEqual(sorted(Location.objects.values_list("name", "slug")), [("Hall", "hall-custom"), ("Lab", "lab")])
+
+
+class SluglessSiblingCrossSiteTestCase(TestCase):
+    """A slugless location new in its site is created, not taken from another site."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Annex exists only in Site B; both devices are in Site A."""
+        cls.site_a = Site.objects.create(name="Site A", slug="site-a")
+        cls.site_b = Site.objects.create(name="Site B", slug="site-b")
+        lab = Location.objects.create(name="Lab", slug="lab", site=cls.site_a)
+        cls.annex_b = Location.objects.create(name="Annex", slug="annex", site=cls.site_b)
+        mfr = Manufacturer.objects.create(name="Vendor A", slug="vendor-a")
+        dt = DeviceType.objects.create(manufacturer=mfr, model="Model A", slug="model-a")
+        role = DeviceRole.objects.create(name="Role A", slug="role-a")
+        dev_annex = Device.objects.create(name="Device Annex", device_type=dt, role=role, site=cls.site_a)
+        dev_lab = Device.objects.create(name="Device Lab", device_type=dt, role=role, site=cls.site_a, location=lab)
+        Interface.objects.create(device=dev_annex, name="eth0", type="1000base-t")
+        Interface.objects.create(device=dev_lab, name="eth0", type="1000base-t")
+
+    def test_cable_to_new_location_does_not_move_other_site_location(self):
+        """Site B's Annex stays in Site B and a new Annex is created in Site A."""
+        entity = _cable(
+            _iface("Device Annex", location={"name": "Annex", "site": {"name": "Site A"}}),
+            _iface("Device Lab", location={"name": "Lab", "site": {"name": "Site A"}}),
+        )
+        result = generate_changeset(entity, "dcim.cable")
+        apply_changeset(result.change_set, request=None)
+
+        self.assertEqual(Location.objects.get(pk=self.annex_b.pk).site, self.site_b)
+        self.assertEqual(Location.objects.filter(name="Annex", site=self.site_a).count(), 1)
+        self.assertEqual(Cable.objects.count(), 1)
