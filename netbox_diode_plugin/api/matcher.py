@@ -1421,6 +1421,15 @@ class ObjectMatchCriteria:
         return frozenset(refs)
 
     @cache
+    def _absent_means_null(self, field_name: str) -> bool:
+        """Return True when an absent value for the field is NULL: a relation, a nullable column, or not a model field."""
+        try:
+            field = self.model_class._meta.get_field(field_name)
+        except FieldDoesNotExist:
+            return True
+        return bool(field.is_relation or field.null)
+
+    @cache
     def _get_insensitive_refs(self) -> set[str]:
         """
         Returns a set of all field names that should be compared in a case insensitive manner.
@@ -1449,6 +1458,12 @@ class ObjectMatchCriteria:
         real criteria are potentially complex...
         """
         if not self.has_required_fields(data):
+            return None
+
+        # A NOT NULL scalar (slug, name) is unknown when absent, not NULL; skip this constraint.
+        if self.nulls_not_distinct and any(
+            data.get(f) in (None, "") and not self._absent_means_null(f) for f in self._get_refs()
+        ):
             return None
 
         if self.condition:
