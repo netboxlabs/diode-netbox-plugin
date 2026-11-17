@@ -94,6 +94,18 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
         warnings=warnings or None,
     )
 
+def _record_resolved_pk(change, instance) -> None:
+    """
+    Record the row a CREATE resolved to on its change.
+
+    A caller holding the change set after apply can then address the object
+    (device_config.py needs the device a config entity landed on). The response
+    was serialised before apply, so this never changes what the reconciler sees.
+    """
+    if instance is not None and change.object_id is None:
+        change.object_id = instance.pk
+
+
 def _is_auto_created_component(object_type: str) -> bool:
     """Check if the object type is auto-created from templates."""
     auto_created_components = [
@@ -1353,6 +1365,7 @@ def _apply_change(data: dict, model_class: models.Model, change: Change, created
         if change.ref_id:
             created[change.ref_id] = instance
             _record_bound_only(bound_only, change, pre_save_matched)
+        _record_resolved_pk(change, instance)
 
     elif change_type == ChangeType.UPDATE:
         if object_id := change.object_id:

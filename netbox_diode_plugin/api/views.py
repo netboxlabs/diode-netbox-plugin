@@ -15,7 +15,10 @@ from rest_framework import status, views
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from . import customfield_cache  # noqa: F401 - imported for side-effect install at module load
+from . import (
+    customfield_cache,  # noqa: F401 - imported for side-effect install at module load
+    device_config,
+)
 from .applier import apply_changeset
 from .authentication import DiodeOAuth2Authentication
 from .change_log_buffer import buffered_change_logging, request_change_logging_batch
@@ -433,10 +436,18 @@ class BulkPlanView(views.APIView):
                 ]}},
             }
 
+        # A device entity's ``config`` is an observation of the network, not a
+        # proposed change to NetBox data, so it is handed to the configured store
+        # at plan time whether or not the deviation is later approved. Lifting
+        # it out first also keeps it out of the "unsupported field" warnings.
+        config = device_config.lift_device_config(object_type, original_entity_data)
+
         try:
             result = generate_changeset(original_entity_data, object_type)
             _add_branch_to_result(result, branch_schema_id)
-            return result.to_dict()
+            out = result.to_dict()
+            self._hand_over_config(out, result.change_set, config, entry.get("id"))
+            return out
         except ChangeSetException as e:
             return ChangeSetResult(errors=e.errors).to_dict()
         except Exception:
@@ -448,6 +459,25 @@ class BulkPlanView(views.APIView):
                 "change_set": None,
                 "errors": {"request": {"__all__": ["internal error processing entity"]}},
             }
+
+
+    @staticmethod
+    def _hand_over_config(out, change_set, config, entry_id):
+        """Deliver a planned device's config to the store; a new device waits for its row."""
+        if config is None:
+            return
+        device_id = device_config.resolve_device_id(change_set)
+        if device_id is None:
+            # The device does not exist in NetBox yet (CREATE under review).
+            # Its config arrives with the next collection once the row exists.
+            logger.debug(
+                "bulk-plan: device for entity %s not in NetBox yet; config deferred",
+                _sanitize_for_log(entry_id),
+            )
+            return
+        warning = device_config.dispatch_device_config(device_id, config, entry_id)
+        if warning:
+            out.setdefault("warnings", []).append(warning)
 
 
 class ApplyChangeSetView(views.APIView):
@@ -638,6 +668,28 @@ class BulkPlanApplyView(views.APIView):
         if extracted.error is not None:
             return {"change_set": None, "errors": {"plan": extracted.error}}
 
+        # A device entity's ``config`` has no NetBox field; lift it out before the
+        # plan (so it is not reported as an unsupported field) and hand it to the
+        # configured store once the device row is known.
+        config = None
+        if device_config.should_handle(extracted.object_type):
+            config = device_config.extract_device_config(extracted.entity_data)
+
+        result = self._plan_and_apply(extracted, entry, branch_schema_id, request)
+        if config is not None and not self._has_error(result):
+            device_id = device_config.resolve_device_id(result.pop("_change_set", None))
+            if device_id is None:
+                warning = {"device_config": "device not resolved; config not stored"}
+            else:
+                warning = device_config.dispatch_device_config(device_id, config, entry.get("id"))
+            if warning:
+                result.setdefault("warnings", []).append(warning)
+        else:
+            result.pop("_change_set", None)
+        return result
+
+    def _plan_and_apply(self, extracted, entry, branch_schema_id, request):
+        """The original plan-then-apply; ``_change_set`` carries the applied set to the caller."""
         plan_result, plan_error = self._run_plan(
             extracted.entity_data,
             extracted.object_type,
@@ -651,7 +703,7 @@ class BulkPlanApplyView(views.APIView):
 
         # If plan produced no changes, there's nothing to apply.
         if plan_result.change_set is None or not plan_result.change_set.changes:
-            return {"change_set": change_set_dict, "errors": None}
+            return {"change_set": change_set_dict, "errors": None, "_change_set": plan_result.change_set}
 
         # Apply phase — no obj_cache. Each entity gets its own transaction
         # via _apply_one_changeset. Catch OperationalError (Postgres deadlock,
@@ -685,7 +737,7 @@ class BulkPlanApplyView(views.APIView):
         if apply_result.errors:
             return {"change_set": change_set_dict, "errors": {"apply": apply_result.errors}}
 
-        result = {"change_set": change_set_dict, "errors": None}
+        result = {"change_set": change_set_dict, "errors": None, "_change_set": plan_result.change_set}
         if apply_result.warnings:
             # This door has to carry them too: a bind that discarded a payload
             # is exactly as invisible behind a 200 here as it is on

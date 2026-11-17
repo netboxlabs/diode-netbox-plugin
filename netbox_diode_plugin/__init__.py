@@ -118,6 +118,14 @@ class NetBoxDiodePluginConfig(PluginConfig):
         # entity would otherwise fail. Setting >0 retries the apply
         # with small jittered backoff. Set to 0 to disable retries.
         "apply_deadlock_max_retries": 2,
+
+        # device_config_handler: dotted path of a callable that receives a
+        # device entity's ``config`` (running/startup/candidate bytes and
+        # metadata) once the device row is known in bulk-plan-apply. NetBox
+        # has no field for device configuration, so without a handler the
+        # field is dropped. Reference handler:
+        # "netbox_config_compliance.diode.ingest_device_config".
+        "device_config_handler": None,
     }
 
     def ready(self):

@@ -165,6 +165,11 @@ class ChangeSet:
     changes: list[Change] = field(default_factory=list)
     branch: dict[str, str] | None = field(default=None)  # {"id": str, "name": str}
     warnings: dict | None = field(default=None)
+    # The existing row the root entity matched, when the plan found one. Kept
+    # off the wire (not in to_dict): a NOOP plan empties ``changes``, and a
+    # caller that must address the object afterwards (device_config.py) has
+    # nothing else to go on.
+    root_object_id: int | None = field(default=None, compare=False)
 
     def to_dict(self) -> dict:
         """Convert the change set to a dictionary."""

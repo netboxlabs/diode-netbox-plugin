@@ -265,6 +265,7 @@ def generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
 def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
     """Generate a changeset for an entity."""
     change_set = ChangeSet()
+    root_type = object_type
 
     warnings = {}
     supported_models = extract_supported_models()
@@ -283,6 +284,7 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
         instance = entity.pop("_instance", None)
         entity.pop("_netbox_id", None)
         _merge_warnings(warnings, object_type, entity.pop("_warnings", None))
+        _note_root_instance(change_set, object_type, root_type, instance)
         if instance:
             # the prior state is another new object...
             if isinstance(instance, str):
@@ -331,6 +333,15 @@ def _generate_changeset(entity: dict, object_type: str) -> ChangeSetResult:
         change_set=change_set,
     )
     return cs
+
+def _note_root_instance(change_set: ChangeSet, object_type: str, root_type: str, instance) -> None:
+    """Record the existing row the root entity matched (see ChangeSet.root_object_id)."""
+    if change_set.root_object_id is not None or object_type != root_type:
+        return
+    if instance is None or isinstance(instance, str):
+        return
+    change_set.root_object_id = instance.pk
+
 
 def _resolve_tags(changes: list[Change], supported_models: dict) -> None:
     """
