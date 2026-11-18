@@ -663,7 +663,8 @@ class BulkPlanApplyView(views.APIView):
         # backoff: cross-batch concurrent inserts to shared-lookup unique
         # indexes (dcim_site_slug_key, dcim_devicerole_name, ...) occasionally
         # deadlock under load, and a second attempt almost always succeeds
-        # because the contending transaction has finished by then.
+        # because the contending transaction has finished by then. Any other
+        # unexpected error also fails this entity alone, as in the plan phase.
         try:
             apply_result = _apply_one_changeset_with_retry(plan_result.change_set, request, entry.get("id"))
         except OperationalError as e:
@@ -680,6 +681,17 @@ class BulkPlanApplyView(views.APIView):
             return {
                 "change_set": change_set_dict,
                 "errors": {"apply": {"__all__": [_db_error_code(e)]}},
+            }
+        except Exception:
+            # Caught outside the entity's atomic block, so its writes to the
+            # default database are rolled back.
+            logger.exception(
+                "apply phase failed for entity %s",
+                _sanitize_for_log(entry.get("id")),
+            )
+            return {
+                "change_set": change_set_dict,
+                "errors": {"apply": {"__all__": ["internal error"]}},
             }
 
         if apply_result.errors:

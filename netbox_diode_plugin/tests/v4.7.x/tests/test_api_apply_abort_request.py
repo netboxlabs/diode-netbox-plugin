@@ -11,6 +11,7 @@ from dcim.models import Device, DeviceRole, DeviceType, InterfaceTemplate, Manuf
 from extras.models import Tag
 from utilities.testing import APITestCase
 
+from netbox_diode_plugin.api import views
 from netbox_diode_plugin.api.authentication import DiodeOAuth2Authentication
 from netbox_diode_plugin.plugin_config import get_diode_user
 
@@ -220,3 +221,42 @@ class VcPositionConflictTestCase(AbortRequestApiTestCase):
         self.assertIsNone(results["after"]["errors"])
         self.assertTrue(Site.objects.filter(name=f"after-{s}").exists())
         self.assertFalse(Device.objects.filter(name=f"sw-{s}").exists())
+
+
+class BulkPlanApplyUnexpectedApplyErrorTestCase(AbortRequestApiTestCase):
+    """An unexpected error while applying one entity fails only that entity."""
+
+    def test_unknown_error_after_writes_fails_only_that_entity(self):
+        """The entity's writes roll back, it reports "internal error", and its neighbours apply."""
+        s = self.s
+        real_apply = views.apply_changeset
+
+        def apply_then_fail(change_set, request):
+            result = real_apply(change_set, request)
+            if any(change.object_type == "dcim.manufacturer" for change in change_set.changes):
+                raise RuntimeError("unexpected-apply-failure")
+            return result
+
+        payload = {"entities": [
+            self.site_entry("a", f"a-{s}"),
+            {"id": "mfr-entity-unexpected", "object_type": "dcim.manufacturer",
+             "entity": {"manufacturer": {"name": f"m-{s}"}}},
+            self.site_entry("c", f"c-{s}"),
+        ]}
+        with mock.patch.object(views, "apply_changeset", side_effect=apply_then_fail):
+            with self.assertLogs("netbox.diode_data", level="ERROR") as logs:
+                response = self.post(BULK_PLAN_APPLY_URL, payload)
+
+        self.assertEqual(response.status_code, 207, response.content)
+        results = self.results_by_id(response)
+        self.assertEqual(results["mfr-entity-unexpected"]["errors"], {"apply": {"__all__": ["internal error"]}})
+        self.assertIsNotNone(results["mfr-entity-unexpected"]["change_set"])
+        self.assertIsNone(results["a"]["errors"])
+        self.assertIsNone(results["c"]["errors"])
+        self.assertTrue(Site.objects.filter(name=f"a-{s}").exists())
+        self.assertTrue(Site.objects.filter(name=f"c-{s}").exists())
+        self.assertFalse(Manufacturer.objects.filter(name=f"m-{s}").exists())
+        self.assertTrue(any(
+            record.exc_info and "mfr-entity-unexpected" in record.getMessage() for record in logs.records
+        ))
+        self.assertNotIn(b"unexpected-apply-failure", response.content)
