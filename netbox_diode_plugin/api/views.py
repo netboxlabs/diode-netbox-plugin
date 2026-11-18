@@ -113,6 +113,10 @@ def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     """
     Apply one changeset, returning a ChangeSetResult on success or on ChangeSetException.
 
+    A commit hook (``transaction.on_commit``) that raises after COMMIT cannot
+    undo the writes, so its error is logged and the result is returned as
+    applied rather than reported as a failure (or retried as a deadlock).
+
     The apply runs inside three opt-in side-effect bypasses (each gated
     by its own plugin setting; all default to off so the plugin behaves
     like upstream NetBox unless explicitly enabled):
@@ -149,6 +153,12 @@ def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
     ``apply_buffer_counter_updates`` (default off), no-op when
     ``apply_bypass_counter_updates`` is also on.
     """
+    committed = False
+
+    def mark_committed():
+        nonlocal committed
+        committed = True
+
     try:
         with (
             transaction.atomic(),
@@ -158,10 +168,18 @@ def _apply_one_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
             buffered_change_logging(),
             bypass_search_indexing(),
         ):
-            return apply_changeset(change_set, request)
+            # Registered first: commit hooks run in order, so this one has run
+            # before any later hook can raise.
+            transaction.on_commit(mark_committed)
+            result = apply_changeset(change_set, request)
     except ChangeSetException as e:
         logger.error(f"Error applying change set: {e}")
         return ChangeSetResult(id=change_set.id, errors=e.errors)
+    except Exception:
+        if not committed:
+            raise
+        logger.exception("commit hook failed after change set %s was applied", _sanitize_for_log(change_set.id))
+    return result
 
 
 def _apply_one_changeset_with_retry(change_set: ChangeSet, request, entity_id) -> ChangeSetResult:
@@ -652,7 +670,8 @@ class BulkPlanApplyView(views.APIView):
         # backoff: cross-batch concurrent inserts to shared-lookup unique
         # indexes (dcim_site_slug_key, dcim_devicerole_name, ...) occasionally
         # deadlock under load, and a second attempt almost always succeeds
-        # because the contending transaction has finished by then.
+        # because the contending transaction has finished by then. Any other
+        # unexpected error also fails this entity alone, as in the plan phase.
         try:
             apply_result = _apply_one_changeset_with_retry(plan_result.change_set, request, entry.get("id"))
         except OperationalError as e:
@@ -669,6 +688,17 @@ class BulkPlanApplyView(views.APIView):
             return {
                 "change_set": change_set_dict,
                 "errors": {"apply": {"__all__": [_db_error_code(e)]}},
+            }
+        except Exception:
+            # Caught outside the entity's atomic block, so its writes to the
+            # default database are rolled back.
+            logger.exception(
+                "apply phase failed for entity %s",
+                _sanitize_for_log(entry.get("id")),
+            )
+            return {
+                "change_set": change_set_dict,
+                "errors": {"apply": {"__all__": ["internal error"]}},
             }
 
         if apply_result.errors:

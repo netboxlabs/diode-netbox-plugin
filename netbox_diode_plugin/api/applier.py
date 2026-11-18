@@ -11,6 +11,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import models, transaction
 from django.db.utils import IntegrityError
 from rest_framework.exceptions import ValidationError as ValidationError
+from utilities.exceptions import AbortRequest
 
 from .change_log_buffer import snapshot_for_apply
 from .common import (
@@ -66,6 +67,10 @@ def apply_changeset(change_set: ChangeSet, request) -> ChangeSetResult:
             forget_cached_answers(object_type)
         except ValidationError as e:
             raise error_from_validation_error(e, object_type)
+        except AbortRequest as e:
+            # NetBox refuses the save (e.g. a tag not allowed on this type);
+            # report its message, as NetBox's own API does.
+            raise _err(str(e.message), object_type, NON_FIELD_ERRORS)
         except ObjectDoesNotExist:
             raise _err(f"{object_type} with id {change.object_id} does not exist", object_type, "object_id")
         except TypeError as e:
