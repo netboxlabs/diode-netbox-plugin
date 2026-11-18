@@ -1421,6 +1421,15 @@ class ObjectMatchCriteria:
         return frozenset(refs)
 
     @cache
+    def _absent_means_null(self, field_name: str) -> bool:
+        """Return True when an absent value for the field is NULL: a relation, a nullable column, or not a model field."""
+        try:
+            field = self.model_class._meta.get_field(field_name)
+        except FieldDoesNotExist:
+            return True
+        return bool(field.is_relation or field.null)
+
+    @cache
     def _get_insensitive_refs(self) -> set[str]:
         """
         Returns a set of all field names that should be compared in a case insensitive manner.
@@ -1449,6 +1458,12 @@ class ObjectMatchCriteria:
         real criteria are potentially complex...
         """
         if not self.has_required_fields(data):
+            return None
+
+        # A NOT NULL scalar (slug, name) is unknown when absent, not NULL; skip this constraint.
+        if self.nulls_not_distinct and any(
+            data.get(f) in (None, "") and not self._absent_means_null(f) for f in self._get_refs()
+        ):
             return None
 
         if self.condition:
@@ -2541,6 +2556,7 @@ class AutoSlugMatcher:
 
     min_version: str | None = None
     max_version: str | None = None
+    scope_fields: tuple[str, ...] = ()
 
     def fingerprint(self, data: dict) -> str|None:
         """Fingerprint the custom field value."""
@@ -2554,7 +2570,7 @@ class AutoSlugMatcher:
         return hash((self.model_class.__name__, self.name, slug.value))
 
     def build_queryset(self, data: dict) -> models.QuerySet:
-        """Build a queryset for the custom field."""
+        """Build a queryset for the auto slug, kept inside the scope the payload names."""
         if not self.has_required_fields(data):
             return None
 
@@ -2562,7 +2578,44 @@ class AutoSlugMatcher:
         if slug is None:
             return None
 
-        return self.model_class.objects.filter(**{f'{self.slug_field}': str(slug.value)})
+        qs = self.model_class.objects.filter(**{f'{self.slug_field}': str(slug.value)})
+        # Never bind a row whose scope holds a different value; NULL-scoped rows stay adoptable.
+        for field_name in self.scope_fields:
+            value = data.get(field_name)
+            if value is None:
+                continue
+            field = self.model_class._meta.get_field(field_name)
+            if isinstance(value, UnresolvedReference | dict):
+                if not field.null:
+                    return None
+                qs = qs.filter(**{f"{field_name}__isnull": True})
+                continue
+            if field.is_relation and field.related_model == ContentType:
+                value = content_type_id(value)
+            scoped = Q(**{field_name: value})
+            if field.null:
+                scoped |= Q(**{f"{field_name}__isnull": True})
+            qs = qs.filter(scoped)
+        return qs
+
+    def resolve(self, q: models.QuerySet, data: dict) -> models.Model | None:
+        """Prefer the row in the payload's scope over a NULL-scoped one, then the lowest pk."""
+        ordering = [F(f).asc(nulls_last=True) for f in self.scope_fields if data.get(f) is not None]
+        return q.order_by(*ordering, "pk").first()
+
+    def cacheable(self, row: models.Model, data: dict) -> bool:
+        """
+        Whether the lookup caches, shared and per request, may keep this answer.
+
+        Not when the row's scope is empty where the payload names one: a same-slug
+        row created later in that scope wins in resolve, and a cache hit skips resolve.
+        """
+        meta = self.model_class._meta
+        return all(
+            getattr(row, meta.get_field(f).attname) is not None
+            for f in self.scope_fields
+            if data.get(f) is not None
+        )
 
     def has_required_fields(self, data: dict) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
@@ -2612,6 +2665,16 @@ def _get_fallback_matchers(model_class) -> list:
         if in_version_range(x.min_version, x.max_version)
     ]
 
+def _slug_scope_fields(model_class, slug_field) -> tuple[str, ...]:
+    """Return the other fields of the unique constraints that include the slug; none when the slug is unique on its own."""
+    if slug_field.unique:
+        return ()
+    scope = set()
+    for constraint in model_class._meta.constraints:
+        if isinstance(constraint, models.UniqueConstraint) and slug_field.name in constraint.fields:
+            scope.update(f for f in constraint.fields if f != slug_field.name)
+    return tuple(sorted(scope))
+
 @lru_cache(maxsize=256)
 def _get_autoslug_matchers(model_class) -> list:
     matchers = []
@@ -2622,6 +2685,7 @@ def _get_autoslug_matchers(model_class) -> list:
                     model_class=model_class,
                     slug_field=field.name,
                     name=f"unique_autoslug_{field.name}",
+                    scope_fields=_slug_scope_fields(model_class, field),
                 )
             )
             break
@@ -2911,13 +2975,16 @@ def find_existing_object(data: dict, object_type: str, fallback: bool = False): 
                 matched_by = matcher
                 break
 
+    cacheable = getattr(matched_by, "cacheable", None)
+    keep = result is not None and (cacheable is None or cacheable(result, data))
+    if not cache_hit:
         if getattr(matched_by, "is_fallback", False):
             setattr(result, _FALLBACK_MATCH_ATTR, True)
-        elif cache_key and result is not None:
+        elif cache_key and keep:
             django_cache.set(cache_key, result.id, cache_ttl)
             django_cache.set(_find_obj_rev_key(object_type, result.id), cache_key, cache_ttl)
 
-    if req_cache is not None and cache_key is not None and result is not None:
+    if req_cache is not None and cache_key is not None and keep:
         req_cache[cache_key] = result
 
     if ctx:

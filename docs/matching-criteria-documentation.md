@@ -145,7 +145,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | dcim_devicerole_name | 4 | builtin | name | parent is NULL | Matches on unique constraint fields: name where parent is NULL | All versions |
 | dcim_devicerole_parent_slug | 5 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
 | dcim_devicerole_slug | 6 | builtin | slug | parent is NULL | Matches on unique constraint fields: slug where parent is NULL | All versions |
-| unique_autoslug_slug | 7 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_autoslug_slug | 7 | builtin | slug | N/A | Matches on auto-generated slug field: slug within the payload's parent (rows with an empty scope also match) | All versions |
 
 ## dcim.devicetype
 
@@ -153,7 +153,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 |--------------|---------------------|------|--------|-----------|-------------|---------------------|
 | dcim_devicetype_unique_manufacturer_model | 1 | builtin | manufacturer, model | N/A | Matches on unique constraint fields: manufacturer, model | All versions |
 | dcim_devicetype_unique_manufacturer_slug | 2 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
-| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_autoslug_slug | 3 | builtin | slug | N/A | Matches on auto-generated slug field: slug within the payload's manufacturer (rows with an empty scope also match) | All versions |
 | fallback_devicetype_part_number | 4 | fallback | manufacturer, model | N/A | Match the type whose part number is the payload's model. | All versions |
 
 ## dcim.frontport
@@ -193,7 +193,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | dcim_location_name | 2 | builtin | site, name | parent is NULL | Matches on unique constraint fields: site, name where parent is NULL | All versions |
 | dcim_location_parent_slug | 3 | builtin | site, parent, slug | N/A | Matches on unique constraint fields: site, parent, slug | All versions |
 | dcim_location_slug | 4 | builtin | site, slug | parent is NULL | Matches on unique constraint fields: site, slug where parent is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug within the payload's parent, site (rows with an empty scope also match) | All versions |
 
 ## dcim.macaddress
 
@@ -244,7 +244,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | dcim_platform_name | 2 | builtin | name | manufacturer is NULL | Matches on unique constraint fields: name where manufacturer is NULL | All versions |
 | dcim_platform_manufacturer_slug | 3 | builtin | manufacturer, slug | N/A | Matches on unique constraint fields: manufacturer, slug | All versions |
 | dcim_platform_slug | 4 | builtin | slug | manufacturer is NULL | Matches on unique constraint fields: slug where manufacturer is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug within the payload's manufacturer (rows with an empty scope also match) | All versions |
 
 ## dcim.powerfeed
 
@@ -324,7 +324,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | dcim_region_name | 2 | builtin | name | parent is NULL | Matches on unique constraint fields: name where parent is NULL | All versions |
 | dcim_region_parent_slug | 3 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
 | dcim_region_slug | 4 | builtin | slug | parent is NULL | Matches on unique constraint fields: slug where parent is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug within the payload's parent (rows with an empty scope also match) | All versions |
 
 ## dcim.site
 
@@ -342,7 +342,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | dcim_sitegroup_name | 2 | builtin | name | parent is NULL | Matches on unique constraint fields: name where parent is NULL | All versions |
 | dcim_sitegroup_parent_slug | 3 | builtin | parent, slug | N/A | Matches on unique constraint fields: parent, slug | All versions |
 | dcim_sitegroup_slug | 4 | builtin | slug | parent is NULL | Matches on unique constraint fields: slug where parent is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug within the payload's parent (rows with an empty scope also match) | All versions |
 
 ## dcim.virtualchassis
 
@@ -495,7 +495,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | logical_vlan_group_name_no_scope | 1 | logical | name | scope_type is NULL | Matches on fields: name where scope_type is NULL | All versions |
 | ipam_vlangroup_unique_scope_name | 2 | builtin | scope_type, scope_id, name | N/A | Matches on unique constraint fields: scope_type, scope_id, name | All versions |
 | ipam_vlangroup_unique_scope_slug | 3 | builtin | scope_type, scope_id, slug | N/A | Matches on unique constraint fields: scope_type, scope_id, slug | All versions |
-| unique_autoslug_slug | 4 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_autoslug_slug | 4 | builtin | slug | N/A | Matches on auto-generated slug field: slug within the payload's scope_id, scope_type (rows with an empty scope also match) | All versions |
 
 ## ipam.vlantranslationpolicy
 
@@ -553,7 +553,7 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | tenancy_tenant_unique_name | 2 | builtin | name | group is NULL | Matches on unique constraint fields: name where group is NULL | All versions |
 | tenancy_tenant_unique_group_slug | 3 | builtin | group, slug | N/A | Matches on unique constraint fields: group, slug | All versions |
 | tenancy_tenant_unique_slug | 4 | builtin | slug | group is NULL | Matches on unique constraint fields: slug where group is NULL | All versions |
-| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug | All versions |
+| unique_autoslug_slug | 5 | builtin | slug | N/A | Matches on auto-generated slug field: slug within the payload's group (rows with an empty scope also match) | All versions |
 
 ## tenancy.tenantgroup
 

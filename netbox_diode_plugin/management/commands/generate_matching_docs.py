@@ -80,6 +80,12 @@ class Command(BaseCommand):
 
         # Handle AutoSlugMatcher
         if hasattr(matcher, 'slug_field') and matcher.slug_field:
+            scope_fields = getattr(matcher, 'scope_fields', ())
+            if scope_fields:
+                return (
+                    f"Matches on auto-generated slug field: {matcher.slug_field} within the payload's "
+                    f"{', '.join(scope_fields)} (rows with an empty scope also match)"
+                )
             return f"Matches on auto-generated slug field: {matcher.slug_field}"
 
         # Handle builtin unique field matchers
