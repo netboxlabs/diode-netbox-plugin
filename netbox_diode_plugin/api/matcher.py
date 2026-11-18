@@ -2605,7 +2605,7 @@ class AutoSlugMatcher:
 
     def cacheable(self, row: models.Model, data: dict) -> bool:
         """
-        Whether the shared lookup cache may keep this answer.
+        Whether the lookup caches, shared and per request, may keep this answer.
 
         Not when the row's scope is empty where the payload names one: a same-slug
         row created later in that scope wins in resolve, and a cache hit skips resolve.
@@ -2975,14 +2975,16 @@ def find_existing_object(data: dict, object_type: str, fallback: bool = False): 
                 matched_by = matcher
                 break
 
-        cacheable = getattr(matched_by, "cacheable", None)
+    cacheable = getattr(matched_by, "cacheable", None)
+    keep = result is not None and (cacheable is None or cacheable(result, data))
+    if not cache_hit:
         if getattr(matched_by, "is_fallback", False):
             setattr(result, _FALLBACK_MATCH_ATTR, True)
-        elif cache_key and result is not None and (cacheable is None or cacheable(result, data)):
+        elif cache_key and keep:
             django_cache.set(cache_key, result.id, cache_ttl)
             django_cache.set(_find_obj_rev_key(object_type, result.id), cache_key, cache_ttl)
 
-    if req_cache is not None and cache_key is not None and result is not None:
+    if req_cache is not None and cache_key is not None and keep:
         req_cache[cache_key] = result
 
     if ctx:

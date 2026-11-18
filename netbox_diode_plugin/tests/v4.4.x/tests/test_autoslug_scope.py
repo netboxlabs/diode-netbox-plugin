@@ -11,7 +11,14 @@ from ipam.models import VLANGroup
 
 from netbox_diode_plugin.api.common import AutoSlug, ChangeType
 from netbox_diode_plugin.api.differ import generate_changeset
-from netbox_diode_plugin.api.matcher import _find_obj_cache_key, find_existing_object, get_model_matchers
+from netbox_diode_plugin.api.matcher import (
+    _find_obj_cache_key,
+    _request_obj_cache,
+    enter_request_obj_cache,
+    exit_request_obj_cache,
+    find_existing_object,
+    get_model_matchers,
+)
 
 
 def _changes(entity, object_type):
@@ -163,3 +170,25 @@ class AutoSlugScopeCacheTestCase(TestCase):
         data = {"name": "Linux", "manufacturer": self.vendor.pk, "_auto_slug": AutoSlug("slug", "linux")}
         self.assertEqual(find_existing_object(data, "dcim.platform"), linux_a)
         self.assertEqual(django_cache.get(_find_obj_cache_key(data, "dcim.platform")), linux_a.pk)
+
+    def test_in_scope_row_wins_within_one_request(self, _ttl):
+        """Inside one request too, a same-slug row created in the payload's scope wins the next lookup."""
+        data = {"name": "Linux", "manufacturer": self.vendor.pk, "_auto_slug": AutoSlug("slug", "linux")}
+        token = enter_request_obj_cache()
+        try:
+            self.assertEqual(find_existing_object(data, "dcim.platform"), self.linux)
+            linux_a = Platform.objects.create(name="Linux (A)", slug="linux", manufacturer=self.vendor)
+            self.assertEqual(find_existing_object(data, "dcim.platform"), linux_a)
+        finally:
+            exit_request_obj_cache(token)
+
+    def test_in_scope_answer_is_request_cached(self, _ttl):
+        """A row bound inside the payload's scope stays in the request cache."""
+        linux_a = Platform.objects.create(name="Linux (A)", slug="linux", manufacturer=self.vendor)
+        data = {"name": "Linux", "manufacturer": self.vendor.pk, "_auto_slug": AutoSlug("slug", "linux")}
+        token = enter_request_obj_cache()
+        try:
+            find_existing_object(data, "dcim.platform")
+            self.assertEqual(_request_obj_cache.get().get(_find_obj_cache_key(data, "dcim.platform")), linux_a)
+        finally:
+            exit_request_obj_cache(token)
