@@ -2,13 +2,16 @@
 # Copyright 2026 NetBox Labs, Inc.
 """Diode NetBox Plugin - Tests - the auto-slug lookup stays inside the payload's scope."""
 
+from unittest import mock
+
 from dcim.models import DeviceType, Location, Manufacturer, Platform, RackType, Region, Site
+from django.core.cache import cache as django_cache
 from django.test import TestCase
 from ipam.models import VLANGroup
 
-from netbox_diode_plugin.api.common import ChangeType
+from netbox_diode_plugin.api.common import AutoSlug, ChangeType
 from netbox_diode_plugin.api.differ import generate_changeset
-from netbox_diode_plugin.api.matcher import get_model_matchers
+from netbox_diode_plugin.api.matcher import _find_obj_cache_key, find_existing_object, get_model_matchers
 
 
 def _changes(entity, object_type):
@@ -129,3 +132,34 @@ class AutoSlugScopeTestCase(TestCase):
         """A globally unique slug is not scoped; a scoped slug takes its constraint's other fields."""
         self.assertEqual(_autoslug(RackType).scope_fields, ())
         self.assertEqual(_autoslug(Location).scope_fields, ("parent", "site"))
+
+
+@mock.patch("netbox_diode_plugin.api.matcher._get_find_obj_cache_ttl", return_value=30)
+class AutoSlugScopeCacheTestCase(TestCase):
+    """An adopted empty-scope row is not cached past a same-slug row appearing in the payload's scope."""
+
+    def setUp(self):
+        """Start from an empty lookup cache."""
+        django_cache.clear()
+        self.vendor = Manufacturer.objects.create(name="Vendor A", slug="vendor-a")
+        self.linux = Platform.objects.create(name="Linux", slug="linux")
+
+    def tearDown(self):
+        """Leave an empty lookup cache."""
+        django_cache.clear()
+
+    def test_in_scope_row_wins_after_empty_scope_row_was_adopted(self, _ttl):
+        """A same-slug platform created under the payload's manufacturer wins on the next lookup."""
+        payload = {"name": "Linux", "manufacturer": {"name": "Vendor A"}}
+        self.assertTrue(all(c.object_id == self.linux.pk for c in _effective(_changes(payload, "dcim.platform"))))
+        linux_a = Platform.objects.create(name="Linux (A)", slug="linux", manufacturer=self.vendor)
+        changes = _effective(_changes(payload, "dcim.platform"))
+        self.assertTrue(changes)
+        self.assertTrue(all(c.object_id == linux_a.pk for c in changes))
+
+    def test_in_scope_answer_is_cached(self, _ttl):
+        """A row bound inside the payload's scope is cached as before."""
+        linux_a = Platform.objects.create(name="Linux (A)", slug="linux", manufacturer=self.vendor)
+        data = {"name": "Linux", "manufacturer": self.vendor.pk, "_auto_slug": AutoSlug("slug", "linux")}
+        self.assertEqual(find_existing_object(data, "dcim.platform"), linux_a)
+        self.assertEqual(django_cache.get(_find_obj_cache_key(data, "dcim.platform")), linux_a.pk)

@@ -2603,6 +2603,20 @@ class AutoSlugMatcher:
         ordering = [F(f).asc(nulls_last=True) for f in self.scope_fields if data.get(f) is not None]
         return q.order_by(*ordering, "pk").first()
 
+    def cacheable(self, row: models.Model, data: dict) -> bool:
+        """
+        Whether the shared lookup cache may keep this answer.
+
+        Not when the row's scope is empty where the payload names one: a same-slug
+        row created later in that scope wins in resolve, and a cache hit skips resolve.
+        """
+        meta = self.model_class._meta
+        return all(
+            getattr(row, meta.get_field(f).attname) is not None
+            for f in self.scope_fields
+            if data.get(f) is not None
+        )
+
     def has_required_fields(self, data: dict) -> bool:
         """Returns True if the data given contains a value for all fields referenced by the constraint."""
         return '_auto_slug' in data
@@ -2961,9 +2975,10 @@ def find_existing_object(data: dict, object_type: str, fallback: bool = False): 
                 matched_by = matcher
                 break
 
+        cacheable = getattr(matched_by, "cacheable", None)
         if getattr(matched_by, "is_fallback", False):
             setattr(result, _FALLBACK_MATCH_ATTR, True)
-        elif cache_key and result is not None:
+        elif cache_key and result is not None and (cacheable is None or cacheable(result, data)):
             django_cache.set(cache_key, result.id, cache_ttl)
             django_cache.set(_find_obj_rev_key(object_type, result.id), cache_key, cache_ttl)
 
