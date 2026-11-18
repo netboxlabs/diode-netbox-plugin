@@ -2,12 +2,14 @@
 # Copyright 2026 NetBox Labs, Inc.
 """Diode NetBox Plugin - apply endpoints when NetBox refuses a save (AbortRequest)."""
 
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest import mock
 from uuid import uuid4
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Platform, Site
+from django.db import transaction
 from extras.models import Tag
 from utilities.testing import APITestCase
 
@@ -223,6 +225,61 @@ class BulkPlanApplyUnexpectedApplyErrorTestCase(AbortRequestApiTestCase):
         self.assertTrue(Site.objects.filter(name=f"c-{s}").exists())
         self.assertFalse(Manufacturer.objects.filter(name=f"m-{s}").exists())
         self.assertTrue(any(
-            record.exc_info and "mfr-entity-unexpected" in record.getMessage() for record in logs.records
+            record.exc_info and record.exc_info[0] is RuntimeError and "mfr-entity-unexpected" in record.getMessage()
+            for record in logs.records
         ))
         self.assertNotIn(b"unexpected-apply-failure", response.content)
+
+
+class BulkPlanApplyCommitHookErrorTestCase(AbortRequestApiTestCase):
+    """A commit hook that fails after the entity committed does not report the entity as failed."""
+
+    def test_commit_hook_failure_after_commit_reports_entity_applied(self):
+        """The entity's writes committed, so it is reported applied and the hook error is logged."""
+        s = self.s
+        real_apply = views.apply_changeset
+
+        @contextmanager
+        def committing_atomic():
+            # The test itself runs in a transaction, so no apply block really
+            # commits. Run the hooks registered inside the block when it exits
+            # cleanly, in order, as COMMIT of an outermost block does.
+            with self.captureOnCommitCallbacks(execute=True):
+                with transaction.atomic():
+                    yield
+
+        committing_transaction = SimpleNamespace(atomic=committing_atomic, on_commit=transaction.on_commit)
+
+        def failing_hook():
+            raise RuntimeError("commit-hook-failure")
+
+        def apply_then_register_failing_hook(change_set, request):
+            result = real_apply(change_set, request)
+            if any(change.object_type == "dcim.manufacturer" for change in change_set.changes):
+                transaction.on_commit(failing_hook)
+            return result
+
+        payload = {"entities": [
+            self.site_entry("a", f"a-{s}"),
+            {"id": "mfr-entity-hook", "object_type": "dcim.manufacturer",
+             "entity": {"manufacturer": {"name": f"m-{s}"}}},
+            self.site_entry("c", f"c-{s}"),
+        ]}
+        with (
+            mock.patch.object(views, "transaction", committing_transaction),
+            mock.patch.object(views, "apply_changeset", side_effect=apply_then_register_failing_hook),
+            self.assertLogs("netbox.diode_data", level="ERROR") as logs,
+        ):
+            response = self.post(BULK_PLAN_APPLY_URL, payload)
+
+        self.assertEqual(response.status_code, 200, response.content)
+        results = self.results_by_id(response)
+        for entity_id in ("a", "mfr-entity-hook", "c"):
+            self.assertIsNone(results[entity_id]["errors"])
+        self.assertTrue(Manufacturer.objects.filter(name=f"m-{s}").exists())
+        change_set_id = results["mfr-entity-hook"]["change_set"]["id"]
+        self.assertTrue(any(
+            record.exc_info and record.exc_info[0] is RuntimeError and change_set_id in record.getMessage()
+            for record in logs.records
+        ))
+        self.assertNotIn(b"commit-hook-failure", response.content)
