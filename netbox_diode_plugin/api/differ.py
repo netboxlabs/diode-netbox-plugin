@@ -7,8 +7,11 @@ import copy
 import datetime
 import logging
 from collections import defaultdict
+from functools import lru_cache
 
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
+from django.db import models
 from extras.choices import CustomFieldTypeChoices
 from extras.models import Tag
 from rest_framework import serializers
@@ -170,8 +173,14 @@ _CREATE_PRESERVED_NULL_KEYS = {
 }
 
 
-def clean_diff_data(data: dict, exclude_empty_values: bool = True) -> dict:
-    """Clean diff data by removing null values."""
+def clean_diff_data(data: dict, exclude_empty_values: bool = True, opaque_keys: frozenset = frozenset()) -> dict:
+    """
+    Clean diff data by removing null values.
+
+    The values of ``opaque_keys`` are JSON documents (e.g. a config context's
+    ``data``): an empty value there drops the whole field, but the cleaning never
+    descends into one, so the document keeps its own empty values.
+    """
     result = {}
     for k, v in data.items():
         if exclude_empty_values:
@@ -182,11 +191,22 @@ def clean_diff_data(data: dict, exclude_empty_values: bool = True) -> dict:
             if isinstance(v, dict):
                 if len(v) == 0:
                     continue
-                v = clean_diff_data(v, exclude_empty_values)
+                if k not in opaque_keys:
+                    v = clean_diff_data(v, exclude_empty_values)
             if isinstance(v, str) and v == "":
                 continue
         result[k] = v
     return result
+
+
+@lru_cache(maxsize=256)
+def _json_field_names(object_type: str) -> frozenset:
+    """Names of the model's JSON fields, whose values are documents to keep as sent."""
+    try:
+        model = apps.get_model(object_type)
+    except (LookupError, ValueError):
+        return frozenset()
+    return frozenset(f.name for f in model._meta.get_fields() if isinstance(f, models.JSONField))
 
 
 def diff_to_change(
@@ -213,10 +233,11 @@ def diff_to_change(
     # so that the apply changeset endpoint can clear fields the user intended to reset.
     # For creates, strip empty values to avoid sending noise — the serializer handles defaults.
     preserve_empty = change_type == ChangeType.UPDATE
+    json_fields = _json_field_names(object_type)
 
     change = Change(
         change_type=change_type,
-        before=_tidy(prechange_data),
+        before=_tidy(prechange_data, opaque_keys=json_fields),
         data={},
         object_type=object_type,
         object_id=prior_id if isinstance(prior_id, int) else None,
@@ -226,7 +247,7 @@ def diff_to_change(
     )
 
     if change_type != ChangeType.NOOP:
-        change.data = _tidy(postchange_data, exclude_empty_values=not preserve_empty)
+        change.data = _tidy(postchange_data, exclude_empty_values=not preserve_empty, opaque_keys=json_fields)
         if change_type == ChangeType.CREATE:
             for key in _CREATE_PRESERVED_NULL_KEYS.get(object_type, ()):
                 # An explicitly empty string asserts the same "none" as null
@@ -238,8 +259,10 @@ def diff_to_change(
 
     return change
 
-def _tidy(data: dict, exclude_empty_values: bool = True) -> dict:
-    return sort_dict_recursively(clean_diff_data(data, exclude_empty_values=exclude_empty_values))
+def _tidy(data: dict, exclude_empty_values: bool = True, opaque_keys: frozenset = frozenset()) -> dict:
+    return sort_dict_recursively(
+        clean_diff_data(data, exclude_empty_values=exclude_empty_values, opaque_keys=opaque_keys)
+    )
 
 def sort_dict_recursively(d):
     """Recursively sorts a dictionary by keys."""
