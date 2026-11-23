@@ -132,6 +132,14 @@ class ConfigContextIngestTestCase(APITestCase):
 
         self.assertEqual(self._diff(self._entity(data={"b": {"y": "z", "x": [1, 2]}, "a": 1}))["changes"], [])
 
+    def test_create_keeps_empty_values_inside_data(self):
+        """A create stores the data document as sent, empty values included, so a re-ingest is a noop."""
+        data = {"mist": {"network": None, "coa_port": "", "ports": [], "extra": {}, "vlans": [10], "on": False}}
+        self._ingest(self._entity(data=data))
+
+        self.assertEqual(ConfigContext.objects.get(name=CC_NAME).data, data)
+        self.assertEqual(self._diff(self._entity(data=data))["changes"], [])
+
     def test_reingest_without_weight_keeps_custom_weight(self):
         """An entity sent without weight neither resets a stored weight nor re-diffs."""
         self._ingest(self._entity(weight="2000"))
