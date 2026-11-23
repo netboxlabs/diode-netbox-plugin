@@ -2,7 +2,7 @@
 
 # Generated code. DO NOT EDIT.
 # Source: NetBox v4.7.0
-# Timestamp: 2026-09-02 20:52:39Z
+# Timestamp: 2026-11-23 19:38:00Z
 
 from dataclasses import dataclass
 import datetime
@@ -379,6 +379,9 @@ _JSON_REF_INFO = {
         ),
         "module_bay_type": RefInfo(
             object_type="dcim.modulebaytype", field_name="object", is_generic=True
+        ),
+        "config_context": RefInfo(
+            object_type="extras.configcontext", field_name="object", is_generic=True
         ),
     },
     "circuits.circuit": {
@@ -834,6 +837,48 @@ _JSON_REF_INFO = {
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
         "tenant": RefInfo(object_type="tenancy.tenant", field_name="tenant"),
     },
+    "extras.configcontext": {
+        "cluster_groups": RefInfo(
+            object_type="virtualization.clustergroup",
+            field_name="cluster_groups",
+            is_many=True,
+        ),
+        "cluster_types": RefInfo(
+            object_type="virtualization.clustertype",
+            field_name="cluster_types",
+            is_many=True,
+        ),
+        "clusters": RefInfo(
+            object_type="virtualization.cluster", field_name="clusters", is_many=True
+        ),
+        "device_types": RefInfo(
+            object_type="dcim.devicetype", field_name="device_types", is_many=True
+        ),
+        "locations": RefInfo(
+            object_type="dcim.location", field_name="locations", is_many=True
+        ),
+        "owner": RefInfo(object_type="users.owner", field_name="owner"),
+        "platforms": RefInfo(
+            object_type="dcim.platform", field_name="platforms", is_many=True
+        ),
+        "regions": RefInfo(
+            object_type="dcim.region", field_name="regions", is_many=True
+        ),
+        "roles": RefInfo(
+            object_type="dcim.devicerole", field_name="roles", is_many=True
+        ),
+        "site_groups": RefInfo(
+            object_type="dcim.sitegroup", field_name="site_groups", is_many=True
+        ),
+        "sites": RefInfo(object_type="dcim.site", field_name="sites", is_many=True),
+        "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
+        "tenant_groups": RefInfo(
+            object_type="tenancy.tenantgroup", field_name="tenant_groups", is_many=True
+        ),
+        "tenants": RefInfo(
+            object_type="tenancy.tenant", field_name="tenants", is_many=True
+        ),
+    },
     "extras.customfield": {
         "choice_set": RefInfo(
             object_type="extras.customfieldchoiceset", field_name="choice_set"
@@ -1269,6 +1314,11 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
+        "assigned_object_config_context": RefInfo(
+            object_type="extras.configcontext",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
         "created_by": RefInfo(object_type="users.user", field_name="created_by"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -1657,6 +1707,9 @@ _JSON_REF_INFO = {
         ),
         "interface_module_bay_type": RefInfo(
             object_type="dcim.modulebaytype", field_name="interface", is_generic=True
+        ),
+        "interface_config_context": RefInfo(
+            object_type="extras.configcontext", field_name="interface", is_generic=True
         ),
     },
     "ipam.ipaddress": {
@@ -2149,6 +2202,9 @@ _JSON_REF_INFO = {
         ),
         "object_module_bay_type": RefInfo(
             object_type="dcim.modulebaytype", field_name="object", is_generic=True
+        ),
+        "object_config_context": RefInfo(
+            object_type="extras.configcontext", field_name="object", is_generic=True
         ),
         "role": RefInfo(object_type="tenancy.contactrole", field_name="role"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
@@ -2723,6 +2779,11 @@ _JSON_REF_INFO = {
             field_name="assigned_object",
             is_generic=True,
         ),
+        "assigned_object_config_context": RefInfo(
+            object_type="extras.configcontext",
+            field_name="assigned_object",
+            is_generic=True,
+        ),
         "l2vpn": RefInfo(object_type="vpn.l2vpn", field_name="l2vpn"),
         "tags": RefInfo(object_type="extras.tag", field_name="tags", is_many=True),
     },
@@ -3118,6 +3179,11 @@ _JSON_REF_INFO = {
         "termination_module_bay_type": RefInfo(
             object_type="dcim.modulebaytype", field_name="termination", is_generic=True
         ),
+        "termination_config_context": RefInfo(
+            object_type="extras.configcontext",
+            field_name="termination",
+            is_generic=True,
+        ),
         "tunnel": RefInfo(object_type="vpn.tunnel", field_name="tunnel"),
     },
     "wireless.wirelesslan": {
@@ -3177,6 +3243,7 @@ _GENERIC_OBJECT_VARIANTS: dict[str, str] = {
     "object_cluster": "virtualization.cluster",
     "object_cluster_group": "virtualization.clustergroup",
     "object_cluster_type": "virtualization.clustertype",
+    "object_config_context": "extras.configcontext",
     "object_console_port": "dcim.consoleport",
     "object_console_server_port": "dcim.consoleserverport",
     "object_contact": "tenancy.contact",
@@ -4066,6 +4133,29 @@ _LEGAL_FIELDS = {
             "tenant",
         ]
     ),
+    "extras.configcontext": frozenset(
+        [
+            "cluster_groups",
+            "cluster_types",
+            "clusters",
+            "data",
+            "description",
+            "device_types",
+            "is_active",
+            "locations",
+            "name",
+            "owner",
+            "platforms",
+            "regions",
+            "roles",
+            "site_groups",
+            "sites",
+            "tags",
+            "tenant_groups",
+            "tenants",
+            "weight",
+        ]
+    ),
     "extras.customfield": frozenset(
         [
             "choice_set",
@@ -4893,6 +4983,10 @@ _FORMAT_TRANSFORMATIONS = {
     },
     "dcim.virtualdevicecontext": {
         "identifier": int_from_int64string,
+    },
+    "extras.configcontext": {
+        "data": parse_json,
+        "weight": int_from_int64string,
     },
     "extras.customfield": {
         "default": parse_json,

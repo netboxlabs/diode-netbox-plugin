@@ -10,6 +10,7 @@ from enum import Enum
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import models, transaction
 from django.db.utils import IntegrityError
+from extras.models import Tag
 from rest_framework.exceptions import ValidationError as ValidationError
 from utilities.exceptions import AbortRequest
 
@@ -17,6 +18,7 @@ from .change_log_buffer import snapshot_for_apply
 from .common import (
     MATCH_ONLY_TYPES,
     NON_FIELD_ERRORS,
+    SLUG_TAG_TYPES,
     Change,
     ChangeSet,
     ChangeSetException,
@@ -1493,7 +1495,22 @@ def _pre_apply(model_class: models.Model, change: Change, created: dict):
                 logger.warning(f"Field {key} is not in the diode data model, ignoring.")
             data.pop(key)
 
+    _tags_as_slugs_for_serializer(change.object_type, data)
     return data
+
+def _tags_as_slugs_for_serializer(object_type: str, data: dict) -> None:
+    """
+    Replace tag pks with their slugs for a type whose serializer takes tags by slug.
+
+    Anything that is not a pk is passed through, and so is a pk with no tag
+    behind it: the serializer then rejects it the way it rejects any unknown
+    tag, as a field error on ``tags``.
+    """
+    tags = data.get("tags")
+    if object_type not in SLUG_TAG_TYPES or not isinstance(tags, list):
+        return
+    slugs = dict(Tag.objects.filter(pk__in=[t for t in tags if isinstance(t, int)]).values_list("pk", "slug"))
+    data["tags"] = [slugs.get(t, t) if isinstance(t, int) else t for t in tags]
 
 def _validate_change_set(change_set: ChangeSet):
     if not change_set.id:

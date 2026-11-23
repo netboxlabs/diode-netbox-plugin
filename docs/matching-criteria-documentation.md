@@ -360,6 +360,12 @@ This document describes how the Diode NetBox Plugin matches existing objects whe
 | dcim_virtualdevicecontext_device_identifier | 3 | builtin | device, identifier | N/A | Matches on unique constraint fields: device, identifier | All versions |
 | dcim_virtualdevicecontext_device_name | 4 | builtin | device, name | N/A | Matches on unique constraint fields: device, name | All versions |
 
+## extras.configcontext
+
+| Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |
+|--------------|---------------------|------|--------|-----------|-------------|---------------------|
+| unique_name | 1 | builtin | name | N/A | Matches on unique field(s): name | All versions |
+
 ## extras.customfield
 
 | Matcher Name | Order of Precedence | Type | Fields | Condition | Description | Version Constraints |

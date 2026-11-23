@@ -38,6 +38,13 @@ NON_FIELD_ERRORS = "__all__"
 # path); lives here so neither layer owns the other's constant.
 MATCH_ONLY_TYPES = frozenset({"users.user"})
 
+# Types whose NetBox serializer takes ``tags`` as tag slugs (a DRF
+# SlugRelatedField) rather than the tag pks every other serializer accepts.
+# Plans keep tags as pks, the same as for every other type, so the differ's tag
+# merge and comparison stay uniform; the applier converts to slugs just before
+# the serializer runs.
+SLUG_TAG_TYPES = frozenset({"extras.configcontext"})
+
 
 # Private node key carrying the member Devices that referenced a nested
 # dcim.virtualchassis node, as a list of pks (or, for devices this batch is
