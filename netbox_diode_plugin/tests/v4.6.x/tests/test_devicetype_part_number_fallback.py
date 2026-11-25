@@ -905,7 +905,7 @@ class PartNumberFallbackCustomFieldTestCase(TestCase):
         django_cache.clear()
 
     def test_custom_field_match_is_not_served_a_cached_fallback_answer(self):
-        """The cache key omits custom fields, so a keyed payload runs its matchers again."""
+        """The cache key includes custom fields, so a keyed payload has its own key and runs its matchers."""
         token = enter_request_obj_cache()
         try:
             plain = {"manufacturer": self.mfr.pk, "model": PART}
