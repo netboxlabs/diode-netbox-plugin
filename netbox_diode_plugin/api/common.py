@@ -194,9 +194,11 @@ class ChangeSet:
         for change in self.changes:
             model = apps.get_model(change.object_type)
 
-            change_data = change.data.copy()
-            if change.before:
-                change_data.update(change.before)
+            # Validate the state the change produces: the prior state with the
+            # change's data laid over it. The data must win, or an update is
+            # validated against the values it replaces (and its custom_fields
+            # against a before snapshot whose null values were stripped).
+            change_data = {**(change.before or {}), **change.data}
 
             # Serializer-aliased wire names (e.g. a field exposed with
             # source=<model attr>) are not settable model attributes; rename
@@ -242,9 +244,13 @@ class ChangeSet:
                 "custom_fields": unknown_errors
             })
 
+        # A required field is unset when it is absent or holds an empty value,
+        # the same values NetBox's CustomField.validate() rejects. Planned
+        # update data names every custom field (unset ones default to null),
+        # so checking the key alone would let an empty required field through.
         req_errors = []
         for field_name, cf in custom_fields.items():
-            if cf.required and field_name not in data:
+            if cf.required and data.get(field_name) in (None, ""):
                 req_errors.append(f"Custom field '{field_name}' is required.")
         if req_errors:
             raise ValidationError({
