@@ -5,8 +5,12 @@ Bypass NetBox's per-write search-index caching signal during diode applies.
 
 NetBox maintains a global search index in ``extras_cachedvalue``: one
 row per indexed field per object. Every model save fires a post_save
-receiver — ``search_backend.caching_handler`` — that inserts a fresh
-batch of CachedValue rows for the saved instance. Under bulk
+receiver that inserts a fresh batch of CachedValue rows for the saved
+instance. Which callable NetBox registers depends on its version:
+before 4.7 it is the bound method ``search_backend.caching_handler``;
+from 4.7 it is the module-level wrapper
+``netbox.search.signals.caching_handler``, connected from
+``CoreConfig.ready()``, which forwards to the backend. Under bulk
 auto-apply this is the second-largest write source on NetBox-postgres
 after the actual data tables (e.g. ~11% of pg total time at our
 benchmark profile, ~5 indexed fields per Interface × hundreds of
@@ -25,7 +29,7 @@ this bypass are:
 
 This is opt-in via the plugin setting
 ``apply_bypass_search_indexing`` (default False). When enabled the
-module swaps ``caching_handler`` out of the post_save registry once
+module swaps that receiver out of the post_save registry once
 at import time and replaces it with a wrapper that consults a
 per-context flag (``contextvars.ContextVar``); when
 ``bypass_search_indexing()`` is active in the current execution
@@ -46,23 +50,30 @@ responsibility while this bypass is active — schedule a periodic
 ``manage.py reindex`` or accept stale search results.
 """
 
+import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 
 from django.db.models.signals import post_save
 from netbox.plugins import get_plugin_config
-from netbox.search.backends import search_backend
+
+logger = logging.getLogger(__name__)
 
 _bypass_active: ContextVar[bool] = ContextVar("diode_search_index_bypass_active", default=False)
 
 _enabled = bool(get_plugin_config("netbox_diode_plugin", "apply_bypass_search_indexing"))
 
-# caching_handler is a bound method on the search_backend singleton.
-# Django's _make_id treats bound methods as (id(self), id(func)) so the
-# disconnect call below matches the receiver registered when
-# netbox.search.backends was imported.
-_original_handler = search_backend.caching_handler
+try:
+    # NetBox >= 4.7 connects this wrapper, not the backend's bound method.
+    from netbox.search.signals import caching_handler as _original_handler
+except ImportError:
+    # NetBox < 4.7 connects the bound method when netbox.search.backends
+    # is imported. Django's _make_id keys bound methods on
+    # (id(self), id(func)), so disconnecting a fresh bound method matches.
+    from netbox.search.backends import search_backend
+
+    _original_handler = search_backend.caching_handler
 
 
 @wraps(_original_handler)
@@ -78,8 +89,13 @@ if _enabled:
     # not subject to the concurrency hazard the per-request
     # disconnect/reconnect approach hit. Keep a module-level reference
     # to the wrapper so Django's weakref does not die.
-    post_save.disconnect(_original_handler)
-    post_save.connect(_guarded_handler)
+    if post_save.disconnect(_original_handler):
+        post_save.connect(_guarded_handler)
+    else:
+        logger.warning(
+            "apply_bypass_search_indexing is enabled, but NetBox's search caching "
+            "receiver is not connected to post_save; the bypass has no effect."
+        )
 
 
 @contextmanager
